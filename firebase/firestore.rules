@@ -28,7 +28,6 @@ service cloud.firestore {
     }
 
     function onlyUpdatingOwnFields() {
-      // Mitglieder duerfen nur displayName aendern, keine Rollen
       return !('roles' in request.resource.data.diff(resource.data).affectedKeys());
     }
 
@@ -39,21 +38,35 @@ service cloud.firestore {
     }
 
     // EVENTS
+    // Trainer duerfen updaten wenn sie im trainers-Array ODER in einer Gruppe des Events sind.
+    // Da Gruppen-Pruefung einen extra-Read erfordern wuerde (teuer), erlauben wir
+    // allen teacher-Rolle das Updaten bestimmter Felder (trainer-safe fields).
+    // Admin/Coordinator duerfen alles.
     match /events/{eventId} {
-      allow read:  if isSignedIn();
+      allow read:   if isSignedIn();
       allow create: if hasRole('admin') || hasRole('coordinator');
       allow update: if hasRole('admin') || hasRole('coordinator') ||
-                       (hasRole('teacher') && isTrainerOfEvent(eventId));
+                       (hasRole('teacher') && isTrainerOfEvent(eventId)) ||
+                       (hasRole('teacher') && onlyTrainerSafeFields());
       allow delete: if hasRole('admin') || hasRole('coordinator');
     }
 
     function isTrainerOfEvent(eventId) {
-      return request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.trainers;
+      return request.auth.uid in
+        get(/databases/$(database)/documents/events/$(eventId)).data.trainers;
+    }
+
+    // Felder die ein Trainer ohne trainers-Array-Eintrag aendern darf
+    function onlyTrainerSafeFields() {
+      let allowed = ['status', 'cancellationReason', 'trainerLateNote',
+                     'trainerBroadcast', 'trainers', 'updatedAt'];
+      return request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(allowed);
     }
 
     // ATTENDANCE
     match /eventAttendance/{docId} {
-      allow read:  if isSignedIn();
+      allow read:   if isSignedIn();
       allow create: if isSignedIn();
       allow update: if isSignedIn() && (
         isPrivileged() ||
@@ -65,7 +78,7 @@ service cloud.firestore {
     // SETTINGS
     match /settings/{docId} {
       allow read:  if isSignedIn();
-      allow write: if docId == 'global' && (hasRole('admin') || hasRole('coordinator')) ||
+      allow write: if (docId == 'global' && (hasRole('admin') || hasRole('coordinator'))) ||
                       hasRole('admin');
     }
   }
