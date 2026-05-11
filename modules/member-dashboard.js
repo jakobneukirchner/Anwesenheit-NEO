@@ -45,15 +45,19 @@ async function loadMemberDashboard() {
       }
     }
 
-    // Abgesagte Termine NICHT herausfiltern – sie werden durchgestrichen angezeigt
     events = events.filter(e => {
       const t = e.startTime?.toDate?.();
       if (!t) return false;
-      if (t < now) return !!attendanceByEvent[e.id];
-      return t <= cutOff;
+      // Zeitfenster-Check
+      if (t < pastCutOff || t > cutOff) return false;
+      // Abgesagte Termine IMMER anzeigen (egal ob vergangen oder nicht, egal ob Attendance)
+      if (e.status === 'cancelled') return true;
+      // Vergangene normale Termine nur wenn Attendance vorhanden
+      if (t <= now) return !!attendanceByEvent[e.id];
+      return true;
     });
 
-    // Teilnehmerzahlen / Namen nur für nicht-abgesagte
+    // Teilnehmerzahlen nur für aktive Termine
     const visibilityMode = settings.visibilityMode || 'count';
     for (const ev of events) {
       if (ev.status === 'cancelled') continue;
@@ -145,31 +149,23 @@ function renderMemberEventCard(event, attendance, isPast) {
 
   const card = createElement('div', 'card');
 
-  // Abgesagt: durchgestrichene Optik
   if (isCancelled) {
-    card.style.opacity = '0.72';
+    card.style.opacity    = '0.72';
     card.style.borderLeft = '4px solid var(--color-error, #c62828)';
     card.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
         <div>
-          <h3 style="margin:0 0 2px;text-decoration:line-through;color:var(--color-text-muted);"
-            >${event.title || 'Termin'}</h3>
-          <p class="text-muted" style="margin:0;font-size:0.88rem;text-decoration:line-through;"
-            >${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
+          <h3 style="margin:0 0 2px;text-decoration:line-through;color:var(--color-text-muted);">${event.title || 'Termin'}</h3>
+          <p class="text-muted" style="margin:0;font-size:0.88rem;text-decoration:line-through;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
         </div>
         <span class="chip chip-error">❌ Abgesagt</span>
       </div>
-      ${event.cancellationReason
-        ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>`
-        : ''}
-      ${event.trainerBroadcast
-        ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}“</p>`
-        : ''}
+      ${event.cancellationReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>` : ''}
+      ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}“</p>` : ''}
     `;
     return card;
   }
 
-  // Normale Karte
   const trainerLateHtml = event.trainerLateNote
     ? `<div class="chip chip-warning" style="margin-bottom:8px;">⚠️ Trainer meldet Verspätung: ${event.trainerLateNote}</div>` : '';
 
@@ -208,9 +204,7 @@ function renderMemberEventCard(event, attendance, isPast) {
     ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;">🔒 Vom Trainer eingetragen – keine Änderung möglich.</p>` : '';
 
   card.innerHTML = `
-    ${trainerLateHtml}
-    ${broadcastHtml}
-    ${trainerNoteHtml}
+    ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div>
         <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
