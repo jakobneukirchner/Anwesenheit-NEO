@@ -7,7 +7,6 @@ async function loadMemberDashboard() {
   container.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
 
   try {
-    // Alle Attendance-Einträge für diesen User
     const attendanceSnap = await firestore.collection('eventAttendance')
       .where('userId', '==', user.uid)
       .get();
@@ -17,8 +16,6 @@ async function loadMemberDashboard() {
       attendanceByEvent[doc.data().eventId] = { id: doc.id, ...doc.data() };
     });
 
-    // Events laden (über Gruppen-Zugehörigkeit + direkte Zuweisung)
-    // Gruppen des Users
     const userDoc = await firestore.collection('users').doc(user.uid).get();
     const userData = userDoc.data() || {};
     const userGroups = userData.groups || [];
@@ -26,27 +23,27 @@ async function loadMemberDashboard() {
     const now = new Date();
     let events = [];
 
-    // Events direkt dem User zugewiesen
+    // Direkte Zuweisungen ohne problematische Misch-Query
     const directSnap = await firestore.collection('events')
       .where('directMembers', 'array-contains', user.uid)
-      .where('status', '!=', 'cancelled')
       .get();
     directSnap.forEach(doc => {
-      if (!events.find(e => e.id === doc.id)) events.push({ id: doc.id, ...doc.data() });
+      const data = doc.data();
+      if (data.status !== 'cancelled' && !events.find(e => e.id === doc.id)) events.push({ id: doc.id, ...data });
     });
 
-    // Events über Gruppen
+    // Gruppentermine
     for (const groupId of userGroups) {
       const groupSnap = await firestore.collection('events')
         .where('groupId', '==', groupId)
-        .where('status', '!=', 'cancelled')
         .get();
       groupSnap.forEach(doc => {
-        if (!events.find(e => e.id === doc.id)) events.push({ id: doc.id, ...doc.data() });
+        const data = doc.data();
+        if (data.status !== 'cancelled' && !events.find(e => e.id === doc.id)) events.push({ id: doc.id, ...data });
       });
     }
 
-    // Vergangene Events aus eigenen Attendance-Einträgen ergänzen
+    // Vergangene Events aus Attendance ergänzen
     for (const eventId of Object.keys(attendanceByEvent)) {
       if (!events.find(e => e.id === eventId)) {
         const evDoc = await firestore.collection('events').doc(eventId).get();
@@ -54,7 +51,31 @@ async function loadMemberDashboard() {
       }
     }
 
-    // Sortieren: zukünftige zuerst, dann vergangene
+    // Teilnehmerinfos vorbereiten
+    const visibilityMode = window.appSettings?.visibilityMode || 'count';
+    for (const ev of events) {
+      const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
+      const attendees = [];
+      const userIds = [];
+      attSnap.forEach(doc => {
+        const d = doc.data();
+        if (['registered','present','late_excused','late_unexcused'].includes(d.status)) {
+          attendees.push(d);
+          userIds.push(d.userId);
+        }
+      });
+      ev._participantCount = attendees.length;
+
+      if (visibilityMode === 'names' && userIds.length) {
+        const names = [];
+        for (const uid of userIds) {
+          const uDoc = await firestore.collection('users').doc(uid).get();
+          if (uDoc.exists) names.push(uDoc.data().displayName || uDoc.data().email || uid);
+        }
+        ev._participantNames = names;
+      }
+    }
+
     events.sort((a, b) => {
       const aT = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
       const bT = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
@@ -73,7 +94,7 @@ async function loadMemberDashboard() {
     container.innerHTML = `
       <div class="tabs">
         <button class="tab-btn active" data-tab="upcoming">Kommende Termine</button>
-        <button class="tab-btn"        data-tab="past">Vergangene Termine</button>
+        <button class="tab-btn" data-tab="past">Vergangene Termine</button>
       </div>
       <div id="tab-upcoming"></div>
       <div id="tab-past" hidden></div>
@@ -84,12 +105,12 @@ async function loadMemberDashboard() {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('tab-upcoming').hidden = btn.dataset.tab !== 'upcoming';
-        document.getElementById('tab-past').hidden     = btn.dataset.tab !== 'past';
+        document.getElementById('tab-past').hidden = btn.dataset.tab !== 'past';
       };
     });
 
     const upcomingEl = document.getElementById('tab-upcoming');
-    const pastEl     = document.getElementById('tab-past');
+    const pastEl = document.getElementById('tab-past');
 
     if (!upcoming.length) upcomingEl.innerHTML = '<p class="text-muted">Keine kommenden Termine.</p>';
     else upcoming.forEach(ev => upcomingEl.appendChild(renderMemberEventCard(ev, attendanceByEvent[ev.id], false)));
@@ -104,26 +125,23 @@ async function loadMemberDashboard() {
 }
 
 function renderMemberEventCard(event, attendance, isPast) {
-  const settings    = window.appSettings || {};
-  const signupMins  = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
-  const mode        = event.mode || settings.defaultMode || 'opt_in';
-  const visMode     = event.visibilityMode || settings.visibilityMode || 'count';
-  const minPart     = event.minParticipants  ?? settings.defaultMinParticipants ?? 0;
+  const settings = window.appSettings || {};
+  const signupMins = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
+  const mode = event.mode || settings.defaultMode || 'opt_in';
+  const visMode = event.visibilityMode || settings.visibilityMode || 'count';
+  const minPart = event.minParticipants ?? settings.defaultMinParticipants ?? 0;
 
-  const start       = event.startTime?.toDate ? event.startTime.toDate() : null;
-  const end         = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-  const now         = new Date();
-  const deadline    = start ? new Date(start.getTime() - signupMins * 60000) : null;
+  const start = event.startTime?.toDate ? event.startTime.toDate() : null;
+  const end = event.endTime?.toDate ? event.endTime.toDate() : null;
+  const now = new Date();
+  const deadline = start ? new Date(start.getTime() - signupMins * 60000) : null;
   const withinDeadline = !deadline || now <= deadline;
 
   const memberStatus = attendance?.status || (mode === 'opt_out' ? 'registered' : 'none');
-  const memberNote   = attendance?.memberNote || '';
-
+  const memberNote = attendance?.memberNote || '';
   const card = createElement('div', 'card');
 
-  // Trainer-Verspätungshinweis
   const trainerLate = event.trainerLateNote ? `<div class="chip chip-warning" style="margin-bottom:8px;">⚠️ Trainer meldet Verspätung: ${event.trainerLateNote}</div>` : '';
-  // Absage
   if (event.status === 'cancelled') {
     card.innerHTML = `
       ${trainerLate}
@@ -136,7 +154,6 @@ function renderMemberEventCard(event, attendance, isPast) {
 
   const isRegistered = memberStatus === 'registered';
 
-  // Sichtbarkeit Teilnehmer
   let participantInfo = '';
   if (!isPast) {
     if (visMode === 'names' && event._participantNames) {
@@ -182,7 +199,6 @@ function renderMemberEventCard(event, attendance, isPast) {
   `;
 
   const errorEl = card.querySelector('[data-role="error"]');
-
   const toggleBtn = card.querySelector('[data-action="toggle"]');
   if (toggleBtn) {
     toggleBtn.onclick = () => guardedAction(async () => {
@@ -200,7 +216,7 @@ function renderMemberEventCard(event, attendance, isPast) {
   }
 
   const noteTextarea = card.querySelector('textarea[data-role="note"]');
-  const noteBtn      = card.querySelector('[data-action="save-note"]');
+  const noteBtn = card.querySelector('[data-action="save-note"]');
   if (noteBtn) {
     noteBtn.onclick = () => guardedAction(async () => {
       try {
@@ -215,34 +231,32 @@ function renderMemberEventCard(event, attendance, isPast) {
 
 function translateMemberStatus(status, mode) {
   switch (status) {
-    case 'registered':      return mode === 'opt_in' ? 'Angemeldet' : 'Vorgemerkt';
-    case 'none':            return mode === 'opt_in' ? 'Nicht angemeldet' : 'Vorgemerkt';
-    case 'cancelled':       return 'Abgemeldet';
-    case 'present':         return 'Anwesend';
-    case 'absent_excused':  return 'Entschuldigt gefehlt';
-    case 'absent_unexcused':return 'Unentschuldigt gefehlt';
-    case 'late_excused':    return 'Verspätet (entschuldigt)';
-    case 'late_unexcused':  return 'Verspätet (unentschuldigt)';
+    case 'registered': return mode === 'opt_in' ? 'Angemeldet' : 'Vorgemerkt';
+    case 'none': return mode === 'opt_in' ? 'Nicht angemeldet' : 'Vorgemerkt';
+    case 'cancelled': return 'Abgemeldet';
+    case 'present': return 'Anwesend';
+    case 'absent_excused': return 'Entschuldigt gefehlt';
+    case 'absent_unexcused': return 'Unentschuldigt gefehlt';
+    case 'late_excused': return 'Verspätet (entschuldigt)';
+    case 'late_unexcused': return 'Verspätet (unentschuldigt)';
     default: return status;
   }
 }
 
 async function memberToggleAttendance(event, attendance, mode, deadline) {
   const user = window.currentUser.firebaseUser;
-  const now  = new Date();
+  const now = new Date();
   if (deadline && now > deadline) { showToast('Anmeldefrist abgelaufen.', 'warning'); return; }
 
   const currentStatus = attendance?.status || (mode === 'opt_out' ? 'registered' : 'none');
   let newStatus;
-  if (mode === 'opt_in') {
-    newStatus = currentStatus === 'registered' ? 'cancelled' : 'registered';
-  } else {
-    newStatus = currentStatus === 'cancelled' ? 'registered' : 'cancelled';
-  }
+  if (mode === 'opt_in') newStatus = currentStatus === 'registered' ? 'cancelled' : 'registered';
+  else newStatus = currentStatus === 'cancelled' ? 'registered' : 'cancelled';
 
   const docId = `${event.id}_${user.uid}`;
   await firestore.collection('eventAttendance').doc(docId).set({
-    eventId: event.id, userId: user.uid,
+    eventId: event.id,
+    userId: user.uid,
     status: newStatus,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
@@ -252,13 +266,14 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
 }
 
 async function memberMarkLate(event, attendance) {
-  const user   = window.currentUser.firebaseUser;
+  const user = window.currentUser.firebaseUser;
   const reason = prompt('Begründung für die Verspätung (optional – leer lassen für unentschuldigt):');
-  if (reason === null) return; // Abgebrochen
+  if (reason === null) return;
   const status = reason.trim() ? 'late_excused' : 'late_unexcused';
-  const docId  = `${event.id}_${user.uid}`;
+  const docId = `${event.id}_${user.uid}`;
   await firestore.collection('eventAttendance').doc(docId).set({
-    eventId: event.id, userId: user.uid,
+    eventId: event.id,
+    userId: user.uid,
     status,
     memberNote: reason.trim() || (attendance?.memberNote || ''),
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -268,10 +283,11 @@ async function memberMarkLate(event, attendance) {
 }
 
 async function memberSaveNote(event, attendance, note) {
-  const user  = window.currentUser.firebaseUser;
+  const user = window.currentUser.firebaseUser;
   const docId = `${event.id}_${user.uid}`;
   await firestore.collection('eventAttendance').doc(docId).set({
-    eventId: event.id, userId: user.uid,
+    eventId: event.id,
+    userId: user.uid,
     memberNote: note,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
