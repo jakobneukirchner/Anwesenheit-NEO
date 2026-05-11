@@ -6,7 +6,6 @@ async function loadMemberDashboard() {
   container.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
 
   try {
-    // Einstellungen & User-Daten
     const settingsDoc = await firestore.collection('settings').doc('global').get();
     const settings    = settingsDoc.exists ? settingsDoc.data() : {};
     window.appSettings = settings;
@@ -21,33 +20,25 @@ async function loadMemberDashboard() {
     const cutOff     = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
     const pastCutOff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
-    // Attendance des Users
-    const attendanceSnap = await firestore.collection('eventAttendance')
-      .where('userId', '==', user.uid).get();
+    const attendanceSnap = await firestore.collection('eventAttendance').where('userId', '==', user.uid).get();
     const attendanceByEvent = {};
     attendanceSnap.forEach(doc => { attendanceByEvent[doc.data().eventId] = { id: doc.id, ...doc.data() }; });
 
     let events = [];
     const seen = new Set();
-
     const addEvent = (doc) => {
       const data = doc.data();
       if (!seen.has(doc.id)) { seen.add(doc.id); events.push({ id: doc.id, ...data }); }
     };
 
-    // Direkte Zuweisungen
-    const directSnap = await firestore.collection('events')
-      .where('directMembers', 'array-contains', user.uid).get();
+    const directSnap = await firestore.collection('events').where('directMembers', 'array-contains', user.uid).get();
     directSnap.forEach(addEvent);
 
-    // Gruppentermine
     for (const groupId of userGroups) {
-      const groupSnap = await firestore.collection('events')
-        .where('groupId', '==', groupId).get();
+      const groupSnap = await firestore.collection('events').where('groupId', '==', groupId).get();
       groupSnap.forEach(addEvent);
     }
 
-    // Vergangene Events aus Attendance
     for (const eventId of Object.keys(attendanceByEvent)) {
       if (!seen.has(eventId)) {
         const evDoc = await firestore.collection('events').doc(eventId).get();
@@ -55,17 +46,14 @@ async function loadMemberDashboard() {
       }
     }
 
-    // Status-Filter & Zeitfenster
     events = events.filter(e => {
       if (e.status === 'cancelled') return false;
       const t = e.startTime?.toDate?.();
       if (!t) return false;
-      // Vergangene Termine nur wenn Attendance vorhanden
       if (t < now) return !!attendanceByEvent[e.id];
       return t <= cutOff;
     });
 
-    // Teilnehmerinfos
     const visibilityMode = settings.visibilityMode || 'count';
     for (const ev of events) {
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
@@ -212,8 +200,27 @@ function renderMemberEventCard(event, attendance, isPast) {
 
   const lateBtn = card.querySelector('[data-action="late"]');
   if (lateBtn) lateBtn.onclick = () => guardedAction(async () => {
-    try { await memberMarkLate(event, attendance); }
-    catch (e) { errorEl.textContent = 'Verspätung konnte nicht gemeldet werden.'; }
+    showModal({
+      title: 'Verspätung melden',
+      body: `
+        <p>Bitte gib eine Begründung an. Falls du keine angibst, wird die Verspätung als <strong>entschuldigt</strong> gewertet – unentschuldigt kann nur ein Trainer eintragen.</p>
+        <label>Begründung (optional)</label>
+        <input type="text" id="late-reason-input" placeholder="z.B. Zug hatte Verspätung" />
+      `,
+      confirmLabel: 'Melden',
+      onConfirm: async () => {
+        const reason = document.getElementById('late-reason-input')?.value.trim() || '';
+        // Immer late_excused – unentschuldigt nur durch Trainer
+        await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
+          eventId: event.id, userId: window.currentUser.firebaseUser.uid,
+          status: 'late_excused',
+          memberNote: reason || (attendance?.memberNote || ''),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        showToast('Verspätung gemeldet (entschuldigt).', 'success');
+        loadMemberDashboard();
+      }
+    });
   });
 
   const noteTextarea = card.querySelector('textarea[data-role="note"]');
@@ -252,20 +259,6 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
   showToast(newStatus === 'registered' ? 'Erfolgreich angemeldet.' : 'Erfolgreich abgemeldet.', 'success');
-  loadMemberDashboard();
-}
-
-async function memberMarkLate(event, attendance) {
-  const user   = window.currentUser.firebaseUser;
-  const reason = prompt('Begründung für die Verspätung (optional – leer lassen für unentschuldigt):');
-  if (reason === null) return;
-  const status = reason.trim() ? 'late_excused' : 'late_unexcused';
-  await firestore.collection('eventAttendance').doc(`${event.id}_${user.uid}`).set({
-    eventId: event.id, userId: user.uid, status,
-    memberNote: reason.trim() || (attendance?.memberNote || ''),
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  }, { merge: true });
-  showToast('Verspätung gemeldet.', 'success');
   loadMemberDashboard();
 }
 

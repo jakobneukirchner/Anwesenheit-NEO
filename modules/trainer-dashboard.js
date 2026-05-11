@@ -6,59 +6,39 @@ async function loadTrainerDashboard() {
   container.innerHTML = `<div class="loading-center">Lade Trainer-Termine...</div>`;
 
   try {
-    // Einstellungen laden
-    const settingsDoc = await firestore.collection('settings').doc('global').get();
-    const settings    = settingsDoc.exists ? settingsDoc.data() : {};
-    const defaultLimit = settings.defaultEventLookAhead ?? 30; // Tage
+    const settingsDoc  = await firestore.collection('settings').doc('global').get();
+    const settings     = settingsDoc.exists ? settingsDoc.data() : {};
+    const defaultLimit = settings.defaultEventLookAhead ?? 30;
 
-    // User-Doc für Grupppen & individuelle Einstellung laden
-    const userDoc  = await firestore.collection('users').doc(user.uid).get();
-    const userData = userDoc.exists ? userDoc.data() : {};
+    const userDoc   = await firestore.collection('users').doc(user.uid).get();
+    const userData  = userDoc.exists ? userDoc.data() : {};
     const lookAheadDays = userData.eventLookAhead ?? defaultLimit;
 
-    const now    = new Date();
-    const cutOff = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
+    const now        = new Date();
+    const cutOff     = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
+    const pastCutOff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
     let events = [];
     const seen = new Set();
+    const addEvents = (snap) => snap.forEach(doc => {
+      if (!seen.has(doc.id)) { seen.add(doc.id); events.push({ id: doc.id, ...doc.data() }); }
+    });
 
-    const addEvents = (snap) => {
-      snap.forEach(doc => {
-        if (!seen.has(doc.id)) {
-          seen.add(doc.id);
-          events.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    };
-
-    // 1) Direkte Trainer-Zuweisung per trainers-Array
-    const trainerSnap = await firestore.collection('events')
-      .where('trainers', 'array-contains', user.uid)
-      .get();
+    const trainerSnap = await firestore.collection('events').where('trainers', 'array-contains', user.uid).get();
     addEvents(trainerSnap);
 
-    // 2) Gruppen-Termine (Trainer kann auch über Gruppen zugewiesen sein)
     const userGroups = userData.groups || [];
     for (const groupId of userGroups) {
-      const groupSnap = await firestore.collection('events')
-        .where('groupId', '==', groupId)
-        .get();
+      const groupSnap = await firestore.collection('events').where('groupId', '==', groupId).get();
       addEvents(groupSnap);
     }
 
-    // Filtern: nur innerhalb des Look-Ahead-Fensters & nicht zu weit in der Vergangenheit (max 90 Tage)
-    const pastCutOff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
     events = events.filter(e => {
       const t = e.startTime?.toDate?.();
       if (!t) return false;
       return t >= pastCutOff && t <= cutOff;
     });
-
-    events.sort((a, b) => {
-      const aT = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
-      const bT = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
-      return aT - bT;
-    });
+    events.sort((a, b) => (a.startTime?.toMillis?.() ?? 0) - (b.startTime?.toMillis?.() ?? 0));
 
     const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
     const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
@@ -66,8 +46,7 @@ async function loadTrainerDashboard() {
     container.innerHTML = `
       <h2 style="margin-top:0;">Trainer-Dashboard</h2>
       <p class="text-muted" style="margin-top:-8px;margin-bottom:16px;font-size:0.85rem;">
-        Zeige Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong>
-        (${lookAheadDays} Tage im Voraus)
+        Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong> (${lookAheadDays} Tage im Voraus)
       </p>
       <div class="tabs">
         <button class="tab-btn active" data-tab="upcoming">Kommende Termine (${upcoming.length})</button>
@@ -90,134 +69,274 @@ async function loadTrainerDashboard() {
     const pastEl     = document.getElementById('tab-past');
 
     if (!upcoming.length) upcomingEl.innerHTML = '<p class="text-muted">Keine kommenden Termine.</p>';
-    else for (const ev of upcoming) upcomingEl.appendChild(await renderTrainerEventCard(ev, false));
+    else for (const ev of upcoming) upcomingEl.appendChild(renderTrainerEventSummaryCard(ev, false));
 
     if (!past.length) pastEl.innerHTML = '<p class="text-muted">Keine vergangenen Termine.</p>';
-    else for (const ev of past) pastEl.appendChild(await renderTrainerEventCard(ev, true));
+    else for (const ev of past) pastEl.appendChild(renderTrainerEventSummaryCard(ev, true));
 
   } catch (e) {
     console.error(e);
-    container.innerHTML = '<p class="text-error">Fehler beim Laden.</p>';
+    container.innerHTML = '<p class="text-error">Fehler beim Laden: ' + e.message + '</p>';
   }
 }
 
-async function renderTrainerEventCard(event, isPast) {
+/* ---- Übersichtskarte (Liste) ---- */
+function renderTrainerEventSummaryCard(event, isPast) {
   const card  = createElement('div', 'card');
   const start = event.startTime?.toDate?.();
   const end   = event.endTime?.toDate?.();
+  const isCancelled = event.status === 'cancelled';
 
-  const attendanceSnap = await firestore.collection('eventAttendance')
-    .where('eventId', '==', event.id).get();
-  const attendances = [];
-  attendanceSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
-
-  // Namen der Teilnehmer auflösen
-  const userMap = {};
-  for (const att of attendances) {
-    if (!userMap[att.userId]) {
-      const uDoc = await firestore.collection('users').doc(att.userId).get();
-      userMap[att.userId] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || att.userId) : att.userId;
-    }
-  }
-
-  const statusOptions = [
-    { value: 'present',          label: 'Anwesend' },
-    { value: 'absent_excused',   label: 'Entschuldigt gefehlt' },
-    { value: 'absent_unexcused', label: 'Unentschuldigt gefehlt' },
-    { value: 'late_excused',     label: 'Verspätet (entschuldigt)' },
-    { value: 'late_unexcused',   label: 'Verspätet (unentschuldigt)' },
-    { value: 'registered',       label: 'Angemeldet (noch offen)' },
-    { value: 'cancelled',        label: 'Abgemeldet' }
-  ];
-
-  const attendanceRows = attendances.map(att => {
-    const opts = statusOptions.map(o =>
-      `<option value="${o.value}" ${att.status === o.value ? 'selected' : ''}>${o.label}</option>`
-    ).join('');
-    return `
-      <tr>
-        <td>${userMap[att.userId] || att.userId}</td>
-        <td><select data-att-id="${att.id}">${opts}</select></td>
-        <td><span class="text-muted" style="font-size:0.82rem;">${att.memberNote || ''}</span></td>
-        <td><input type="text" placeholder="Trainer-Hinweis" data-trainer-note="${att.id}" value="${att.trainerNote || ''}" style="min-width:120px;" /></td>
-      </tr>
-    `;
-  }).join('');
-
-  const isCancelled  = event.status === 'cancelled';
-  const trainerCount = (event.trainers || []).length;
-
+  card.style.cursor = 'pointer';
   card.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div>
         <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
         <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
       </div>
-      ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : '<span class="chip chip-success">Aktiv</span>'}
-    </div>
-    ${isCancelled ? `<p class="text-muted">Begründung: ${event.cancellationReason || '–'}</p>` : ''}
-    <hr class="divider" />
-    <h4 style="margin:0 0 8px;">Teilnehmerliste (${attendances.length})</h4>
-    ${attendances.length ? `
-      <div style="overflow-x:auto;">
-        <table>
-          <thead><tr><th>Mitglied</th><th>Status</th><th>Hinweis Mitglied</th><th>Trainer-Notiz</th></tr></thead>
-          <tbody>${attendanceRows}</tbody>
-        </table>
+      <div style="display:flex;gap:6px;align-items:center;">
+        ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : isPast ? '<span class="chip chip-info">Vergangen</span>' : '<span class="chip chip-success">Aktiv</span>'}
+        <button class="btn-primary" data-action="detail" style="padding:5px 14px;font-size:0.85rem;">Details &rsaquo;</button>
       </div>
-      <div style="margin-top:10px;">
-        <button class="btn-primary" data-action="save-attendance">Anwesenheit speichern</button>
-      </div>
-    ` : '<p class="text-muted">Noch keine Teilnehmer.</p>'}
-    <hr class="divider" />
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${!isCancelled ? `
-        <button class="btn-danger"    data-action="cancel-event">
-          ${trainerCount > 1 ? 'Mich abmelden / Training ausfallen lassen' : 'Training absagen'}
-        </button>
-        <button class="btn-secondary" data-action="trainer-late">Eigene Verspätung melden</button>
-      ` : ''}
     </div>
-    <div data-role="error" class="text-error"></div>
+    ${event.trainerLateNote ? `<div class="chip chip-warning" style="margin-top:8px;">⚠️ Verspätung gemeldet: ${event.trainerLateNote}</div>` : ''}
+    ${isCancelled ? `<p class="text-muted" style="margin:6px 0 0;">Begründung: ${event.cancellationReason || '–'}</p>` : ''}
   `;
 
-  const saveBtn = card.querySelector('[data-action="save-attendance"]');
-  if (saveBtn) {
-    saveBtn.onclick = async () => {
+  card.querySelector('[data-action="detail"]').onclick = (e) => {
+    e.stopPropagation();
+    openTrainerEventDetail(event);
+  };
+  card.onclick = () => openTrainerEventDetail(event);
+
+  return card;
+}
+
+/* ---- Detailansicht (Overlay / eigene Seite) ---- */
+async function openTrainerEventDetail(event) {
+  const container = document.getElementById('app-content');
+  container.innerHTML = `<div class="loading-center">Lade Termin-Details...</div>`;
+
+  try {
+    const start = event.startTime?.toDate?.();
+    const end   = event.endTime?.toDate?.();
+    const isCancelled = event.status === 'cancelled';
+    const trainerCount = (event.trainers || []).length;
+
+    // Teilnehmer laden
+    const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
+    const attendances = [];
+    attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
+
+    // Namen auflösen
+    const userMap = {};
+    for (const att of attendances) {
+      if (!userMap[att.userId]) {
+        const uDoc = await firestore.collection('users').doc(att.userId).get();
+        userMap[att.userId] = uDoc.exists
+          ? (uDoc.data().displayName || uDoc.data().email || att.userId)
+          : att.userId;
+      }
+    }
+
+    // Status-Chip-Farbe
+    const statusChip = (status) => {
+      const map = {
+        present:          ['chip-success', 'Anwesend'],
+        registered:       ['chip-info',    'Angemeldet'],
+        cancelled:        ['chip-error',   'Abgemeldet'],
+        absent_excused:   ['chip-warning', 'Entsch. gefehlt'],
+        absent_unexcused: ['chip-error',   'Unentsch. gefehlt'],
+        late_excused:     ['chip-warning', 'Verspätet (E)'],
+        late_unexcused:   ['chip-warning', 'Verspätet (U)'],
+      };
+      const [cls, label] = map[status] || ['', status];
+      return `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
+    };
+
+    // Teilnehmer-Zeilen
+    const memberRows = attendances.map(att => `
+      <tr data-att-id="${att.id}" data-user-id="${att.userId}" data-current-status="${att.status}">
+        <td style="font-weight:500;">${userMap[att.userId] || att.userId}</td>
+        <td id="status-chip-${att.id}">${statusChip(att.status)}</td>
+        <td>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" class="presence-cb" data-att-id="${att.id}"
+              style="width:20px;height:20px;"
+              ${att.status === 'present' ? 'checked' : ''} />
+            Anwesend
+          </label>
+        </td>
+        <td>
+          <select class="status-select" data-att-id="${att.id}" style="font-size:0.85rem;">
+            <option value="present"          ${att.status==='present'          ?'selected':''}>Anwesend</option>
+            <option value="registered"       ${att.status==='registered'       ?'selected':''}>Angemeldet (offen)</option>
+            <option value="absent_excused"   ${att.status==='absent_excused'   ?'selected':''}>Entschuldigt gefehlt</option>
+            <option value="absent_unexcused" ${att.status==='absent_unexcused' ?'selected':''}>Unentschuldigt gefehlt</option>
+            <option value="late_excused"     ${att.status==='late_excused'     ?'selected':''}>Verspätet (entschuldigt)</option>
+            <option value="late_unexcused"   ${att.status==='late_unexcused'   ?'selected':''}>Verspätet (unentschuldigt)</option>
+            <option value="cancelled"        ${att.status==='cancelled'        ?'selected':''}>Abgemeldet</option>
+          </select>
+        </td>
+        <td>
+          <input type="text" class="trainer-note-input" data-att-id="${att.id}"
+            placeholder="Trainer-Notiz" value="${att.trainerNote || ''}"
+            style="min-width:130px;font-size:0.85rem;" />
+        </td>
+        <td class="text-muted" style="font-size:0.82rem;max-width:140px;">${att.memberNote || ''}</td>
+      </tr>
+    `).join('');
+
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+        <button class="btn-secondary" id="detail-back" style="padding:6px 16px;">&larr; Zurück</button>
+        <h2 style="margin:0;">${event.title || 'Termin'}</h2>
+        ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : ''}
+      </div>
+
+      <div class="dashboard-grid" style="margin-bottom:16px;">
+        <div class="card" style="margin:0;">
+          <p class="text-muted" style="margin:0 0 2px;font-size:0.8rem;">Datum & Zeit</p>
+          <p style="margin:0;font-weight:600;">${start ? formatDateTime(start) : '–'}${end ? ' – ' + formatTime(end) : ''}</p>
+        </div>
+        <div class="card" style="margin:0;">
+          <p class="text-muted" style="margin:0 0 2px;font-size:0.8rem;">Teilnehmer angemeldet</p>
+          <p style="margin:0;font-weight:600;font-size:1.3rem;">${attendances.filter(a => ['registered','present','late_excused','late_unexcused'].includes(a.status)).length}</p>
+        </div>
+        <div class="card" style="margin:0;">
+          <p class="text-muted" style="margin:0 0 2px;font-size:0.8rem;">Anwesend</p>
+          <p style="margin:0;font-weight:600;font-size:1.3rem;color:var(--color-success);">${attendances.filter(a => a.status === 'present').length}</p>
+        </div>
+        <div class="card" style="margin:0;">
+          <p class="text-muted" style="margin:0 0 2px;font-size:0.8rem;">Gefehlt</p>
+          <p style="margin:0;font-weight:600;font-size:1.3rem;color:var(--color-error);">${attendances.filter(a => ['absent_excused','absent_unexcused'].includes(a.status)).length}</p>
+        </div>
+      </div>
+
+      ${event.description ? `<div class="card" style="margin-bottom:16px;"><p style="margin:0;">${event.description}</p></div>` : ''}
+      ${isCancelled ? `<div class="card" style="margin-bottom:16px;"><p class="text-error" style="margin:0;">Abgesagt: ${event.cancellationReason || '–'}</p></div>` : ''}
+      ${event.trainerLateNote ? `<div class="chip chip-warning" style="margin-bottom:16px;display:inline-block;">⚠️ Verspätung: ${event.trainerLateNote}</div>` : ''}
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+          <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn-secondary" id="mark-all-present" style="padding:5px 14px;font-size:0.85rem;">✓ Alle anwesend</button>
+            <button class="btn-primary"   id="save-all-attendance">Speichern</button>
+          </div>
+        </div>
+        ${attendances.length ? `
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr>
+                <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th><th>Trainer-Notiz</th><th>Mitglieder-Hinweis</th>
+              </tr></thead>
+              <tbody id="attendance-tbody">${memberRows}</tbody>
+            </table>
+          </div>
+        ` : '<p class="text-muted">Keine Teilnehmer angemeldet.</p>'}
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <h3 style="margin-top:0;">Aktionen</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${!isCancelled ? `
+            <button class="btn-danger"    id="cancel-event-btn">${trainerCount > 1 ? 'Mich abmelden / Training absagen' : 'Training absagen'}</button>
+            <button class="btn-secondary" id="trainer-late-btn">Verspätung melden</button>
+          ` : ''}
+        </div>
+      </div>
+      <div id="detail-error" class="text-error" style="margin-top:8px;"></div>
+    `;
+
+    // --- Zurück
+    document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
+
+    // --- Checkbox Schnell-Check: setzt select auf present
+    container.querySelectorAll('.presence-cb').forEach(cb => {
+      cb.onchange = () => {
+        const sel = container.querySelector(`.status-select[data-att-id="${cb.dataset.attId}"]`);
+        if (sel) sel.value = cb.checked ? 'present' : 'registered';
+        updateStatusChip(cb.dataset.attId, cb.checked ? 'present' : 'registered');
+      };
+    });
+
+    // --- Select-Änderung synchronisiert Checkbox
+    container.querySelectorAll('.status-select').forEach(sel => {
+      sel.onchange = () => {
+        const cb = container.querySelector(`.presence-cb[data-att-id="${sel.dataset.attId}"]`);
+        if (cb) cb.checked = sel.value === 'present';
+        updateStatusChip(sel.dataset.attId, sel.value);
+      };
+    });
+
+    function updateStatusChip(attId, status) {
+      const chipEl = document.getElementById(`status-chip-${attId}`);
+      if (!chipEl) return;
+      const map = {
+        present:          ['chip-success', 'Anwesend'],
+        registered:       ['chip-info',    'Angemeldet'],
+        cancelled:        ['chip-error',   'Abgemeldet'],
+        absent_excused:   ['chip-warning', 'Entsch. gefehlt'],
+        absent_unexcused: ['chip-error',   'Unentsch. gefehlt'],
+        late_excused:     ['chip-warning', 'Verspätet (E)'],
+        late_unexcused:   ['chip-warning', 'Verspätet (U)'],
+      };
+      const [cls, label] = map[status] || ['', status];
+      chipEl.innerHTML = `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
+    }
+
+    // --- Alle anwesend
+    document.getElementById('mark-all-present')?.addEventListener('click', () => {
+      container.querySelectorAll('.presence-cb').forEach(cb => {
+        cb.checked = true;
+        const sel = container.querySelector(`.status-select[data-att-id="${cb.dataset.attId}"]`);
+        if (sel) sel.value = 'present';
+        updateStatusChip(cb.dataset.attId, 'present');
+      });
+    });
+
+    // --- Speichern
+    document.getElementById('save-all-attendance')?.addEventListener('click', async () => {
+      const errorEl = document.getElementById('detail-error');
       try {
         const batch = firestore.batch();
-        card.querySelectorAll('select[data-att-id]').forEach(sel => {
-          const noteInput = card.querySelector(`input[data-trainer-note="${sel.dataset.attId}"]`);
+        container.querySelectorAll('.status-select').forEach(sel => {
+          const noteInput = container.querySelector(`.trainer-note-input[data-att-id="${sel.dataset.attId}"]`);
           batch.update(firestore.collection('eventAttendance').doc(sel.dataset.attId), {
-            status: sel.value,
+            status:      sel.value,
             trainerNote: noteInput?.value || '',
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            updatedAt:   firebase.firestore.FieldValue.serverTimestamp()
           });
         });
         await batch.commit();
         showToast('Anwesenheit gespeichert.', 'success');
+        // Chips & Checkboxen aktualisieren
+        container.querySelectorAll('.status-select').forEach(sel => {
+          const cb = container.querySelector(`.presence-cb[data-att-id="${sel.dataset.attId}"]`);
+          if (cb) cb.checked = sel.value === 'present';
+          updateStatusChip(sel.dataset.attId, sel.value);
+        });
       } catch (e) {
         console.error(e);
-        card.querySelector('[data-role="error"]').textContent = 'Fehler beim Speichern.';
+        errorEl.textContent = 'Fehler beim Speichern.';
       }
-    };
-  }
+    });
 
-  const cancelBtn = card.querySelector('[data-action="cancel-event"]');
-  if (cancelBtn) {
-    cancelBtn.onclick = () => {
+    // --- Training absagen
+    document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
       const user = window.currentUser.firebaseUser;
       const tc   = (event.trainers || []).length;
       showModal({
         title: 'Training absagen',
         body: `
-          <p>${tc > 1 ? 'Willst du dich nur abmelden oder das Training ausfallen lassen?' : 'Training absagen – Begründung eingeben:'}</p>
+          <p>${tc > 1 ? 'Nur dich abmelden oder Training komplett ausfallen lassen?' : 'Begründung eingeben:'}</p>
           <label>Begründung (optional)</label>
           <input type="text" id="cancel-reason" placeholder="z.B. Krankheit" />
           ${tc > 1 ? `
             <div style="margin-top:8px;">
               <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);"><input type="radio" name="cancel-type" value="self" checked /> Nur ich melde mich ab</label>
-              <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);"><input type="radio" name="cancel-type" value="all" /> Training komplett ausfallen lassen</label>
+              <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);"><input type="radio" name="cancel-type" value="all" /> Training komplett absagen</label>
             </div>` : ''}
         `,
         confirmLabel: 'Bestätigen',
@@ -226,7 +345,7 @@ async function renderTrainerEventCard(event, isPast) {
           const type   = document.querySelector('input[name="cancel-type"]:checked')?.value || 'all';
           if (type === 'self' && tc > 1) {
             await firestore.collection('events').doc(event.id).update({
-              trainers: firebase.firestore.FieldValue.arrayRemove(user.uid),
+              trainers:  firebase.firestore.FieldValue.arrayRemove(user.uid),
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
             showToast('Du wurdest abgemeldet.', 'success');
@@ -240,17 +359,15 @@ async function renderTrainerEventCard(event, isPast) {
           loadTrainerDashboard();
         }
       });
-    };
-  }
+    });
 
-  const lateBtn = card.querySelector('[data-action="trainer-late"]');
-  if (lateBtn) {
-    lateBtn.onclick = () => {
+    // --- Verspätung melden
+    document.getElementById('trainer-late-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Verspätung melden',
         body: `
           <label>Begründung / voraussichtliche Verspätung</label>
-          <input type="text" id="late-reason" placeholder="z.B. ca. 15 Minuten Verspätung" />
+          <input type="text" id="late-reason" placeholder="z.B. ca. 15 Minuten" />
         `,
         confirmLabel: 'Melden',
         onConfirm: async () => {
@@ -260,11 +377,16 @@ async function renderTrainerEventCard(event, isPast) {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           showToast('Verspätung gemeldet.', 'success');
-          loadTrainerDashboard();
+          openTrainerEventDetail(event);
         }
       });
-    };
-  }
+    });
 
-  return card;
+  } catch (e) {
+    console.error(e);
+    container.innerHTML = `
+      <button class="btn-secondary" onclick="loadTrainerDashboard()" style="margin-bottom:16px;">&larr; Zurück</button>
+      <p class="text-error">Fehler beim Laden der Details: ${e.message}</p>
+    `;
+  }
 }
