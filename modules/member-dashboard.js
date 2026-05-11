@@ -9,12 +9,12 @@ async function loadMemberDashboard() {
     const settingsDoc = await firestore.collection('settings').doc('global').get();
     const settings    = settingsDoc.exists ? settingsDoc.data() : {};
     window.appSettings = settings;
-    const defaultLimit  = settings.defaultEventLookAhead ?? 30;
+    const defaultLimit = settings.defaultEventLookAhead ?? 30;
 
-    const userDoc   = await firestore.collection('users').doc(user.uid).get();
-    const userData  = userDoc.data() || {};
-    const userGroups      = userData.groups || [];
-    const lookAheadDays   = userData.eventLookAhead ?? defaultLimit;
+    const userDoc  = await firestore.collection('users').doc(user.uid).get();
+    const userData = userDoc.data() || {};
+    const userGroups    = userData.groups || [];
+    const lookAheadDays = userData.eventLookAhead ?? defaultLimit;
 
     const now        = new Date();
     const cutOff     = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
@@ -27,8 +27,7 @@ async function loadMemberDashboard() {
     let events = [];
     const seen = new Set();
     const addEvent = (doc) => {
-      const data = doc.data();
-      if (!seen.has(doc.id)) { seen.add(doc.id); events.push({ id: doc.id, ...data }); }
+      if (!seen.has(doc.id)) { seen.add(doc.id); events.push({ id: doc.id, ...doc.data() }); }
     };
 
     const directSnap = await firestore.collection('events').where('directMembers', 'array-contains', user.uid).get();
@@ -54,6 +53,7 @@ async function loadMemberDashboard() {
       return t <= cutOff;
     });
 
+    // Teilnehmerzahlen / Namen
     const visibilityMode = settings.visibilityMode || 'count';
     for (const ev of events) {
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
@@ -118,6 +118,21 @@ async function loadMemberDashboard() {
   }
 }
 
+/**
+ * Gibt zurück ob ein Trainer den Status bereits final gesetzt hat.
+ * Finale Status (vom Trainer vergeben): present, absent_excused, absent_unexcused,
+ * late_excused (wenn trainerSet=true), late_unexcused
+ * Mitglied darf danach nichts mehr ändern.
+ */
+function isLockedByTrainer(attendance) {
+  if (!attendance) return false;
+  const lockedStatuses = ['present', 'absent_excused', 'absent_unexcused', 'late_unexcused'];
+  if (lockedStatuses.includes(attendance.status)) return true;
+  // late_excused nur sperren wenn Trainer es gesetzt hat (trainerSet-Flag)
+  if (attendance.status === 'late_excused' && attendance.trainerSet) return true;
+  return false;
+}
+
 function renderMemberEventCard(event, attendance, isPast) {
   const settings       = window.appSettings || {};
   const signupMins     = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
@@ -131,15 +146,31 @@ function renderMemberEventCard(event, attendance, isPast) {
   const withinDeadline = !deadline || now <= deadline;
   const memberStatus   = attendance?.status || (mode === 'opt_out' ? 'registered' : 'none');
   const memberNote     = attendance?.memberNote || '';
+  const locked         = isLockedByTrainer(attendance);
 
   const card = createElement('div', 'card');
 
-  const trainerLate = event.trainerLateNote
+  // Trainer-Verspätungsmeldung
+  const trainerLateHtml = event.trainerLateNote
     ? `<div class="chip chip-warning" style="margin-bottom:8px;">⚠️ Trainer meldet Verspätung: ${event.trainerLateNote}</div>` : '';
+
+  // Terminbezogene Trainer-Nachricht
+  const broadcastHtml = event.trainerBroadcast
+    ? `<div style="background:rgba(21,101,192,0.08);border-left:3px solid var(--color-primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
+        <span style="font-size:0.8rem;font-weight:600;color:var(--color-primary);text-transform:uppercase;letter-spacing:.04em;">Nachricht vom Trainer</span>
+        <p style="margin:4px 0 0;">${event.trainerBroadcast}</p>
+       </div>` : '';
+
+  // Notiz vom Trainer an dieses Mitglied
+  const trainerNoteHtml = attendance?.trainerNoteMember
+    ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
+        <span style="font-size:0.8rem;font-weight:600;color:var(--color-warning,#f57c00);text-transform:uppercase;letter-spacing:.04em;">Persönliche Notiz deines Trainers</span>
+        <p style="margin:4px 0 0;">${attendance.trainerNoteMember}</p>
+       </div>` : '';
 
   if (event.status === 'cancelled') {
     card.innerHTML = `
-      ${trainerLate}
+      ${trainerLateHtml}
       <h3>${event.title || 'Termin'}</h3>
       <p class="text-muted">${start ? formatDateTime(start) : ''}</p>
       <div class="chip chip-error">❌ Abgesagt${event.cancellationReason ? ': ' + event.cancellationReason : ''}</div>
@@ -147,7 +178,6 @@ function renderMemberEventCard(event, attendance, isPast) {
     return card;
   }
 
-  const isRegistered = memberStatus === 'registered';
   let participantInfo = '';
   if (!isPast) {
     if (visMode === 'names' && event._participantNames)
@@ -162,12 +192,19 @@ function renderMemberEventCard(event, attendance, isPast) {
     late_excused: 'chip-warning', late_unexcused: 'chip-warning'
   }[memberStatus] || '';
 
-  const toggleLabel = mode === 'opt_in'
+  const isRegistered = memberStatus === 'registered';
+  const toggleLabel  = mode === 'opt_in'
     ? (isRegistered ? 'Abmelden' : 'Anmelden')
     : (memberStatus === 'cancelled' ? 'Wieder anmelden' : 'Abmelden');
 
+  // Gesperrt-Hinweis wenn Trainer bereits gecheckt hat
+  const lockedHtml = locked
+    ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;">🔒 Vom Trainer eingetragen – keine Änderung möglich.</p>` : '';
+
   card.innerHTML = `
-    ${trainerLate}
+    ${trainerLateHtml}
+    ${broadcastHtml}
+    ${trainerNoteHtml}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div>
         <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
@@ -175,60 +212,63 @@ function renderMemberEventCard(event, attendance, isPast) {
       </div>
       <span class="chip ${statusChipClass}">${translateMemberStatus(memberStatus, mode)}</span>
     </div>
+    ${lockedHtml}
     ${event.description ? `<p style="margin:10px 0 4px;">${event.description}</p>` : ''}
     ${participantInfo}
-    ${!withinDeadline && !isPast ? '<p class="text-muted" style="font-size:0.85rem;">⏱ Anmeldefrist abgelaufen</p>' : ''}
+    ${!withinDeadline && !isPast && !locked ? '<p class="text-muted" style="font-size:0.85rem;">⏱ Anmeldefrist abgelaufen</p>' : ''}
     <hr class="divider" />
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${!isPast && withinDeadline ? `<button class="btn-primary" data-action="toggle">${toggleLabel}</button>` : ''}
-      ${!isPast ? `<button class="btn-secondary" data-action="late">Verspätung melden</button>` : ''}
+      ${!isPast && withinDeadline && !locked ? `<button class="btn-primary" data-action="toggle">${toggleLabel}</button>` : ''}
+      ${!isPast && !locked ? `<button class="btn-secondary" data-action="late">Verspätung melden</button>` : ''}
     </div>
     <div style="margin-top:12px;">
       <label>Mein Hinweis (für Trainer sichtbar)</label>
-      <textarea rows="2" data-role="note">${memberNote}</textarea>
-      <button class="btn-secondary" data-action="save-note" style="margin-top:0;">Hinweis speichern</button>
+      <textarea rows="2" data-role="note" ${locked ? 'disabled style="opacity:0.6;"' : ''}>${memberNote}</textarea>
+      ${!locked ? `<button class="btn-secondary" data-action="save-note" style="margin-top:0;">Hinweis speichern</button>` : ''}
     </div>
     <div data-role="error" class="text-error"></div>
   `;
 
-  const errorEl  = card.querySelector('[data-role="error"]');
-  const toggleBtn = card.querySelector('[data-action="toggle"]');
-  if (toggleBtn) toggleBtn.onclick = () => guardedAction(async () => {
-    try { await memberToggleAttendance(event, attendance, mode, deadline); }
-    catch (e) { errorEl.textContent = 'Aktion fehlgeschlagen: ' + e.message; }
-  });
-
-  const lateBtn = card.querySelector('[data-action="late"]');
-  if (lateBtn) lateBtn.onclick = () => guardedAction(async () => {
-    showModal({
-      title: 'Verspätung melden',
-      body: `
-        <p>Bitte gib eine Begründung an. Falls du keine angibst, wird die Verspätung als <strong>entschuldigt</strong> gewertet – unentschuldigt kann nur ein Trainer eintragen.</p>
-        <label>Begründung (optional)</label>
-        <input type="text" id="late-reason-input" placeholder="z.B. Zug hatte Verspätung" />
-      `,
-      confirmLabel: 'Melden',
-      onConfirm: async () => {
-        const reason = document.getElementById('late-reason-input')?.value.trim() || '';
-        // Immer late_excused – unentschuldigt nur durch Trainer
-        await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
-          eventId: event.id, userId: window.currentUser.firebaseUser.uid,
-          status: 'late_excused',
-          memberNote: reason || (attendance?.memberNote || ''),
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        showToast('Verspätung gemeldet (entschuldigt).', 'success');
-        loadMemberDashboard();
-      }
+  if (!locked) {
+    const errorEl   = card.querySelector('[data-role="error"]');
+    const toggleBtn = card.querySelector('[data-action="toggle"]');
+    if (toggleBtn) toggleBtn.onclick = () => guardedAction(async () => {
+      try { await memberToggleAttendance(event, attendance, mode, deadline); }
+      catch (e) { errorEl.textContent = 'Aktion fehlgeschlagen: ' + e.message; }
     });
-  });
 
-  const noteTextarea = card.querySelector('textarea[data-role="note"]');
-  const noteBtn      = card.querySelector('[data-action="save-note"]');
-  if (noteBtn) noteBtn.onclick = () => guardedAction(async () => {
-    try { await memberSaveNote(event, attendance, noteTextarea.value); showToast('Hinweis gespeichert.', 'success'); }
-    catch (e) { errorEl.textContent = 'Hinweis konnte nicht gespeichert werden.'; }
-  });
+    const lateBtn = card.querySelector('[data-action="late"]');
+    if (lateBtn) lateBtn.onclick = () => guardedAction(async () => {
+      showModal({
+        title: 'Verspätung melden',
+        body: `
+          <p>Bitte gib eine Begründung an. Verspätungen werden immer als <strong>entschuldigt</strong> eingetragen – unentschuldigt kann nur ein Trainer eintragen.</p>
+          <label>Begründung (optional)</label>
+          <input type="text" id="late-reason-input" placeholder="z.B. Zug hatte Verspätung" />
+        `,
+        confirmLabel: 'Melden',
+        onConfirm: async () => {
+          const reason = document.getElementById('late-reason-input')?.value.trim() || '';
+          await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
+            eventId: event.id, userId: window.currentUser.firebaseUser.uid,
+            status:     'late_excused',
+            trainerSet: false,
+            memberNote: reason || (attendance?.memberNote || ''),
+            updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          showToast('Verspätung gemeldet (entschuldigt).', 'success');
+          loadMemberDashboard();
+        }
+      });
+    });
+
+    const noteTextarea = card.querySelector('textarea[data-role="note"]');
+    const noteBtn      = card.querySelector('[data-action="save-note"]');
+    if (noteBtn) noteBtn.onclick = () => guardedAction(async () => {
+      try { await memberSaveNote(event, attendance, noteTextarea.value); showToast('Hinweis gespeichert.', 'success'); }
+      catch (e) { errorEl.textContent = 'Hinweis konnte nicht gespeichert werden.'; }
+    });
+  }
 
   return card;
 }
@@ -255,8 +295,10 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
     ? (currentStatus === 'registered' ? 'cancelled' : 'registered')
     : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
   await firestore.collection('eventAttendance').doc(`${event.id}_${user.uid}`).set({
-    eventId: event.id, userId: user.uid, status: newStatus,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    eventId: event.id, userId: user.uid,
+    status:     newStatus,
+    trainerSet: false,
+    updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
   showToast(newStatus === 'registered' ? 'Erfolgreich angemeldet.' : 'Erfolgreich abgemeldet.', 'success');
   loadMemberDashboard();

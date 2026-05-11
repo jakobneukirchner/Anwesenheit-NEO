@@ -114,31 +114,25 @@ async function openTrainerEventDetail(event) {
   container.innerHTML = `<div class="loading-center">Lade Termin-Details...</div>`;
 
   try {
-    // Frischen Event-Stand laden (damit z.B. trainerLateNote aktuell ist)
-    const evDoc    = await firestore.collection('events').doc(event.id).get();
-    const ev       = evDoc.exists ? { id: evDoc.id, ...evDoc.data() } : event;
+    const evDoc   = await firestore.collection('events').doc(event.id).get();
+    const ev      = evDoc.exists ? { id: evDoc.id, ...evDoc.data() } : event;
 
     const start        = ev.startTime?.toDate?.();
     const end          = ev.endTime?.toDate?.();
     const isCancelled  = ev.status === 'cancelled';
     const trainerCount = (ev.trainers || []).length;
 
-    // Teilnehmer laden
     const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
     const attendances = [];
     attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
-    // User-Docs laden (Namen + allgemeine Notiz)
-    const userMap = {};  // uid -> { name, generalNote }
+    const userMap = {};
     for (const att of attendances) {
       if (!userMap[att.userId]) {
         const uDoc = await firestore.collection('users').doc(att.userId).get();
-        if (uDoc.exists) {
-          const d = uDoc.data();
-          userMap[att.userId] = { name: d.displayName || d.email || att.userId, generalNote: d.generalNote || '' };
-        } else {
-          userMap[att.userId] = { name: att.userId, generalNote: '' };
-        }
+        userMap[att.userId] = uDoc.exists
+          ? { name: uDoc.data().displayName || uDoc.data().email || att.userId, generalNote: uDoc.data().generalNote || '' }
+          : { name: att.userId, generalNote: '' };
       }
     }
 
@@ -162,17 +156,13 @@ async function openTrainerEventDetail(event) {
       <tr>
         <td>
           <span style="font-weight:500;">${u.name}</span>
-          ${u.generalNote ? `
-            <button class="btn-text info-btn" data-note="${encodeURIComponent(u.generalNote)}"
-              title="Allgemeine Notiz anzeigen"
-              style="font-size:0.85rem;padding:0 4px;vertical-align:middle;">ℹ️</button>` : ''}
+          ${u.generalNote ? `<button class="btn-text info-btn" data-note="${encodeURIComponent(u.generalNote)}" title="Allgemeine Notiz" style="font-size:0.85rem;padding:0 4px;vertical-align:middle;">ℹ️</button>` : ''}
         </td>
         <td id="status-chip-${att.id}">${statusChipHtml(att.status)}</td>
         <td>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
             <input type="checkbox" class="presence-cb" data-att-id="${att.id}"
-              style="width:20px;height:20px;"
-              ${att.status === 'present' ? 'checked' : ''} />
+              style="width:20px;height:20px;" ${att.status === 'present' ? 'checked' : ''} />
             Anwesend
           </label>
         </td>
@@ -188,14 +178,14 @@ async function openTrainerEventDetail(event) {
           </select>
         </td>
         <td>
-          <input type="text" class="trainer-note-input" data-att-id="${att.id}"
+          <input type="text" class="trainer-note-internal" data-att-id="${att.id}"
             placeholder="Interne Notiz (nur Trainer)" value="${att.trainerNoteInternal || ''}"
-            style="min-width:130px;font-size:0.85rem;" />
+            style="min-width:120px;font-size:0.85rem;" />
         </td>
         <td>
-          <input type="text" class="trainer-note-member-input" data-att-id="${att.id}"
+          <input type="text" class="trainer-note-member" data-att-id="${att.id}"
             placeholder="Notiz an Mitglied" value="${att.trainerNoteMember || ''}"
-            style="min-width:130px;font-size:0.85rem;" />
+            style="min-width:120px;font-size:0.85rem;" />
         </td>
         <td class="text-muted" style="font-size:0.82rem;max-width:140px;">${att.memberNote || ''}</td>
       </tr>`;
@@ -230,14 +220,16 @@ async function openTrainerEventDetail(event) {
       ${ev.description ? `<div class="card" style="margin-bottom:16px;"><p style="margin:0;">${ev.description}</p></div>` : ''}
       ${isCancelled ? `<div class="card" style="margin-bottom:16px;"><p class="text-error" style="margin:0;">Abgesagt: ${ev.cancellationReason || '–'}</p></div>` : ''}
 
-      <!-- Terminbezogene Trainer-Nachricht an alle Mitglieder -->
+      <!-- Broadcast-Nachricht -->
       <div class="card" style="margin-bottom:16px;">
-        <h4 style="margin:0 0 8px;">📢 Nachricht an alle Mitglieder dieses Termins</h4>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Diese Nachricht wird allen Teilnehmern auf ihrer Termincard angezeigt.</p>
+        <h4 style="margin:0 0 6px;">📢 Nachricht an alle Mitglieder</h4>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard angezeigt.</p>
         <textarea id="event-broadcast" rows="2" placeholder="z.B. Bitte Sportschuhe mitbringen, Halle B statt A...">${ev.trainerBroadcast || ''}</textarea>
         <button class="btn-secondary" id="save-broadcast" style="margin-top:0;">Nachricht speichern</button>
+        <span id="broadcast-saved" class="text-muted" style="font-size:0.85rem;margin-left:10px;display:none;">✓ Gespeichert</span>
       </div>
 
+      <!-- Anwesenheitsliste -->
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
           <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})</h3>
@@ -251,11 +243,11 @@ async function openTrainerEventDetail(event) {
             <table>
               <thead><tr>
                 <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th>
-                <th>Interne Notiz <span class="text-muted" style="font-size:0.75rem;font-weight:400;">(nur Trainer)</span></th>
+                <th>Interne Notiz <small class="text-muted">(nur Trainer)</small></th>
                 <th>Notiz an Mitglied</th>
                 <th>Hinweis v. Mitglied</th>
               </tr></thead>
-              <tbody id="attendance-tbody">${memberRows}</tbody>
+              <tbody>${memberRows}</tbody>
             </table>
           </div>
         ` : '<p class="text-muted">Keine Teilnehmer angemeldet.</p>'}
@@ -269,34 +261,40 @@ async function openTrainerEventDetail(event) {
             <button class="btn-secondary" id="trainer-late-btn">Verspätung melden</button>
           ` : ''}
         </div>
-        ${ev.trainerLateNote ? `<div class="chip chip-warning" style="margin-top:10px;">⚠️ Verspätung gemeldet: ${ev.trainerLateNote}</div>` : ''}
+        ${ev.trainerLateNote ? `<div class="chip chip-warning" style="margin-top:10px;">⚠️ Verspätung: ${ev.trainerLateNote}</div>` : ''}
       </div>
       <div id="detail-error" class="text-error" style="margin-top:8px;"></div>
     `;
 
-    // --- Zurück
     document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
 
-    // --- Info-Buttons (allgemeine Nutzernotiz)
+    // Info-Buttons
     container.querySelectorAll('.info-btn').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        const note = decodeURIComponent(btn.dataset.note);
-        showModal({ title: 'Allgemeine Notiz', body: `<p>${note}</p>`, confirmLabel: 'OK', onConfirm: () => {} });
+        showModal({ title: 'Allgemeine Notiz', body: `<p>${decodeURIComponent(btn.dataset.note)}</p>`, confirmLabel: 'OK', onConfirm: () => {} });
       };
     });
 
-    // --- Broadcast speichern
+    // --- Broadcast speichern (FIX: Wert aus Textarea korrekt lesen)
     document.getElementById('save-broadcast')?.addEventListener('click', async () => {
-      const msg = document.getElementById('event-broadcast')?.value.trim() || '';
-      await firestore.collection('events').doc(ev.id).update({
-        trainerBroadcast: msg,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      showToast('Nachricht gespeichert.', 'success');
+      const textarea = document.getElementById('event-broadcast');
+      const msg      = textarea?.value ?? '';
+      try {
+        await firestore.collection('events').doc(ev.id).update({
+          trainerBroadcast: msg,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        const savedEl = document.getElementById('broadcast-saved');
+        if (savedEl) { savedEl.style.display = 'inline'; setTimeout(() => savedEl.style.display = 'none', 3000); }
+        showToast('Nachricht gespeichert.', 'success');
+      } catch (e) {
+        console.error(e);
+        showToast('Fehler beim Speichern der Nachricht.', 'error');
+      }
     });
 
-    // --- Checkbox sync
+    // Checkbox <-> Select sync
     container.querySelectorAll('.presence-cb').forEach(cb => {
       cb.onchange = () => {
         const sel = container.querySelector(`.status-select[data-att-id="${cb.dataset.attId}"]`);
@@ -304,7 +302,6 @@ async function openTrainerEventDetail(event) {
         updateStatusChip(cb.dataset.attId, cb.checked ? 'present' : 'registered');
       };
     });
-
     container.querySelectorAll('.status-select').forEach(sel => {
       sel.onchange = () => {
         const cb = container.querySelector(`.presence-cb[data-att-id="${sel.dataset.attId}"]`);
@@ -314,8 +311,8 @@ async function openTrainerEventDetail(event) {
     });
 
     function updateStatusChip(attId, status) {
-      const chipEl = document.getElementById(`status-chip-${attId}`);
-      if (!chipEl) return;
+      const el = document.getElementById(`status-chip-${attId}`);
+      if (!el) return;
       const map = {
         present:          ['chip-success', 'Anwesend'],
         registered:       ['chip-info',    'Angemeldet'],
@@ -326,10 +323,9 @@ async function openTrainerEventDetail(event) {
         late_unexcused:   ['chip-warning', 'Verspätet (U)'],
       };
       const [cls, label] = map[status] || ['', status];
-      chipEl.innerHTML = `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
+      el.innerHTML = `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
     }
 
-    // --- Alle anwesend
     document.getElementById('mark-all-present')?.addEventListener('click', () => {
       container.querySelectorAll('.presence-cb').forEach(cb => {
         cb.checked = true;
@@ -339,16 +335,17 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    // --- Anwesenheit speichern
+    // --- Anwesenheit speichern (setzt trainerSet: true)
     document.getElementById('save-all-attendance')?.addEventListener('click', async () => {
       const errorEl = document.getElementById('detail-error');
       try {
         const batch = firestore.batch();
         container.querySelectorAll('.status-select').forEach(sel => {
-          const internalInput = container.querySelector(`.trainer-note-input[data-att-id="${sel.dataset.attId}"]`);
-          const memberInput   = container.querySelector(`.trainer-note-member-input[data-att-id="${sel.dataset.attId}"]`);
+          const internalInput = container.querySelector(`.trainer-note-internal[data-att-id="${sel.dataset.attId}"]`);
+          const memberInput   = container.querySelector(`.trainer-note-member[data-att-id="${sel.dataset.attId}"]`);
           batch.update(firestore.collection('eventAttendance').doc(sel.dataset.attId), {
             status:              sel.value,
+            trainerSet:          true,   // <-- Mitglied kann danach nicht mehr ändern
             trainerNoteInternal: internalInput?.value || '',
             trainerNoteMember:   memberInput?.value   || '',
             updatedAt:           firebase.firestore.FieldValue.serverTimestamp()
@@ -367,14 +364,14 @@ async function openTrainerEventDetail(event) {
       }
     });
 
-    // --- Training absagen
+    // Training absagen
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
       const user = window.currentUser.firebaseUser;
       const tc   = (ev.trainers || []).length;
       showModal({
         title: 'Training absagen',
         body: `
-          <p>${tc > 1 ? 'Nur dich abmelden oder Training komplett ausfallen lassen?' : 'Begründung eingeben:'}</p>
+          <p>${tc > 1 ? 'Nur dich abmelden oder Training komplett absagen?' : 'Begründung eingeben:'}</p>
           <label>Begründung (optional)</label>
           <input type="text" id="cancel-reason" placeholder="z.B. Krankheit" />
           ${tc > 1 ? `
@@ -389,7 +386,7 @@ async function openTrainerEventDetail(event) {
           const type   = document.querySelector('input[name="cancel-type"]:checked')?.value || 'all';
           if (type === 'self' && tc > 1) {
             await firestore.collection('events').doc(ev.id).update({
-              trainers:  firebase.firestore.FieldValue.arrayRemove(user.uid),
+              trainers: firebase.firestore.FieldValue.arrayRemove(user.uid),
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
             showToast('Du wurdest abgemeldet.', 'success');
@@ -405,7 +402,7 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    // --- Verspätung melden – FIX: war "trainer-late-btn" ohne addEventListener
+    // Verspätung melden
     document.getElementById('trainer-late-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Verspätung melden',
@@ -421,7 +418,6 @@ async function openTrainerEventDetail(event) {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           showToast('Verspätung gemeldet.', 'success');
-          // Reload der Detailseite mit frischem Stand
           openTrainerEventDetail(ev);
         }
       });
