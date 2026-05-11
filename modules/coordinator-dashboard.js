@@ -44,7 +44,6 @@ async function loadCoordinatorDashboard() {
     };
   });
 
-  // Initiales Tab laden
   loaders.users();
 }
 
@@ -112,15 +111,18 @@ function showUserForm(user, parentEl) {
     `,
     confirmLabel: isNew ? 'Anlegen' : 'Speichern',
     onConfirm: async () => {
+      // Werte auslesen WAEHREND Modal noch im DOM ist
       const name   = document.getElementById('uf-name')?.value.trim();
       const email  = document.getElementById('uf-email')?.value.trim();
       const roles  = ['admin','coordinator','teacher','member']
         .filter(r => document.querySelector(`input[data-role="${r}"]`)?.checked);
 
-      if (!name || !email) { showToast('Name und E-Mail erforderlich.', 'error'); return; }
+      if (!name || !email) {
+        showToast('Name und E-Mail erforderlich.', 'error');
+        return false; // Modal offen lassen
+      }
 
       if (isNew) {
-        // Nur Firestore-Eintrag – Firebase Auth-User muss separat über Firebase Console oder Admin SDK angelegt werden
         const newRef = firestore.collection('users').doc();
         await newRef.set({
           displayName: name, email, roles, groups: [], isActive: true,
@@ -132,6 +134,7 @@ function showUserForm(user, parentEl) {
         showToast('Benutzer aktualisiert.', 'success');
       }
       renderUsersTab(parentEl);
+      // kein return false -> Modal schliesst sich
     }
   });
 }
@@ -183,14 +186,24 @@ function showGroupForm(group, parentEl) {
     `,
     confirmLabel: isNew ? 'Anlegen' : 'Speichern',
     onConfirm: async () => {
+      // Werte auslesen WAEHREND Modal noch im DOM ist
       const name = document.getElementById('gf-name')?.value.trim();
       const desc = document.getElementById('gf-desc')?.value.trim();
-      if (!name) { showToast('Name erforderlich.', 'error'); return; }
+
+      if (!name) {
+        showToast('Gruppenname erforderlich.', 'error');
+        return false; // Modal offen lassen
+      }
+
       if (isNew) {
-        await firestore.collection('groups').add({ name, description: desc, members: [], createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+        await firestore.collection('groups').add({
+          name, description: desc || '',
+          members: [],
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
         showToast('Gruppe angelegt.', 'success');
       } else {
-        await firestore.collection('groups').doc(group.id).update({ name, description: desc });
+        await firestore.collection('groups').doc(group.id).update({ name, description: desc || '' });
         showToast('Gruppe aktualisiert.', 'success');
       }
       renderGroupsTab(parentEl);
@@ -199,7 +212,6 @@ function showGroupForm(group, parentEl) {
 }
 
 async function showGroupManage(group, parentEl) {
-  // Alle User laden & Mitglieder der Gruppe verwalten
   const usersSnap = await firestore.collection('users').orderBy('displayName').get();
   const allUsers  = [];
   usersSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
@@ -220,6 +232,7 @@ async function showGroupManage(group, parentEl) {
     `,
     confirmLabel: 'Speichern',
     onConfirm: async () => {
+      // Werte auslesen WAEHREND Modal noch im DOM ist
       const selectedIds = allUsers
         .filter(u => document.querySelector(`input[data-member-id="${u.id}"]`)?.checked)
         .map(u => u.id);
@@ -227,9 +240,8 @@ async function showGroupManage(group, parentEl) {
       const batch = firestore.batch();
       batch.update(firestore.collection('groups').doc(group.id), { members: selectedIds });
 
-      // users.groups synchronisieren
       allUsers.forEach(u => {
-        const wasIn  = groupMemberIds.includes(u.id);
+        const wasIn   = groupMemberIds.includes(u.id);
         const isNowIn = selectedIds.includes(u.id);
         if (wasIn === isNowIn) return;
         const ref = firestore.collection('users').doc(u.id);
@@ -238,7 +250,7 @@ async function showGroupManage(group, parentEl) {
       });
 
       await batch.commit();
-      showToast('Gruppenm itglieder aktualisiert.', 'success');
+      showToast('Gruppenmitglieder aktualisiert.', 'success');
       renderGroupsTab(parentEl);
     }
   });
@@ -253,7 +265,6 @@ async function renderScheduleTab(el) {
     const events = [];
     snap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
 
-    // Gruppen für Dropdown
     const groupsSnap = await firestore.collection('groups').orderBy('name').get();
     const groups     = [];
     groupsSnap.forEach(doc => groups.push({ id: doc.id, ...doc.data() }));
@@ -273,9 +284,9 @@ async function renderScheduleTab(el) {
                 <tr>
                   <td>${ev.title || '–'}</td>
                   <td>${start ? formatDateTime(start) : '–'}</td>
-                  <td>${ev.groupId || '–'}</td>
+                  <td>${groups.find(g => g.id === ev.groupId)?.name || ev.groupId || '–'}</td>
                   <td><span class="chip ${ev.status === 'cancelled' ? 'chip-error' : 'chip-success'}">${ev.status || 'planned'}</span></td>
-                  <td>${ev.recurrence !== 'none' ? ev.recurrence : '–'}</td>
+                  <td>${ev.recurrence && ev.recurrence !== 'none' ? ev.recurrence : '–'}</td>
                   <td><button class="btn-secondary" data-event-id="${ev.id}" data-action="edit-event" style="padding:4px 10px;">Bearbeiten</button></td>
                 </tr>
               `;
@@ -296,7 +307,7 @@ async function renderScheduleTab(el) {
 }
 
 function showEventForm(event, groups, parentEl) {
-  const isNew = !event;
+  const isNew    = !event;
   const startVal = event?.startTime?.toDate ? toDatetimeLocal(event.startTime.toDate()) : '';
   const endVal   = event?.endTime?.toDate   ? toDatetimeLocal(event.endTime.toDate())   : '';
 
@@ -310,7 +321,7 @@ function showEventForm(event, groups, parentEl) {
       <label>Start</label>
       <input type="datetime-local" id="ef-start" value="${startVal}" />
       <label>Ende</label>
-      <input type="datetime-local" id="ef-end"   value="${endVal}" />
+      <input type="datetime-local" id="ef-end" value="${endVal}" />
       <label>Trainingsgruppe</label>
       <select id="ef-group">
         <option value="">– keine –</option>
@@ -322,41 +333,43 @@ function showEventForm(event, groups, parentEl) {
       <input type="number" id="ef-deadline" value="${event?.signupDeadlineMinutes ?? 60}" min="0" />
       <label>Anmeldemodus</label>
       <select id="ef-mode">
-        <option value="opt_in"  ${event?.mode === 'opt_in'  || !event?.mode ? 'selected' : ''}>Anmeldebasiert (aktiv anmelden)</option>
+        <option value="opt_in"  ${!event?.mode || event?.mode === 'opt_in'  ? 'selected' : ''}>Anmeldebasiert (aktiv anmelden)</option>
         <option value="opt_out" ${event?.mode === 'opt_out' ? 'selected' : ''}>Abmeldebasiert (aktiv abmelden)</option>
       </select>
       <label>Wiederholung</label>
       <select id="ef-recurrence">
-        <option value="none"   ${event?.recurrence === 'none'   || !event?.recurrence ? 'selected' : ''}>Einmalig</option>
-        <option value="weekly" ${event?.recurrence === 'weekly' ? 'selected' : ''}>Wöchentlich</option>
+        <option value="none"     ${!event?.recurrence || event?.recurrence === 'none'     ? 'selected' : ''}>Einmalig</option>
+        <option value="weekly"   ${event?.recurrence === 'weekly'   ? 'selected' : ''}>Wöchentlich</option>
         <option value="biweekly" ${event?.recurrence === 'biweekly' ? 'selected' : ''}>Zweiwöchentlich</option>
-        <option value="monthly" ${event?.recurrence === 'monthly' ? 'selected' : ''}>Monatlich</option>
+        <option value="monthly"  ${event?.recurrence === 'monthly'  ? 'selected' : ''}>Monatlich</option>
       </select>
-      <div id="ef-recurrence-end-wrap">
-        <label>Wiederholung bis</label>
-        <input type="date" id="ef-recurrence-end" value="${event?.recurrenceEnd || ''}" />
-      </div>
+      <label>Wiederholung bis</label>
+      <input type="date" id="ef-recurrence-end" value="${event?.recurrenceEnd || ''}" />
     `,
     confirmLabel: isNew ? 'Anlegen' : 'Speichern',
     onConfirm: async () => {
+      // Werte auslesen WAEHREND Modal noch im DOM ist
       const title      = document.getElementById('ef-title')?.value.trim();
       const desc       = document.getElementById('ef-desc')?.value.trim();
       const startStr   = document.getElementById('ef-start')?.value;
       const endStr     = document.getElementById('ef-end')?.value;
       const groupId    = document.getElementById('ef-group')?.value || null;
-      const minPart    = parseInt(document.getElementById('ef-min')?.value) || 0;
+      const minPart    = parseInt(document.getElementById('ef-min')?.value)    || 0;
       const deadline   = parseInt(document.getElementById('ef-deadline')?.value) || 60;
-      const mode       = document.getElementById('ef-mode')?.value || 'opt_in';
+      const mode       = document.getElementById('ef-mode')?.value       || 'opt_in';
       const recurrence = document.getElementById('ef-recurrence')?.value || 'none';
       const recEnd     = document.getElementById('ef-recurrence-end')?.value || null;
 
-      if (!title || !startStr) { showToast('Titel und Startzeit erforderlich.', 'error'); return; }
+      if (!title || !startStr) {
+        showToast('Titel und Startzeit erforderlich.', 'error');
+        return false; // Modal offen lassen
+      }
 
       const startTs = firebase.firestore.Timestamp.fromDate(new Date(startStr));
       const endTs   = endStr ? firebase.firestore.Timestamp.fromDate(new Date(endStr)) : null;
 
       const data = {
-        title, description: desc,
+        title, description: desc || '',
         startTime: startTs, endTime: endTs,
         groupId, minParticipants: minPart,
         signupDeadlineMinutes: deadline,
@@ -369,18 +382,17 @@ function showEventForm(event, groups, parentEl) {
 
       if (isNew) {
         data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-
         if (recurrence !== 'none' && recEnd) {
-          // Wiederholende Termine anlegen
           const instances = generateRecurringDates(new Date(startStr), endStr ? new Date(endStr) : null, recurrence, new Date(recEnd));
           const batch = firestore.batch();
+          const groupId = Date.now().toString();
           instances.forEach(({ start, end }) => {
             const ref = firestore.collection('events').doc();
             batch.set(ref, {
               ...data,
               startTime: firebase.firestore.Timestamp.fromDate(start),
               endTime:   end ? firebase.firestore.Timestamp.fromDate(end) : null,
-              recurrenceGroup: Date.now().toString()
+              recurrenceGroup: groupId
             });
           });
           await batch.commit();
@@ -399,23 +411,20 @@ function showEventForm(event, groups, parentEl) {
 }
 
 function generateRecurringDates(startDate, endDate, recurrence, until) {
-  const intervals = { weekly: 7, biweekly: 14, monthly: null };
-  const results   = [];
-  let current     = new Date(startDate);
-  let currentEnd  = endDate ? new Date(endDate) : null;
-  const duration  = currentEnd ? currentEnd.getTime() - current.getTime() : 0;
+  const results  = [];
+  let current    = new Date(startDate);
+  let currentEnd = endDate ? new Date(endDate) : null;
+  const duration = currentEnd ? currentEnd.getTime() - current.getTime() : 0;
 
-  while (current <= until) {
+  while (current <= until && results.length < 200) {
     results.push({ start: new Date(current), end: currentEnd ? new Date(currentEnd) : null });
     if (recurrence === 'monthly') {
       current.setMonth(current.getMonth() + 1);
-      if (currentEnd) currentEnd = new Date(current.getTime() + duration);
     } else {
-      const days = intervals[recurrence] || 7;
+      const days = recurrence === 'biweekly' ? 14 : 7;
       current.setDate(current.getDate() + days);
-      if (currentEnd) currentEnd = new Date(current.getTime() + duration);
     }
-    if (results.length > 200) break; // Sicherheitslimit
+    if (currentEnd) currentEnd = new Date(current.getTime() + duration);
   }
   return results;
 }
@@ -441,32 +450,31 @@ async function renderCoordSettingsTab(el) {
         <input type="number" id="cs-signup-deadline" value="${data.defaultSignupDeadlineMinutes ?? 60}" min="0" />
         <label>Standard-Anmeldemodus</label>
         <select id="cs-mode">
-          <option value="opt_in"  ${data.defaultMode === 'opt_in'  || !data.defaultMode ? 'selected' : ''}>Anmeldebasiert</option>
-          <option value="opt_out" ${data.defaultMode === 'opt_out' ? 'selected' : ''}>Abmeldebasiert</option>
+          <option value="opt_in"  ${data.defaultMode !== 'opt_out' ? 'selected' : ''}>Anmeldebasiert</option>
+          <option value="opt_out" ${data.defaultMode === 'opt_out'  ? 'selected' : ''}>Abmeldebasiert</option>
         </select>
         <label>Teilnehmer-Sichtbarkeit für Mitglieder</label>
         <select id="cs-vis">
           <option value="names" ${data.visibilityMode === 'names' ? 'selected' : ''}>Namen anzeigen</option>
-          <option value="count" ${data.visibilityMode === 'count' || !data.visibilityMode ? 'selected' : ''}>Nur Anzahl</option>
+          <option value="count" ${!data.visibilityMode || data.visibilityMode === 'count' ? 'selected' : ''}>Nur Anzahl</option>
           <option value="none"  ${data.visibilityMode === 'none'  ? 'selected' : ''}>Nichts anzeigen</option>
         </select>
         <hr class="divider" />
         <h4>Rollen-Labels (Anzeigename)</h4>
         ${['admin','coordinator','teacher','member'].map(r => `
-          <label>${r}</label>
+          <label>${getRoleLabel(r)}</label>
           <input type="text" id="rl-${r}" value="${data.roleLabels?.[r] || getRoleLabel(r)}" />
         `).join('')}
         <button class="btn-primary" id="cs-save">Einstellungen speichern</button>
-        <div id="cs-msg" class="text-success"></div>
       </div>
     `;
 
     el.querySelector('#cs-save').onclick = async () => {
       const updates = {
-        defaultMinParticipants:      parseInt(document.getElementById('cs-min-part')?.value) || 0,
-        defaultSignupDeadlineMinutes:parseInt(document.getElementById('cs-signup-deadline')?.value) || 60,
-        defaultMode:                 document.getElementById('cs-mode')?.value || 'opt_in',
-        visibilityMode:              document.getElementById('cs-vis')?.value  || 'count',
+        defaultMinParticipants:       parseInt(document.getElementById('cs-min-part')?.value)       || 0,
+        defaultSignupDeadlineMinutes: parseInt(document.getElementById('cs-signup-deadline')?.value) || 60,
+        defaultMode:      document.getElementById('cs-mode')?.value || 'opt_in',
+        visibilityMode:   document.getElementById('cs-vis')?.value  || 'count',
         roleLabels: {
           admin:       document.getElementById('rl-admin')?.value       || 'Admin',
           coordinator: document.getElementById('rl-coordinator')?.value || 'Koordinator',
@@ -475,7 +483,7 @@ async function renderCoordSettingsTab(el) {
         }
       };
       await firestore.collection('settings').doc('global').set(updates, { merge: true });
-      window.roleLabels = updates.roleLabels;
+      window.roleLabels  = updates.roleLabels;
       window.appSettings = { ...(window.appSettings || {}), ...updates };
       showToast('Einstellungen gespeichert.', 'success');
     };
