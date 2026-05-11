@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isSignedIn() && role in userDoc().roles;
+    }
+
+    function isPrivileged() {
+      return hasRole('admin') || hasRole('coordinator') || hasRole('teacher');
+    }
+
+    // USERS
+    match /users/{uid} {
+      allow read: if isPrivileged() || request.auth.uid == uid;
+      allow create: if hasRole('admin') || hasRole('coordinator');
+      allow update: if hasRole('admin') || hasRole('coordinator') ||
+                       (request.auth.uid == uid && onlyUpdatingOwnFields());
+      allow delete: if hasRole('admin');
+    }
+
+    function onlyUpdatingOwnFields() {
+      // Mitglieder duerfen nur displayName aendern, keine Rollen
+      return !('roles' in request.resource.data.diff(resource.data).affectedKeys());
+    }
+
+    // GROUPS
+    match /groups/{groupId} {
+      allow read:  if isSignedIn();
+      allow write: if hasRole('admin') || hasRole('coordinator');
+    }
+
+    // EVENTS
+    match /events/{eventId} {
+      allow read:  if isSignedIn();
+      allow create: if hasRole('admin') || hasRole('coordinator');
+      allow update: if hasRole('admin') || hasRole('coordinator') ||
+                       (hasRole('teacher') && isTrainerOfEvent(eventId));
+      allow delete: if hasRole('admin') || hasRole('coordinator');
+    }
+
+    function isTrainerOfEvent(eventId) {
+      return request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.trainers;
+    }
+
+    // ATTENDANCE
+    match /eventAttendance/{docId} {
+      allow read:  if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (
+        isPrivileged() ||
+        request.auth.uid == resource.data.userId
+      );
+      allow delete: if isPrivileged();
+    }
+
+    // SETTINGS
+    match /settings/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if docId == 'global' && (hasRole('admin') || hasRole('coordinator')) ||
+                      hasRole('admin');
+    }
+  }
+}
