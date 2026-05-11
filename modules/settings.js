@@ -1,8 +1,7 @@
 // modules/settings.js
-// Globale Einstellungen laden & Branding anwenden
 
-window.appSettings  = {};
-window.roleLabels   = { admin: 'Admin', coordinator: 'Koordinator', teacher: 'Trainer', member: 'Mitglied' };
+window.appSettings = {};
+window.roleLabels  = { admin: 'Admin', coordinator: 'Koordinator', teacher: 'Trainer', member: 'Mitglied' };
 
 async function applyBranding() {
   try {
@@ -28,6 +27,6 @@ async function applyBranding() {
       link.href = data.faviconUrl;
     }
   } catch (e) {
-    console.warn('Branding konnte nicht geladen werden:', e);
+    // Firestore noch nicht verfügbar (vor Login) – still ignorieren
   }
 }

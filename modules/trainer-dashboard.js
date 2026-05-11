@@ -1,5 +1,4 @@
 // modules/trainer-dashboard.js
-// Trainer-Dashboard: Anwesenheit verwalten, Termin absagen, eigene Verspätung melden
 
 async function loadTrainerDashboard() {
   const container = document.getElementById('app-content');
@@ -7,27 +6,72 @@ async function loadTrainerDashboard() {
   container.innerHTML = `<div class="loading-center">Lade Trainer-Termine...</div>`;
 
   try {
-    const snap = await firestore.collection('events')
-      .where('trainers', 'array-contains', user.uid)
-      .get();
+    // Einstellungen laden
+    const settingsDoc = await firestore.collection('settings').doc('global').get();
+    const settings    = settingsDoc.exists ? settingsDoc.data() : {};
+    const defaultLimit = settings.defaultEventLookAhead ?? 30; // Tage
+
+    // User-Doc für Grupppen & individuelle Einstellung laden
+    const userDoc  = await firestore.collection('users').doc(user.uid).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const lookAheadDays = userData.eventLookAhead ?? defaultLimit;
+
+    const now    = new Date();
+    const cutOff = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
 
     let events = [];
-    snap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
+    const seen = new Set();
+
+    const addEvents = (snap) => {
+      snap.forEach(doc => {
+        if (!seen.has(doc.id)) {
+          seen.add(doc.id);
+          events.push({ id: doc.id, ...doc.data() });
+        }
+      });
+    };
+
+    // 1) Direkte Trainer-Zuweisung per trainers-Array
+    const trainerSnap = await firestore.collection('events')
+      .where('trainers', 'array-contains', user.uid)
+      .get();
+    addEvents(trainerSnap);
+
+    // 2) Gruppen-Termine (Trainer kann auch über Gruppen zugewiesen sein)
+    const userGroups = userData.groups || [];
+    for (const groupId of userGroups) {
+      const groupSnap = await firestore.collection('events')
+        .where('groupId', '==', groupId)
+        .get();
+      addEvents(groupSnap);
+    }
+
+    // Filtern: nur innerhalb des Look-Ahead-Fensters & nicht zu weit in der Vergangenheit (max 90 Tage)
+    const pastCutOff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    events = events.filter(e => {
+      const t = e.startTime?.toDate?.();
+      if (!t) return false;
+      return t >= pastCutOff && t <= cutOff;
+    });
+
     events.sort((a, b) => {
       const aT = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
       const bT = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
       return aT - bT;
     });
 
-    const now = new Date();
     const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
-    const past = events.filter(e => { const t = e.startTime?.toDate?.(); return !t || t <= now; });
+    const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
 
     container.innerHTML = `
       <h2 style="margin-top:0;">Trainer-Dashboard</h2>
+      <p class="text-muted" style="margin-top:-8px;margin-bottom:16px;font-size:0.85rem;">
+        Zeige Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong>
+        (${lookAheadDays} Tage im Voraus)
+      </p>
       <div class="tabs">
-        <button class="tab-btn active" data-tab="upcoming">Kommende Termine</button>
-        <button class="tab-btn" data-tab="past">Vergangene Termine</button>
+        <button class="tab-btn active" data-tab="upcoming">Kommende Termine (${upcoming.length})</button>
+        <button class="tab-btn" data-tab="past">Vergangene Termine (${past.length})</button>
       </div>
       <div id="tab-upcoming"></div>
       <div id="tab-past" hidden></div>
@@ -38,22 +82,18 @@ async function loadTrainerDashboard() {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('tab-upcoming').hidden = btn.dataset.tab !== 'upcoming';
-        document.getElementById('tab-past').hidden = btn.dataset.tab !== 'past';
+        document.getElementById('tab-past').hidden     = btn.dataset.tab !== 'past';
       };
     });
 
     const upcomingEl = document.getElementById('tab-upcoming');
-    const pastEl = document.getElementById('tab-past');
+    const pastEl     = document.getElementById('tab-past');
 
     if (!upcoming.length) upcomingEl.innerHTML = '<p class="text-muted">Keine kommenden Termine.</p>';
-    else {
-      for (const ev of upcoming) upcomingEl.appendChild(await renderTrainerEventCard(ev, false));
-    }
+    else for (const ev of upcoming) upcomingEl.appendChild(await renderTrainerEventCard(ev, false));
 
     if (!past.length) pastEl.innerHTML = '<p class="text-muted">Keine vergangenen Termine.</p>';
-    else {
-      for (const ev of past) pastEl.appendChild(await renderTrainerEventCard(ev, true));
-    }
+    else for (const ev of past) pastEl.appendChild(await renderTrainerEventCard(ev, true));
 
   } catch (e) {
     console.error(e);
@@ -62,46 +102,49 @@ async function loadTrainerDashboard() {
 }
 
 async function renderTrainerEventCard(event, isPast) {
-  const card = createElement('div', 'card');
+  const card  = createElement('div', 'card');
   const start = event.startTime?.toDate?.();
-  const end = event.endTime?.toDate?.();
+  const end   = event.endTime?.toDate?.();
 
   const attendanceSnap = await firestore.collection('eventAttendance')
     .where('eventId', '==', event.id).get();
   const attendances = [];
   attendanceSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
+  // Namen der Teilnehmer auflösen
   const userMap = {};
   for (const att of attendances) {
     if (!userMap[att.userId]) {
-      const userDoc = await firestore.collection('users').doc(att.userId).get();
-      userMap[att.userId] = userDoc.exists ? (userDoc.data().displayName || userDoc.data().email || att.userId) : att.userId;
+      const uDoc = await firestore.collection('users').doc(att.userId).get();
+      userMap[att.userId] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || att.userId) : att.userId;
     }
   }
 
   const statusOptions = [
-    { value: 'present', label: 'Anwesend' },
-    { value: 'absent_excused', label: 'Entschuldigt gefehlt' },
+    { value: 'present',          label: 'Anwesend' },
+    { value: 'absent_excused',   label: 'Entschuldigt gefehlt' },
     { value: 'absent_unexcused', label: 'Unentschuldigt gefehlt' },
-    { value: 'late_excused', label: 'Verspätet (entschuldigt)' },
-    { value: 'late_unexcused', label: 'Verspätet (unentschuldigt)' },
-    { value: 'registered', label: 'Angemeldet (noch offen)' },
-    { value: 'cancelled', label: 'Abgemeldet' }
+    { value: 'late_excused',     label: 'Verspätet (entschuldigt)' },
+    { value: 'late_unexcused',   label: 'Verspätet (unentschuldigt)' },
+    { value: 'registered',       label: 'Angemeldet (noch offen)' },
+    { value: 'cancelled',        label: 'Abgemeldet' }
   ];
 
   const attendanceRows = attendances.map(att => {
-    const opts = statusOptions.map(o => `<option value="${o.value}" ${att.status === o.value ? 'selected' : ''}>${o.label}</option>`).join('');
+    const opts = statusOptions.map(o =>
+      `<option value="${o.value}" ${att.status === o.value ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
     return `
       <tr>
         <td>${userMap[att.userId] || att.userId}</td>
-        <td><select data-att-id="${att.id}" data-event-id="${event.id}">${opts}</select></td>
+        <td><select data-att-id="${att.id}">${opts}</select></td>
         <td><span class="text-muted" style="font-size:0.82rem;">${att.memberNote || ''}</span></td>
         <td><input type="text" placeholder="Trainer-Hinweis" data-trainer-note="${att.id}" value="${att.trainerNote || ''}" style="min-width:120px;" /></td>
       </tr>
     `;
   }).join('');
 
-  const isCancelled = event.status === 'cancelled';
+  const isCancelled  = event.status === 'cancelled';
   const trainerCount = (event.trainers || []).length;
 
   card.innerHTML = `
@@ -119,17 +162,19 @@ async function renderTrainerEventCard(event, isPast) {
       <div style="overflow-x:auto;">
         <table>
           <thead><tr><th>Mitglied</th><th>Status</th><th>Hinweis Mitglied</th><th>Trainer-Notiz</th></tr></thead>
-          <tbody id="att-rows-${event.id}">${attendanceRows}</tbody>
+          <tbody>${attendanceRows}</tbody>
         </table>
       </div>
-      <div style="margin-top:10px;display:flex;gap:8px;">
+      <div style="margin-top:10px;">
         <button class="btn-primary" data-action="save-attendance">Anwesenheit speichern</button>
       </div>
     ` : '<p class="text-muted">Noch keine Teilnehmer.</p>'}
     <hr class="divider" />
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${!isCancelled ? `
-        <button class="btn-danger" data-action="cancel-event">${trainerCount > 1 ? 'Mich abmelden / Training ausfallen lassen' : 'Training absagen'}</button>
+        <button class="btn-danger"    data-action="cancel-event">
+          ${trainerCount > 1 ? 'Mich abmelden / Training ausfallen lassen' : 'Training absagen'}
+        </button>
         <button class="btn-secondary" data-action="trainer-late">Eigene Verspätung melden</button>
       ` : ''}
     </div>
@@ -140,14 +185,12 @@ async function renderTrainerEventCard(event, isPast) {
   if (saveBtn) {
     saveBtn.onclick = async () => {
       try {
-        const selects = card.querySelectorAll('select[data-att-id]');
         const batch = firestore.batch();
-        selects.forEach(sel => {
+        card.querySelectorAll('select[data-att-id]').forEach(sel => {
           const noteInput = card.querySelector(`input[data-trainer-note="${sel.dataset.attId}"]`);
-          const ref = firestore.collection('eventAttendance').doc(sel.dataset.attId);
-          batch.update(ref, {
+          batch.update(firestore.collection('eventAttendance').doc(sel.dataset.attId), {
             status: sel.value,
-            trainerNote: noteInput ? noteInput.value : '',
+            trainerNote: noteInput?.value || '',
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
         });
@@ -164,43 +207,35 @@ async function renderTrainerEventCard(event, isPast) {
   if (cancelBtn) {
     cancelBtn.onclick = () => {
       const user = window.currentUser.firebaseUser;
-      const trainerCountLocal = (event.trainers || []).length;
-      const actionLabel = trainerCountLocal > 1
-        ? 'Willst du dich nur abmelden oder das Training ausfallen lassen?'
-        : 'Training absagen – Begründung eingeben:';
-
+      const tc   = (event.trainers || []).length;
       showModal({
         title: 'Training absagen',
         body: `
-          <p>${actionLabel}</p>
+          <p>${tc > 1 ? 'Willst du dich nur abmelden oder das Training ausfallen lassen?' : 'Training absagen – Begründung eingeben:'}</p>
           <label>Begründung (optional)</label>
           <input type="text" id="cancel-reason" placeholder="z.B. Krankheit" />
-          ${trainerCountLocal > 1 ? `
+          ${tc > 1 ? `
             <div style="margin-top:8px;">
-              <label><input type="radio" name="cancel-type" value="self" checked /> Nur ich melde mich ab</label>
-              <label><input type="radio" name="cancel-type" value="all" /> Training komplett ausfallen lassen</label>
-            </div>
-          ` : ''}
+              <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);"><input type="radio" name="cancel-type" value="self" checked /> Nur ich melde mich ab</label>
+              <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);"><input type="radio" name="cancel-type" value="all" /> Training komplett ausfallen lassen</label>
+            </div>` : ''}
         `,
         confirmLabel: 'Bestätigen',
         onConfirm: async () => {
           const reason = document.getElementById('cancel-reason')?.value || '';
-          const typeRadio = document.querySelector('input[name="cancel-type"]:checked');
-          const cancelType = typeRadio ? typeRadio.value : 'all';
-
-          if (cancelType === 'self' && trainerCountLocal > 1) {
+          const type   = document.querySelector('input[name="cancel-type"]:checked')?.value || 'all';
+          if (type === 'self' && tc > 1) {
             await firestore.collection('events').doc(event.id).update({
               trainers: firebase.firestore.FieldValue.arrayRemove(user.uid),
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            showToast('Du wurdest vom Termin abgemeldet.', 'success');
+            showToast('Du wurdest abgemeldet.', 'success');
           } else {
             await firestore.collection('events').doc(event.id).update({
-              status: 'cancelled',
-              cancellationReason: reason,
+              status: 'cancelled', cancellationReason: reason,
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            showToast('Training wurde abgesagt.', 'success');
+            showToast('Training abgesagt.', 'success');
           }
           loadTrainerDashboard();
         }
@@ -224,7 +259,7 @@ async function renderTrainerEventCard(event, isPast) {
             trainerLateNote: reason,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
-          showToast('Verspätung wurde gemeldet.', 'success');
+          showToast('Verspätung gemeldet.', 'success');
           loadTrainerDashboard();
         }
       });
