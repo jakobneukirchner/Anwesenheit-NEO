@@ -1,0 +1,12 @@
+{
+  "name": "anwesenheit-neo",
+  "version": "1.0.0",
+  "description": "Modernes Anwesenheitsmanagementsystem",
+  "scripts": {
+    "inject": "node scripts/inject-config.js",
+    "dev": "node scripts/inject-config.js && echo 'Öffne index.local.html im Browser'"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

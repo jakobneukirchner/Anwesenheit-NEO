@@ -1,4 +1,9 @@
+# Netlify Konfiguration fuer Anwesenheit-NEO
+
+[[plugins]]
+  package = "./netlify/plugins/inject-firebase-config"
+
 [[redirects]]
-from = "/*"
-to = "/index.html"
-status = 200
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
