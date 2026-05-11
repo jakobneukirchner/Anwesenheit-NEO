@@ -11,10 +11,12 @@ applyBranding();
 
 firebaseAuth.onAuthStateChanged(async (user) => {
   const logoutBtn  = document.getElementById('logout-btn');
+  const profileBtn = document.getElementById('profile-btn');
   const userNameEl = document.getElementById('app-user-name');
 
   if (!user) {
-    if (logoutBtn)  logoutBtn.hidden = true;
+    if (logoutBtn)  logoutBtn.hidden  = true;
+    if (profileBtn) profileBtn.hidden = true;
     if (userNameEl) userNameEl.textContent = '';
     removeDashboardSwitcher();
     renderLoginPage();
@@ -28,10 +30,17 @@ firebaseAuth.onAuthStateChanged(async (user) => {
     displayName: userData.displayName || user.email
   };
 
-  if (userNameEl) userNameEl.textContent = window.currentUser.displayName;
+  if (userNameEl) {
+    userNameEl.textContent = window.currentUser.displayName;
+    userNameEl.onclick = () => loadProfilePage();
+  }
   if (logoutBtn) {
     logoutBtn.hidden = false;
     logoutBtn.onclick = () => firebaseAuth.signOut();
+  }
+  if (profileBtn) {
+    profileBtn.hidden = false;
+    profileBtn.onclick = () => loadProfilePage();
   }
 
   await applyBranding();
@@ -71,8 +80,6 @@ function routeToDashboard(roles, forceRole) {
 
 function renderDashboardSwitcher(roles) {
   removeDashboardSwitcher();
-
-  // Nur anzeigen wenn User mehrere Rollen hat
   const available = ROLE_ORDER.filter(r => roles.includes(r));
   if (available.length <= 1) return;
 
@@ -81,12 +88,7 @@ function renderDashboardSwitcher(roles) {
 
   const wrapper = document.createElement('div');
   wrapper.id = 'role-switcher';
-  Object.assign(wrapper.style, {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    marginRight: '8px'
-  });
+  Object.assign(wrapper.style, { display:'flex', alignItems:'center', gap:'4px', marginRight:'8px' });
 
   available.forEach(role => {
     const btn = document.createElement('button');
@@ -94,19 +96,16 @@ function renderDashboardSwitcher(roles) {
     btn.textContent = ROLE_LABELS_SWITCHER[role] || role;
     btn.dataset.role = role;
     Object.assign(btn.style, {
-      fontSize: '0.82rem',
-      padding: '4px 10px',
-      borderRadius: '4px',
-      opacity: role === window.currentDashboardRole ? '1' : '0.65',
+      fontSize: '0.82rem', padding: '4px 10px', borderRadius: '4px',
+      opacity:    role === window.currentDashboardRole ? '1' : '0.65',
       background: role === window.currentDashboardRole ? 'rgba(255,255,255,0.18)' : 'none',
       fontWeight: role === window.currentDashboardRole ? '700' : '400'
     });
     btn.onclick = () => {
       window.currentDashboardRole = role;
-      // Alle Buttons aktualisieren
       wrapper.querySelectorAll('.role-switch-btn').forEach(b => {
         const active = b.dataset.role === role;
-        b.style.opacity = active ? '1' : '0.65';
+        b.style.opacity    = active ? '1' : '0.65';
         b.style.background = active ? 'rgba(255,255,255,0.18)' : 'none';
         b.style.fontWeight = active ? '700' : '400';
       });
@@ -136,6 +135,9 @@ function renderLoginPage() {
         <div style="margin-top:14px;">
           <button type="submit" class="btn-primary" style="width:100%;">Anmelden</button>
         </div>
+        <div style="text-align:center;margin-top:10px;">
+          <button type="button" class="btn-text" id="forgot-pw-btn" style="font-size:0.85rem;">Passwort vergessen?</button>
+        </div>
         <div id="login-error" class="text-error" style="margin-top:8px;"></div>
       </form>
     </div>
@@ -161,6 +163,19 @@ function renderLoginPage() {
         'auth/invalid-credential':'E-Mail oder Passwort falsch.'
       };
       errorEl.textContent = msgs[err.code] || 'Anmeldung fehlgeschlagen.';
+    }
+  };
+
+  document.getElementById('forgot-pw-btn').onclick = async () => {
+    const email = document.getElementById('login-email').value.trim();
+    if (!email) { errorEl.textContent = 'Bitte zuerst E-Mail eingeben.'; return; }
+    try {
+      await firebaseAuth.sendPasswordResetEmail(email);
+      errorEl.style.color = 'var(--color-success)';
+      errorEl.textContent = 'Passwort-Reset-E-Mail wurde gesendet.';
+    } catch (err) {
+      errorEl.style.color = '';
+      errorEl.textContent = 'Fehler: ' + (err.message || err.code);
     }
   };
 }
