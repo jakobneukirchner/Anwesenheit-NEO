@@ -26,7 +26,6 @@ async function loadTrainerDashboard() {
 
     const trainerSnap = await firestore.collection('events').where('trainers', 'array-contains', user.uid).get();
     addEvents(trainerSnap);
-
     const userGroups = userData.groups || [];
     for (const groupId of userGroups) {
       const groupSnap = await firestore.collection('events').where('groupId', '==', groupId).get();
@@ -80,27 +79,28 @@ async function loadTrainerDashboard() {
   }
 }
 
-/* ---- Übersichtskarte ---- */
 function renderTrainerEventSummaryCard(event, isPast) {
-  const card  = createElement('div', 'card');
-  const start = event.startTime?.toDate?.();
-  const end   = event.endTime?.toDate?.();
+  const card        = createElement('div', 'card');
+  const start       = event.startTime?.toDate?.();
+  const end         = event.endTime?.toDate?.();
   const isCancelled = event.status === 'cancelled';
 
+  if (isCancelled) card.style.borderLeft = '4px solid var(--color-error, #c62828)';
   card.style.cursor = 'pointer';
+
   card.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div>
-        <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
-        <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
+        <h3 style="margin:0 0 4px;${isCancelled ? 'text-decoration:line-through;opacity:0.6;' : ''}">${event.title || 'Termin'}</h3>
+        <p class="text-muted" style="margin:0;font-size:0.88rem;${isCancelled ? 'text-decoration:line-through;' : ''}">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
         ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : isPast ? '<span class="chip chip-info">Vergangen</span>' : '<span class="chip chip-success">Aktiv</span>'}
         <button class="btn-primary" data-action="detail" style="padding:5px 14px;font-size:0.85rem;">Details ›</button>
       </div>
     </div>
-    ${event.trainerLateNote ? `<div class="chip chip-warning" style="margin-top:8px;">⚠️ Verspätung gemeldet: ${event.trainerLateNote}</div>` : ''}
-    ${isCancelled ? `<p class="text-muted" style="margin:6px 0 0;">Begründung: ${event.cancellationReason || '–'}</p>` : ''}
+    ${event.trainerLateNote ? `<div class="chip chip-warning" style="margin-top:8px;">⚠️ Verspätung: ${event.trainerLateNote}</div>` : ''}
+    ${isCancelled ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason || '–'}</p>` : ''}
   `;
 
   card.querySelector('[data-action="detail"]').onclick = (e) => { e.stopPropagation(); openTrainerEventDetail(event); };
@@ -108,7 +108,6 @@ function renderTrainerEventSummaryCard(event, isPast) {
   return card;
 }
 
-/* ---- Detailansicht ---- */
 async function openTrainerEventDetail(event) {
   const container = document.getElementById('app-content');
   container.innerHTML = `<div class="loading-center">Lade Termin-Details...</div>`;
@@ -194,9 +193,17 @@ async function openTrainerEventDetail(event) {
     container.innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
         <button class="btn-secondary" id="detail-back" style="padding:6px 16px;">&larr; Zurück</button>
-        <h2 style="margin:0;">${ev.title || 'Termin'}</h2>
+        <h2 style="margin:0;${isCancelled ? 'text-decoration:line-through;opacity:0.7;' : ''}">${ev.title || 'Termin'}</h2>
         ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : ''}
       </div>
+
+      ${isCancelled ? `
+        <div class="card" style="margin-bottom:16px;border-left:4px solid var(--color-error,#c62828);">
+          <p class="text-error" style="margin:0 0 4px;font-weight:600;">❌ Training abgesagt</p>
+          <p class="text-muted" style="margin:0;">Begründung: ${ev.cancellationReason || '–'}</p>
+          <button class="btn-secondary" id="revoke-cancel-btn" style="margin-top:12px;">Absage widerrufen</button>
+        </div>
+      ` : ''}
 
       <div class="dashboard-grid" style="margin-bottom:16px;">
         <div class="card" style="margin:0;">
@@ -218,18 +225,15 @@ async function openTrainerEventDetail(event) {
       </div>
 
       ${ev.description ? `<div class="card" style="margin-bottom:16px;"><p style="margin:0;">${ev.description}</p></div>` : ''}
-      ${isCancelled ? `<div class="card" style="margin-bottom:16px;"><p class="text-error" style="margin:0;">Abgesagt: ${ev.cancellationReason || '–'}</p></div>` : ''}
 
-      <!-- Broadcast-Nachricht -->
       <div class="card" style="margin-bottom:16px;">
         <h4 style="margin:0 0 6px;">📢 Nachricht an alle Mitglieder</h4>
         <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard angezeigt.</p>
-        <textarea id="event-broadcast" rows="2" placeholder="z.B. Bitte Sportschuhe mitbringen, Halle B statt A...">${ev.trainerBroadcast || ''}</textarea>
+        <textarea id="event-broadcast" rows="2" placeholder="z.B. Bitte Sportschuhe mitbringen...">${ev.trainerBroadcast || ''}</textarea>
         <button class="btn-secondary" id="save-broadcast" style="margin-top:0;">Nachricht speichern</button>
         <span id="broadcast-saved" class="text-muted" style="font-size:0.85rem;margin-left:10px;display:none;">✓ Gespeichert</span>
       </div>
 
-      <!-- Anwesenheitsliste -->
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
           <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})</h3>
@@ -276,10 +280,33 @@ async function openTrainerEventDetail(event) {
       };
     });
 
-    // --- Broadcast speichern (FIX: Wert aus Textarea korrekt lesen)
+    // --- Absage widerrufen
+    document.getElementById('revoke-cancel-btn')?.addEventListener('click', () => {
+      showModal({
+        title: 'Absage widerrufen',
+        body: '<p>Soll das Training wieder als aktiv markiert werden? Alle Mitglieder sehen es dann wieder normal.</p>',
+        confirmLabel: 'Ja, widerrufen',
+        onConfirm: async () => {
+          try {
+            await firestore.collection('events').doc(ev.id).update({
+              status:             firebase.firestore.FieldValue.delete(),
+              cancellationReason: firebase.firestore.FieldValue.delete(),
+              updatedAt:          firebase.firestore.FieldValue.serverTimestamp()
+            });
+            showToast('Absage widerrufen. Training ist wieder aktiv.', 'success');
+            loadTrainerDashboard();
+          } catch (e) {
+            console.error(e);
+            showToast('Fehler: ' + e.message, 'error');
+          }
+        }
+      });
+    });
+
+    // Broadcast speichern
     document.getElementById('save-broadcast')?.addEventListener('click', async () => {
       const textarea = document.getElementById('event-broadcast');
-      const msg      = textarea?.value ?? '';
+      const msg = textarea?.value ?? '';
       try {
         await firestore.collection('events').doc(ev.id).update({
           trainerBroadcast: msg,
@@ -290,7 +317,7 @@ async function openTrainerEventDetail(event) {
         showToast('Nachricht gespeichert.', 'success');
       } catch (e) {
         console.error(e);
-        showToast('Fehler beim Speichern der Nachricht.', 'error');
+        showToast('Fehler: ' + e.message, 'error');
       }
     });
 
@@ -335,7 +362,6 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    // --- Anwesenheit speichern (setzt trainerSet: true)
     document.getElementById('save-all-attendance')?.addEventListener('click', async () => {
       const errorEl = document.getElementById('detail-error');
       try {
@@ -345,7 +371,7 @@ async function openTrainerEventDetail(event) {
           const memberInput   = container.querySelector(`.trainer-note-member[data-att-id="${sel.dataset.attId}"]`);
           batch.update(firestore.collection('eventAttendance').doc(sel.dataset.attId), {
             status:              sel.value,
-            trainerSet:          true,   // <-- Mitglied kann danach nicht mehr ändern
+            trainerSet:          true,
             trainerNoteInternal: internalInput?.value || '',
             trainerNoteMember:   memberInput?.value   || '',
             updatedAt:           firebase.firestore.FieldValue.serverTimestamp()
@@ -360,14 +386,14 @@ async function openTrainerEventDetail(event) {
         });
       } catch (e) {
         console.error(e);
-        errorEl.textContent = 'Fehler beim Speichern.';
+        showToast('Fehler beim Speichern: ' + e.message, 'error');
+        errorEl.textContent = 'Fehler: ' + e.message;
       }
     });
 
     // Training absagen
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
-      const user = window.currentUser.firebaseUser;
-      const tc   = (ev.trainers || []).length;
+      const tc = (ev.trainers || []).length;
       showModal({
         title: 'Training absagen',
         body: `
@@ -384,20 +410,25 @@ async function openTrainerEventDetail(event) {
         onConfirm: async () => {
           const reason = document.getElementById('cancel-reason')?.value || '';
           const type   = document.querySelector('input[name="cancel-type"]:checked')?.value || 'all';
-          if (type === 'self' && tc > 1) {
-            await firestore.collection('events').doc(ev.id).update({
-              trainers: firebase.firestore.FieldValue.arrayRemove(user.uid),
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            showToast('Du wurdest abgemeldet.', 'success');
-          } else {
-            await firestore.collection('events').doc(ev.id).update({
-              status: 'cancelled', cancellationReason: reason,
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            showToast('Training abgesagt.', 'success');
+          try {
+            if (type === 'self' && tc > 1) {
+              await firestore.collection('events').doc(ev.id).update({
+                trainers:  firebase.firestore.FieldValue.arrayRemove(window.currentUser.firebaseUser.uid),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+              showToast('Du wurdest abgemeldet.', 'success');
+            } else {
+              await firestore.collection('events').doc(ev.id).update({
+                status: 'cancelled', cancellationReason: reason,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+              showToast('Training abgesagt.', 'success');
+            }
+            loadTrainerDashboard();
+          } catch (e) {
+            console.error(e);
+            showToast('Fehler: ' + e.message, 'error');
           }
-          loadTrainerDashboard();
         }
       });
     });
@@ -413,12 +444,17 @@ async function openTrainerEventDetail(event) {
         confirmLabel: 'Melden',
         onConfirm: async () => {
           const reason = document.getElementById('late-reason')?.value?.trim() || '';
-          await firestore.collection('events').doc(ev.id).update({
-            trainerLateNote: reason,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-          showToast('Verspätung gemeldet.', 'success');
-          openTrainerEventDetail(ev);
+          try {
+            await firestore.collection('events').doc(ev.id).update({
+              trainerLateNote: reason,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            showToast('Verspätung gemeldet.', 'success');
+            openTrainerEventDetail(ev);
+          } catch (e) {
+            console.error(e);
+            showToast('Fehler: ' + e.message, 'error');
+          }
         }
       });
     });

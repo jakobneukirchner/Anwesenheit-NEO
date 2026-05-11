@@ -45,17 +45,18 @@ async function loadMemberDashboard() {
       }
     }
 
+    // Abgesagte Termine NICHT herausfiltern – sie werden durchgestrichen angezeigt
     events = events.filter(e => {
-      if (e.status === 'cancelled') return false;
       const t = e.startTime?.toDate?.();
       if (!t) return false;
       if (t < now) return !!attendanceByEvent[e.id];
       return t <= cutOff;
     });
 
-    // Teilnehmerzahlen / Namen
+    // Teilnehmerzahlen / Namen nur für nicht-abgesagte
     const visibilityMode = settings.visibilityMode || 'count';
     for (const ev of events) {
+      if (ev.status === 'cancelled') continue;
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
       let count = 0;
       const names = [];
@@ -118,17 +119,10 @@ async function loadMemberDashboard() {
   }
 }
 
-/**
- * Gibt zurück ob ein Trainer den Status bereits final gesetzt hat.
- * Finale Status (vom Trainer vergeben): present, absent_excused, absent_unexcused,
- * late_excused (wenn trainerSet=true), late_unexcused
- * Mitglied darf danach nichts mehr ändern.
- */
 function isLockedByTrainer(attendance) {
   if (!attendance) return false;
   const lockedStatuses = ['present', 'absent_excused', 'absent_unexcused', 'late_unexcused'];
   if (lockedStatuses.includes(attendance.status)) return true;
-  // late_excused nur sperren wenn Trainer es gesetzt hat (trainerSet-Flag)
   if (attendance.status === 'late_excused' && attendance.trainerSet) return true;
   return false;
 }
@@ -147,36 +141,49 @@ function renderMemberEventCard(event, attendance, isPast) {
   const memberStatus   = attendance?.status || (mode === 'opt_out' ? 'registered' : 'none');
   const memberNote     = attendance?.memberNote || '';
   const locked         = isLockedByTrainer(attendance);
+  const isCancelled    = event.status === 'cancelled';
 
   const card = createElement('div', 'card');
 
-  // Trainer-Verspätungsmeldung
+  // Abgesagt: durchgestrichene Optik
+  if (isCancelled) {
+    card.style.opacity = '0.72';
+    card.style.borderLeft = '4px solid var(--color-error, #c62828)';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+        <div>
+          <h3 style="margin:0 0 2px;text-decoration:line-through;color:var(--color-text-muted);"
+            >${event.title || 'Termin'}</h3>
+          <p class="text-muted" style="margin:0;font-size:0.88rem;text-decoration:line-through;"
+            >${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
+        </div>
+        <span class="chip chip-error">❌ Abgesagt</span>
+      </div>
+      ${event.cancellationReason
+        ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>`
+        : ''}
+      ${event.trainerBroadcast
+        ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}“</p>`
+        : ''}
+    `;
+    return card;
+  }
+
+  // Normale Karte
   const trainerLateHtml = event.trainerLateNote
     ? `<div class="chip chip-warning" style="margin-bottom:8px;">⚠️ Trainer meldet Verspätung: ${event.trainerLateNote}</div>` : '';
 
-  // Terminbezogene Trainer-Nachricht
   const broadcastHtml = event.trainerBroadcast
     ? `<div style="background:rgba(21,101,192,0.08);border-left:3px solid var(--color-primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
         <span style="font-size:0.8rem;font-weight:600;color:var(--color-primary);text-transform:uppercase;letter-spacing:.04em;">Nachricht vom Trainer</span>
         <p style="margin:4px 0 0;">${event.trainerBroadcast}</p>
        </div>` : '';
 
-  // Notiz vom Trainer an dieses Mitglied
   const trainerNoteHtml = attendance?.trainerNoteMember
     ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
         <span style="font-size:0.8rem;font-weight:600;color:var(--color-warning,#f57c00);text-transform:uppercase;letter-spacing:.04em;">Persönliche Notiz deines Trainers</span>
         <p style="margin:4px 0 0;">${attendance.trainerNoteMember}</p>
        </div>` : '';
-
-  if (event.status === 'cancelled') {
-    card.innerHTML = `
-      ${trainerLateHtml}
-      <h3>${event.title || 'Termin'}</h3>
-      <p class="text-muted">${start ? formatDateTime(start) : ''}</p>
-      <div class="chip chip-error">❌ Abgesagt${event.cancellationReason ? ': ' + event.cancellationReason : ''}</div>
-    `;
-    return card;
-  }
 
   let participantInfo = '';
   if (!isPast) {
@@ -197,7 +204,6 @@ function renderMemberEventCard(event, attendance, isPast) {
     ? (isRegistered ? 'Abmelden' : 'Anmelden')
     : (memberStatus === 'cancelled' ? 'Wieder anmelden' : 'Abmelden');
 
-  // Gesperrt-Hinweis wenn Trainer bereits gecheckt hat
   const lockedHtml = locked
     ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;">🔒 Vom Trainer eingetragen – keine Änderung möglich.</p>` : '';
 
@@ -242,7 +248,7 @@ function renderMemberEventCard(event, attendance, isPast) {
       showModal({
         title: 'Verspätung melden',
         body: `
-          <p>Bitte gib eine Begründung an. Verspätungen werden immer als <strong>entschuldigt</strong> eingetragen – unentschuldigt kann nur ein Trainer eintragen.</p>
+          <p>Verspätungen werden immer als <strong>entschuldigt</strong> eingetragen – unentschuldigt kann nur ein Trainer eintragen.</p>
           <label>Begründung (optional)</label>
           <input type="text" id="late-reason-input" placeholder="z.B. Zug hatte Verspätung" />
         `,
@@ -251,10 +257,9 @@ function renderMemberEventCard(event, attendance, isPast) {
           const reason = document.getElementById('late-reason-input')?.value.trim() || '';
           await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
             eventId: event.id, userId: window.currentUser.firebaseUser.uid,
-            status:     'late_excused',
-            trainerSet: false,
+            status: 'late_excused', trainerSet: false,
             memberNote: reason || (attendance?.memberNote || ''),
-            updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
           showToast('Verspätung gemeldet (entschuldigt).', 'success');
           loadMemberDashboard();
@@ -296,9 +301,8 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
     : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
   await firestore.collection('eventAttendance').doc(`${event.id}_${user.uid}`).set({
     eventId: event.id, userId: user.uid,
-    status:     newStatus,
-    trainerSet: false,
-    updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+    status: newStatus, trainerSet: false,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
   showToast(newStatus === 'registered' ? 'Erfolgreich angemeldet.' : 'Erfolgreich abgemeldet.', 'success');
   loadMemberDashboard();
