@@ -6,17 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="/css/theme.css" />
   <link rel="icon" href="/favicon.ico" />
-
-  <!-- Material Icons -->
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" />
 
-  <!-- Firebase CDN (Compat) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-
-  <!-- jsPDF fuer PDF-Export -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
   <script>
@@ -32,14 +27,12 @@
 <body>
   <div id="app-root">
     <div class="app-shell">
-
       <header class="app-bar">
         <div class="app-brand">
           <div id="app-logo" class="app-logo"></div>
           <span id="app-title">Anwesenheit-NEO</span>
         </div>
 
-        <!-- Desktop-Aktionen (per CSS auf Mobile ausgeblendet) -->
         <div class="app-actions desktop-only" id="app-actions-desktop">
           <span id="app-user-name"
             style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
@@ -54,36 +47,37 @@
           </button>
         </div>
 
-        <!-- Hamburger: NUR auf Mobile sichtbar (CSS .mobile-only) -->
-        <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menu" aria-label="Menu">
+        <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menü" aria-label="Menü">
           <span class="material-icons">menu</span>
         </button>
       </header>
 
-      <!-- Mobile Drawer -->
-      <div id="mobile-drawer" class="mobile-drawer" hidden>
-        <div class="mobile-drawer-inner">
-          <div style="padding:16px 20px 12px;border-bottom:1px solid var(--color-border);">
-            <div style="display:flex;align-items:center;gap:10px;">
-              <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
-              <div>
-                <div id="mobile-user-name" style="font-weight:600;font-size:0.95rem;"></div>
-                <div style="font-size:0.8rem;color:var(--color-text-muted);">Angemeldet</div>
-              </div>
+      <div id="mobile-drawer-overlay" class="mobile-drawer-overlay" hidden></div>
+      <aside id="mobile-drawer" class="mobile-drawer" hidden>
+        <div class="mobile-drawer-header">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
+            <div style="min-width:0;">
+              <div id="mobile-user-name" style="font-weight:600;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+              <div style="font-size:0.8rem;color:var(--color-text-muted);">Angemeldet</div>
             </div>
           </div>
-          <div id="mobile-role-switcher" style="padding:8px 12px;border-bottom:1px solid var(--color-border);"></div>
-          <div style="padding:8px 12px;">
-            <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
-              <span class="material-icons">manage_accounts</span> Konto
-            </button>
-            <button id="mobile-logout-btn" class="mobile-drawer-btn" hidden>
-              <span class="material-icons">logout</span> Abmelden
-            </button>
-          </div>
+          <button id="mobile-drawer-close" class="mobile-drawer-close" aria-label="Schließen" title="Schließen">
+            <span class="material-icons">close</span>
+          </button>
         </div>
-      </div>
-      <div id="mobile-drawer-overlay" class="mobile-drawer-overlay" hidden></div>
+        <div id="mobile-role-switcher" class="mobile-drawer-section"></div>
+        <div class="mobile-drawer-section">
+          <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
+            <span class="material-icons">manage_accounts</span>
+            <span>Konto</span>
+          </button>
+          <button id="mobile-logout-btn" class="mobile-drawer-btn" hidden>
+            <span class="material-icons">logout</span>
+            <span>Abmelden</span>
+          </button>
+        </div>
+      </aside>
 
       <main id="app-content" class="app-content">
         <div class="loading-center">Laden...</div>
@@ -105,17 +99,38 @@
 
   <script>
     (function() {
-      const menuBtn = document.getElementById('mobile-menu-btn');
-      const drawer  = document.getElementById('mobile-drawer');
-      const overlay = document.getElementById('mobile-drawer-overlay');
+      const menuBtn   = document.getElementById('mobile-menu-btn');
+      const drawer    = document.getElementById('mobile-drawer');
+      const overlay   = document.getElementById('mobile-drawer-overlay');
+      const closeBtn  = document.getElementById('mobile-drawer-close');
 
-      function openDrawer()  { drawer.hidden = false; overlay.hidden = false; document.body.style.overflow = 'hidden'; }
-      function closeDrawer() { drawer.hidden = true;  overlay.hidden = true;  document.body.style.overflow = ''; }
+      function isMobile() {
+        return window.matchMedia('(max-width: 639px)').matches;
+      }
 
-      menuBtn.addEventListener('click', openDrawer);
-      overlay.addEventListener('click', closeDrawer);
+      function openDrawer() {
+        if (!isMobile()) return;
+        drawer.hidden = false;
+        overlay.hidden = false;
+        document.body.style.overflow = 'hidden';
+      }
 
+      function closeDrawer() {
+        drawer.hidden = true;
+        overlay.hidden = true;
+        document.body.style.overflow = '';
+      }
+
+      function syncDrawerState() {
+        if (!isMobile()) closeDrawer();
+      }
+
+      menuBtn?.addEventListener('click', openDrawer);
+      closeBtn?.addEventListener('click', closeDrawer);
+      overlay?.addEventListener('click', closeDrawer);
+      window.addEventListener('resize', syncDrawerState);
       window._mobileDrawerClose = closeDrawer;
+      syncDrawerState();
     })();
   </script>
 </body>
