@@ -54,7 +54,22 @@ async function loadMemberDashboard() {
 
     const visibilityMode = settings.visibilityMode || 'count';
     await Promise.all(events.map(async ev => {
+      // Trainer-Status IMMER laden (auch für abgesagte Termine, damit die Anzeige stimmt)
+      const trainerIds    = ev.trainers || [];
+      const cancelledIds  = ev.trainerCancellations || [];
+      const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
+      if (allTrainerIds.length) {
+        const trainerNames = {};
+        await Promise.all(allTrainerIds.map(async tid => {
+          const uDoc = await firestore.collection('users').doc(tid).get();
+          trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
+        }));
+        ev._trainerNames     = trainerIds.map(tid => trainerNames[tid] || tid);
+        ev._trainerCancelled = cancelledIds.map(tid => trainerNames[tid] || tid);
+      }
+
       if (ev.status === 'cancelled') return;
+
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
       let count = 0;
       const uids = [];
@@ -71,20 +86,6 @@ async function loadMemberDashboard() {
           const uDoc = await firestore.collection('users').doc(uid).get();
           return uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || uid) : uid;
         }));
-      }
-
-      // Trainer-Status laden
-      const trainerIds    = ev.trainers || [];
-      const cancelledIds  = ev.trainerCancellations || [];
-      const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
-      if (allTrainerIds.length) {
-        const trainerNames = {};
-        await Promise.all(allTrainerIds.map(async tid => {
-          const uDoc = await firestore.collection('users').doc(tid).get();
-          trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
-        }));
-        ev._trainerNames     = trainerIds.map(tid => trainerNames[tid] || tid);
-        ev._trainerCancelled = cancelledIds.map(tid => trainerNames[tid] || tid);
       }
     }));
 
@@ -194,9 +195,7 @@ function renderMemberEventCard(event, attendance, isPast) {
   const locked         = isLockedByTrainer(attendance);
   const isCancelled    = event.status === 'cancelled';
 
-  // Widerruf: basiert auf firstRegisteredAt (wird nur beim ERSTEN Anmelden gesetzt, nie überschrieben)
-  // => Fenster: 1 Stunde ab der ersten Anmeldung
-  const WITHDRAW_WINDOW_MS = 60 * 60 * 1000; // 1 Stunde
+  const WITHDRAW_WINDOW_MS = 60 * 60 * 1000;
   const firstRegTime = attendance?.firstRegisteredAt?.toDate?.() || null;
   const canWithdraw  = !locked
     && !isPast
@@ -384,14 +383,12 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
     ? (currentStatus === 'registered' ? 'cancelled' : 'registered')
     : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
 
-  // firstRegisteredAt wird NUR beim allerersten Anmelden gesetzt und danach NIE überschrieben
+  // firstRegisteredAt wird NUR beim allerersten Anmelden gesetzt
   const isFirstRegistration = newStatus === 'registered' && !attendance?.firstRegisteredAt;
 
   const updateData = {
-    eventId:   event.id,
-    userId:    user.uid,
-    status:    newStatus,
-    trainerSet: false,
+    eventId: event.id, userId: user.uid,
+    status: newStatus, trainerSet: false,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   if (isFirstRegistration) {

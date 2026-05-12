@@ -27,11 +27,8 @@ async function loadTrainerDashboard() {
 
     const trainerSnap = await firestore.collection('events').where('trainers', 'array-contains', user.uid).get();
     addEvents(trainerSnap);
-
-    // Auch Termine wo ich mich abgemeldet habe (trainerCancellations)
     const cancelledSnap = await firestore.collection('events').where('trainerCancellations', 'array-contains', user.uid).get();
     addEvents(cancelledSnap);
-
     const userGroups = userData.groups || [];
     for (const groupId of userGroups) {
       const groupSnap = await firestore.collection('events').where('groupId', '==', groupId).get();
@@ -99,41 +96,41 @@ async function loadTrainerDashboard() {
 }
 
 function renderTrainerEventSummaryCard(event, isPast) {
-  const card        = createElement('div', 'card');
-  const start       = event.startTime?.toDate?.();
-  const end         = event.endTime?.toDate?.();
-  const isCancelled = event.status === 'cancelled';
-  const missing     = event._missing ?? 0;
-  const uid         = window.currentUser?.firebaseUser?.uid;
-  const iSelfCancelled = (event.trainerCancellations || []).includes(uid);
+  const card           = createElement('div', 'card');
+  const start          = event.startTime?.toDate?.();
+  const end            = event.endTime?.toDate?.();
+  const isCancelled    = event.status === 'cancelled';
+  const missing        = event._missing ?? 0;
+  const uid            = window.currentUser?.firebaseUser?.uid;
+  const isSelfCancelled = (event.trainerCancellations || []).includes(uid);
 
-  if (iCancelled) card.style.borderLeft = '4px solid var(--color-error, #c62828)';
-  else if (iSelfCancelled) card.style.borderLeft = '4px solid var(--color-warning, #e65100)';
+  if (isCancelled)       card.style.borderLeft = '4px solid var(--color-error, #c62828)';
+  else if (isSelfCancelled) card.style.borderLeft = '4px solid var(--color-warning, #e65100)';
   else if (!isPast && missing > 0) card.style.borderLeft = '4px solid var(--color-warning, #e65100)';
   card.style.cursor = 'pointer';
 
-  const missingBadge = (!iCancelled && !isPast && missing > 0)
+  const missingBadge = (!isCancelled && !isPast && missing > 0)
     ? `<span class="chip chip-warning" style="font-size:0.82rem;font-weight:700;">⚠️ Noch ${missing} Person${missing === 1 ? '' : 'en'} benötigt</span>`
     : '';
 
-  const selfCancelBadge = iSelfCancelled
+  const selfCancelBadge = isSelfCancelled
     ? `<span class="chip chip-warning" style="font-size:0.82rem;">Du hast dich abgemeldet</span>` : '';
 
   card.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div style="flex:1;min-width:0;">
-        <h3 style="margin:0 0 4px;${iCancelled||iSelfCancelled ? 'opacity:0.6;' : ''}">${event.title || 'Termin'}</h3>
+        <h3 style="margin:0 0 4px;${isCancelled || isSelfCancelled ? 'opacity:0.6;' : ''}">${event.title || 'Termin'}</h3>
         <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
         ${missingBadge}${selfCancelBadge}
-        ${iCancelled ? '<span class="chip chip-error">Abgesagt</span>' : iSelfCancelled ? '<span class="chip chip-warning">Abgemeldet</span>' : isPast ? '<span class="chip chip-info">Vergangen</span>' : '<span class="chip chip-success">Aktiv</span>'}
+        ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : isSelfCancelled ? '<span class="chip chip-warning">Abgemeldet</span>' : isPast ? '<span class="chip chip-info">Vergangen</span>' : '<span class="chip chip-success">Aktiv</span>'}
         <button class="btn-primary" data-action="detail" style="padding:5px 14px;font-size:0.85rem;">Details ›</button>
       </div>
     </div>
     ${event.trainerLateNote ? `<div class="chip chip-warning" style="margin-top:8px;">⚠️ Verspätung: ${event.trainerLateNote}</div>` : ''}
-    ${iCancelled ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason || '–'}</p>` : ''}
-    ${!iCancelled && !isPast && event._minParticipants
+    ${isCancelled ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason || '–'}</p>` : ''}
+    ${!isCancelled && !isPast && event._minParticipants
       ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.83rem;">${event._participantCount ?? 0} / ${event._minParticipants} Teilnehmer angemeldet</p>`
       : ''}
   `;
@@ -156,12 +153,11 @@ async function openTrainerEventDetail(event) {
     const start            = ev.startTime?.toDate?.();
     const end              = ev.endTime?.toDate?.();
     const isCancelled      = ev.status === 'cancelled';
-    const iSelfCancelled   = (ev.trainerCancellations || []).includes(myUid);
+    const isSelfCancelled  = (ev.trainerCancellations || []).includes(myUid);
     const trainerIds       = ev.trainers || [];
     const cancelledIds     = ev.trainerCancellations || [];
     const minPart          = ev.minParticipants ?? settings.defaultMinParticipants ?? 0;
 
-    // Trainer-Namen laden
     const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
     const trainerNames  = {};
     await Promise.all(allTrainerIds.map(async tid => {
@@ -169,12 +165,10 @@ async function openTrainerEventDetail(event) {
       trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
     }));
 
-    // Offene Vertretungsanfragen für diesen Termin
     const subSnap  = await firestore.collection('substituteRequests')
       .where('eventId', '==', ev.id).where('requesterId', '==', myUid).get();
     const mySubReq = subSnap.empty ? null : { id: subSnap.docs[0].id, ...subSnap.docs[0].data() };
 
-    // Vertretungsanfragen die AN mich gerichtet sind
     const incomingSnap = await firestore.collection('substituteRequests')
       .where('eventId', '==', ev.id).where('targetId', '==', myUid).where('status', '==', 'pending').get();
     const incomingReqs = [];
@@ -259,7 +253,6 @@ async function openTrainerEventDetail(event) {
         ${missingCount > 0 ? `<p class="text-muted" style="margin:2px 0 0;font-size:0.8rem;">(mind. ${minPart} benötigt)</p>` : `<p class="text-muted" style="margin:2px 0 0;font-size:0.8rem;">Mindestanzahl erreicht</p>`}
       </div>` : '';
 
-    // Trainer-Status Block
     const trainerStatusHtml = (trainerIds.length || cancelledIds.length) ? `
       <div class="card" style="margin-bottom:16px;">
         <h4 style="margin:0 0 10px;">👥 Trainer dieses Termins</h4>
@@ -275,19 +268,17 @@ async function openTrainerEventDetail(event) {
           </div>`).join('')}
       </div>` : '';
 
-    // Eingehende Vertretungsanfrage für mich
     const incomingSubHtml = incomingReqs.map(req => `
       <div class="card" style="margin-bottom:12px;border-left:4px solid var(--color-primary);background:rgba(21,101,192,0.05);" data-sub-id="${req.id}">
         <p style="margin:0 0 4px;font-weight:600;">&#128235; Vertretungsanfrage</p>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Du wurdest als mögliche Vertretung angefragt${req.reason ? ': \u201e' + req.reason + '\u201c' : '.'}  </p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Du wurdest als mögliche Vertretung angefragt${req.reason ? ': „' + req.reason + '“' : '.'}</p>
         <div style="display:flex;gap:8px;">
           <button class="btn-primary sub-accept-btn" data-sub-id="${req.id}" style="padding:5px 14px;">Annehmen</button>
           <button class="btn-secondary sub-decline-btn" data-sub-id="${req.id}" style="padding:5px 14px;">Ablehnen</button>
         </div>
       </div>`).join('');
 
-    // Eigene offene Vertretungsanfrage
-    const mySubHtml = mySubReq ? `
+    const mySubHtml = (mySubReq && mySubReq.status === 'pending') ? `
       <div class="card" style="margin-bottom:12px;border-left:4px solid var(--color-warning,#e65100);">
         <p style="margin:0 0 4px;font-weight:600;color:var(--color-warning,#e65100);">&#8987; Vertretungsanfrage offen</p>
         <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Gesendet an ${trainerNames[mySubReq.targetId]||mySubReq.targetId}.</p>
@@ -299,14 +290,14 @@ async function openTrainerEventDetail(event) {
         <button class="btn-secondary" id="detail-back" style="padding:6px 16px;">&larr; Zurück</button>
         <h2 style="margin:0;${isCancelled ? 'text-decoration:line-through;opacity:0.7;' : ''}">${ev.title || 'Termin'}</h2>
         ${isCancelled ? '<span class="chip chip-error">Abgesagt</span>' : ''}
-        ${iSelfCancelled ? '<span class="chip chip-warning">Du hast dich abgemeldet</span>' : ''}
+        ${isSelfCancelled ? '<span class="chip chip-warning">Du hast dich abgemeldet</span>' : ''}
         ${!isCancelled && missingCount > 0 ? `<span class="chip chip-warning">⚠️ Noch ${missingCount} Person${missingCount===1?'':'en'} benötigt</span>` : ''}
       </div>
 
       ${incomingSubHtml}
       ${mySubHtml}
 
-      ${iSelfCancelled ? `
+      ${isSelfCancelled ? `
         <div class="card" style="margin-bottom:16px;border-left:4px solid var(--color-warning,#e65100);">
           <p style="margin:0 0 4px;font-weight:600;color:var(--color-warning,#e65100);">Du hast dich von diesem Termin abgemeldet.</p>
           <button class="btn-primary" id="revoke-self-cancel-btn" style="margin-top:8px;">Abmeldung widerrufen</button>
@@ -377,7 +368,7 @@ async function openTrainerEventDetail(event) {
       <div class="card" style="margin-top:16px;">
         <h3 style="margin-top:0;">Aktionen</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${!isCancelled && !iSelfCancelled ? `
+          ${!isCancelled && !isSelfCancelled ? `
             <button class="btn-danger"    id="cancel-event-btn">Abmelden / Training absagen</button>
             <button class="btn-secondary" id="trainer-late-btn">Verspätung melden</button>
           ` : ''}
@@ -387,7 +378,6 @@ async function openTrainerEventDetail(event) {
       <div id="detail-error" class="text-error" style="margin-top:8px;"></div>
     `;
 
-    /* ---- Event-Listener ---- */
     document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
 
     container.querySelectorAll('.info-btn').forEach(btn => {
@@ -397,7 +387,6 @@ async function openTrainerEventDetail(event) {
       };
     });
 
-    // Absage widerrufen (ganzes Event)
     document.getElementById('revoke-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Absage widerrufen',
@@ -417,7 +406,6 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    // Eigene Abmeldung widerrufen
     document.getElementById('revoke-self-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Abmeldung widerrufen',
@@ -430,7 +418,6 @@ async function openTrainerEventDetail(event) {
               trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid),
               updatedAt:            firebase.firestore.FieldValue.serverTimestamp()
             });
-            // Offene Vertretungsanfragen von mir löschen
             if (mySubReq) {
               await firestore.collection('substituteRequests').doc(mySubReq.id).update({ status: 'revoked' });
             }
@@ -441,7 +428,6 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    // Vertretungsanfrage zurückziehen
     document.getElementById('cancel-sub-req-btn')?.addEventListener('click', async () => {
       try {
         await firestore.collection('substituteRequests').doc(mySubReq.id).update({ status: 'revoked' });
@@ -450,7 +436,6 @@ async function openTrainerEventDetail(event) {
       } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
     });
 
-    // Eingehende Anfragen: Annehmen / Ablehnen
     container.querySelectorAll('.sub-accept-btn').forEach(btn => {
       btn.onclick = async () => {
         const subId = btn.dataset.subId;
@@ -560,10 +545,8 @@ async function openTrainerEventDetail(event) {
       }
     });
 
-    // Abmelden / Training absagen
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
       const tc = (ev.trainers || []).length;
-      // Alle anderen Trainer als mögliche Vertretung
       const otherTrainers = Object.entries(trainerNames).filter(([tid]) => tid !== myUid && !cancelledIds.includes(tid));
 
       showModal({
@@ -571,28 +554,27 @@ async function openTrainerEventDetail(event) {
         body: `
           <label>Art der Abmeldung</label>
           <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
-            ${tc > 1 ? `<label style="display:flex;align-items:center;gap:8px;color:var(--color-text);cursor:pointer;"><input type="radio" name="cancel-type" value="self" checked /> Nur ich melde mich ab (Training läuft mit den anderen Trainern weiter)</label>` : ''}
+            ${tc > 1 ? `<label style="display:flex;align-items:center;gap:8px;color:var(--color-text);cursor:pointer;"><input type="radio" name="cancel-type" value="self" checked /> Nur ich melde mich ab (Training läuft weiter)</label>` : ''}
             <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);cursor:pointer;"><input type="radio" name="cancel-type" value="all" ${tc<=1?'checked':''} /> Training komplett absagen</label>
           </div>
           <label>Begründung (optional)</label>
           <input type="text" id="cancel-reason" placeholder="z.B. Krankheit" />
-          ${tc <= 1 && otherTrainers.length === 0 ? '' : `
           <div id="sub-req-section" style="margin-top:8px;display:none;">
             <hr style="border:none;border-top:1px solid var(--color-border);margin:12px 0;" />
             <p style="margin:0 0 8px;font-weight:500;">Vertretung anfragen (optional)</p>
-            <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Sende eine Anfrage an einen anderen Trainer, das Training zu übernehmen.</p>
+            <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Sende eine Anfrage an einen anderen Trainer das Training zu übernehmen.</p>
             ${otherTrainers.length ? `
               <label>Trainer auswählen</label>
               <select id="sub-target">
                 <option value="">-- kein --</option>
                 ${otherTrainers.map(([tid, name]) => `<option value="${tid}">${name}</option>`).join('')}
-              </select>` : '<p class="text-muted" style="font-size:0.85rem;">Keine anderen Trainer verfügbar. Du kannst die Anfrage auch später über die Detailseite versenden.</p>'}
-          </div>`}
+              </select>` : '<p class="text-muted" style="font-size:0.85rem;">Keine anderen Trainer verfügbar.</p>'}
+          </div>
         `,
         confirmLabel: 'Bestätigen',
         onConfirm: async () => {
-          const reason = document.getElementById('cancel-reason')?.value || '';
-          const type   = document.querySelector('input[name="cancel-type"]:checked')?.value || 'all';
+          const reason    = document.getElementById('cancel-reason')?.value || '';
+          const type      = document.querySelector('input[name="cancel-type"]:checked')?.value || 'all';
           const subTarget = document.getElementById('sub-target')?.value || '';
           try {
             if (type === 'self') {
@@ -604,20 +586,16 @@ async function openTrainerEventDetail(event) {
               showToast('Du wurdest abgemeldet.', 'success');
               if (subTarget) {
                 await firestore.collection('substituteRequests').add({
-                  eventId:     ev.id,
-                  requesterId: myUid,
-                  targetId:    subTarget,
-                  reason:      reason,
-                  status:      'pending',
-                  createdAt:   firebase.firestore.FieldValue.serverTimestamp()
+                  eventId: ev.id, requesterId: myUid, targetId: subTarget,
+                  reason, status: 'pending',
+                  createdAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
                 showToast(`Vertretungsanfrage an ${trainerNames[subTarget]||subTarget} gesendet.`, 'success');
               }
             } else {
               await firestore.collection('events').doc(ev.id).update({
-                status:             'cancelled',
-                cancellationReason: reason,
-                updatedAt:          firebase.firestore.FieldValue.serverTimestamp()
+                status: 'cancelled', cancellationReason: reason,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
               });
               showToast('Training abgesagt.', 'success');
             }
@@ -626,12 +604,11 @@ async function openTrainerEventDetail(event) {
         }
       });
 
-      // Vertretungsbereich nur bei "nur ich" einblenden
       setTimeout(() => {
         const radios  = document.querySelectorAll('input[name="cancel-type"]');
         const subSect = document.getElementById('sub-req-section');
         if (!subSect) return;
-        const toggle  = () => { subSect.style.display = document.querySelector('input[name="cancel-type"]:checked')?.value === 'self' ? '' : 'none'; };
+        const toggle = () => { subSect.style.display = document.querySelector('input[name="cancel-type"]:checked')?.value === 'self' ? '' : 'none'; };
         radios.forEach(r => r.onchange = toggle);
         toggle();
       }, 50);
