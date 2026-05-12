@@ -165,7 +165,7 @@ async function openTrainerEventDetail(event) {
       trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
     }));
 
-    // Alle Nutzer mit Rolle 'teacher', 'admin' oder 'coordinator' laden (für Vertretungsauswahl)
+    // Alle Nutzer mit Trainer-Rolle laden (für Vertretungsauswahl)
     const allTeachersSnap = await firestore.collection('users').get();
     const allTeachers = [];
     allTeachersSnap.forEach(doc => {
@@ -176,14 +176,37 @@ async function openTrainerEventDetail(event) {
       }
     });
 
-    const subSnap  = await firestore.collection('substituteRequests')
+    // Meine gesendeten Vertretungsanfragen für diesen Termin
+    const subSnap = await firestore.collection('substituteRequests')
       .where('eventId', '==', ev.id).where('requesterId', '==', myUid).get();
-    const mySubReq = subSnap.empty ? null : { id: subSnap.docs[0].id, ...subSnap.docs[0].data() };
+    const mySubReqs = [];
+    subSnap.forEach(doc => mySubReqs.push({ id: doc.id, ...doc.data() }));
+    // Aktive (pending/accepted) Anfragen
+    const myActiveSubReqs = mySubReqs.filter(r => r.status === 'pending' || r.status === 'accepted');
+    // Wie viele benötigt (aus erster Anfrage-Gruppe)
+    const neededCount = myActiveSubReqs.length > 0 ? (myActiveSubReqs[0].neededCount ?? 1) : 1;
+    const acceptedReqs = myActiveSubReqs.filter(r => r.status === 'accepted');
 
+    // Eingehende Vertretungsanfragen an mich
     const incomingSnap = await firestore.collection('substituteRequests')
       .where('eventId', '==', ev.id).where('targetId', '==', myUid).where('status', '==', 'pending').get();
     const incomingReqs = [];
     incomingSnap.forEach(doc => incomingReqs.push({ id: doc.id, ...doc.data() }));
+
+    // Für eingehende Anfragen: wie viele haben bereits zugesagt?
+    const incomingWithContext = await Promise.all(incomingReqs.map(async req => {
+      const siblingSnap = await firestore.collection('substituteRequests')
+        .where('eventId', '==', ev.id).where('requesterId', '==', req.requesterId).get();
+      const siblings = [];
+      siblingSnap.forEach(d => siblings.push({ id: d.id, ...d.data() }));
+      const accepted = siblings.filter(s => s.status === 'accepted').length;
+      const needed   = req.neededCount ?? 1;
+      const requesterDoc = await firestore.collection('users').doc(req.requesterId).get();
+      const requesterName = requesterDoc.exists
+        ? (requesterDoc.data().displayName || requesterDoc.data().email || req.requesterId)
+        : req.requesterId;
+      return { ...req, acceptedCount: accepted, neededCount: needed, requesterName };
+    }));
 
     const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
     const attendances = [];
@@ -279,21 +302,46 @@ async function openTrainerEventDetail(event) {
           </div>`).join('')}
       </div>` : '';
 
-    const incomingSubHtml = incomingReqs.map(req => `
+    // Eingehende Vertretungsanfragen anzeigen (mit Kontext wie viele schon zugesagt haben)
+    const incomingSubHtml = incomingWithContext.map(req => {
+      const stillNeeded = Math.max(0, req.neededCount - req.acceptedCount);
+      const contextInfo = req.neededCount > 1
+        ? `<span class="chip chip-info" style="font-size:0.8rem;margin-left:6px;">${req.acceptedCount} / ${req.neededCount} Zusagen</span>`
+        : '';
+      return `
       <div class="card" style="margin-bottom:12px;border-left:4px solid var(--color-primary);background:rgba(21,101,192,0.05);">
-        <p style="margin:0 0 4px;font-weight:600;">&#128235; Vertretungsanfrage</p>
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px;">
+          <p style="margin:0;font-weight:600;">&#128235; Vertretungsanfrage von ${req.requesterName}</p>
+          ${contextInfo}
+          ${stillNeeded > 0 ? `<span class="chip chip-warning" style="font-size:0.8rem;">Noch ${stillNeeded} Vertretung${stillNeeded===1?'':' en'} gesucht</span>` : '<span class="chip chip-success" style="font-size:0.8rem;">Bereits genügend Zusagen</span>'}
+        </div>
         <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Du wurdest als mögliche Vertretung angefragt${req.reason ? ': „' + req.reason + '"' : '.'}</p>
         <div style="display:flex;gap:8px;">
-          <button class="btn-primary sub-accept-btn" data-sub-id="${req.id}" style="padding:5px 14px;">Annehmen</button>
-          <button class="btn-secondary sub-decline-btn" data-sub-id="${req.id}" style="padding:5px 14px;">Ablehnen</button>
+          <button class="btn-primary sub-accept-btn" data-sub-id="${req.id}" data-requester-id="${req.requesterId}" style="padding:5px 14px;">Annehmen</button>
+          <button class="btn-secondary sub-decline-btn" data-sub-id="${req.id}" data-requester-id="${req.requesterId}" data-needed="${req.neededCount}" data-accepted="${req.acceptedCount}" data-event-id="${ev.id}" style="padding:5px 14px;">Ablehnen</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
-    const mySubHtml = (mySubReq && mySubReq.status === 'pending') ? `
+    // Meine gesendeten Anfragen anzeigen
+    const mySubHtml = myActiveSubReqs.length > 0 ? `
       <div class="card" style="margin-bottom:12px;border-left:4px solid var(--color-warning,#e65100);">
-        <p style="margin:0 0 4px;font-weight:600;color:var(--color-warning,#e65100);">&#8987; Vertretungsanfrage offen</p>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Gesendet an ${allTeachers.find(t=>t.uid===mySubReq.targetId)?.name || mySubReq.targetId}.</p>
-        <button class="btn-secondary" id="cancel-sub-req-btn" style="padding:4px 12px;">Anfrage zurückziehen</button>
+        <p style="margin:0 0 4px;font-weight:600;color:var(--color-warning,#e65100);">&#8987; Vertretungsanfragen offen</p>
+        <p class="text-muted" style="margin:0 0 4px;font-size:0.88rem;">
+          Bisher <strong>${acceptedReqs.length} von ${neededCount}</strong> benötigten Vertretungen zugesagt.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;">
+          ${myActiveSubReqs.map(r => {
+            const tName = allTeachers.find(t => t.uid === r.targetId)?.name || r.targetId;
+            const statusChip = r.status === 'accepted'
+              ? `<span class="chip chip-success" style="font-size:0.75rem;">✓ Angenommen</span>`
+              : `<span class="chip chip-info" style="font-size:0.75rem;">⏳ Ausstehend</span>`;
+            return `<div style="display:flex;align-items:center;gap:8px;font-size:0.88rem;">
+              <span>${tName}</span>${statusChip}
+            </div>`;
+          }).join('')}
+        </div>
+        <button class="btn-secondary" id="cancel-all-sub-reqs-btn" style="padding:4px 12px;">Alle Anfragen zurückziehen</button>
       </div>` : '';
 
     container.innerHTML = `
@@ -429,8 +477,10 @@ async function openTrainerEventDetail(event) {
               trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid),
               updatedAt:            firebase.firestore.FieldValue.serverTimestamp()
             });
-            if (mySubReq) {
-              await firestore.collection('substituteRequests').doc(mySubReq.id).update({ status: 'revoked' });
+            if (myActiveSubReqs.length > 0) {
+              const batch = firestore.batch();
+              myActiveSubReqs.forEach(r => batch.update(firestore.collection('substituteRequests').doc(r.id), { status: 'revoked' }));
+              await batch.commit();
             }
             showToast('Abmeldung widerrufen. Du bist wieder als Trainer eingetragen.', 'success');
             openTrainerEventDetail(ev);
@@ -439,19 +489,21 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    document.getElementById('cancel-sub-req-btn')?.addEventListener('click', async () => {
+    // Alle eigenen Anfragen zurückziehen
+    document.getElementById('cancel-all-sub-reqs-btn')?.addEventListener('click', async () => {
       try {
-        await firestore.collection('substituteRequests').doc(mySubReq.id).update({ status: 'revoked' });
-        showToast('Anfrage zurückgezogen.', 'success');
+        const batch = firestore.batch();
+        myActiveSubReqs.forEach(r => batch.update(firestore.collection('substituteRequests').doc(r.id), { status: 'revoked' }));
+        await batch.commit();
+        showToast('Alle Anfragen zurückgezogen.', 'success');
         openTrainerEventDetail(ev);
       } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
     });
 
+    // Eingehende Anfrage annehmen
     container.querySelectorAll('.sub-accept-btn').forEach(btn => {
       btn.onclick = async () => {
         const subId = btn.dataset.subId;
-        const req   = incomingReqs.find(r => r.id === subId);
-        if (!req) return;
         try {
           await Promise.all([
             firestore.collection('substituteRequests').doc(subId).update({ status: 'accepted' }),
@@ -465,11 +517,36 @@ async function openTrainerEventDetail(event) {
         } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
       };
     });
+
+    // Eingehende Anfrage ablehnen – prüfen ob Training automatisch abgesagt werden soll
     container.querySelectorAll('.sub-decline-btn').forEach(btn => {
       btn.onclick = async () => {
+        const subId      = btn.dataset.subId;
+        const requesterId = btn.dataset.requesterId;
+        const needed     = parseInt(btn.dataset.needed) || 1;
+        const accepted   = parseInt(btn.dataset.accepted) || 0;
         try {
-          await firestore.collection('substituteRequests').doc(btn.dataset.subId).update({ status: 'declined' });
-          showToast('Vertretungsanfrage abgelehnt.', 'warning');
+          await firestore.collection('substituteRequests').doc(subId).update({ status: 'declined' });
+
+          // Prüfen ob alle anderen für diesen Requester auch declined/revoked sind
+          const siblingSnap = await firestore.collection('substituteRequests')
+            .where('eventId', '==', ev.id).where('requesterId', '==', requesterId).get();
+          const siblings = [];
+          siblingSnap.forEach(d => siblings.push({ id: d.id, ...d.data() }));
+          const stillPending  = siblings.filter(s => s.status === 'pending').length;
+          const nowAccepted   = siblings.filter(s => s.status === 'accepted').length;
+
+          if (stillPending === 0 && nowAccepted < needed) {
+            // Keine offenen Anfragen mehr und nicht genügend Zusagen → Training automatisch absagen
+            await firestore.collection('events').doc(ev.id).update({
+              status: 'cancelled',
+              cancellationReason: 'Keine Vertretung gefunden – automatisch abgesagt.',
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            showToast('Alle Anfragen abgelehnt. Training wurde automatisch abgesagt.', 'error');
+          } else {
+            showToast('Vertretungsanfrage abgelehnt.', 'warning');
+          }
           openTrainerEventDetail(ev);
         } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
       };
@@ -556,7 +633,7 @@ async function openTrainerEventDetail(event) {
     });
 
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
-      // Alle anderen Trainer als mögliche Vertretung (nicht nur am Event eingetragene)
+      // Kandidaten = alle Trainer außer bereits abgemeldeten
       const subCandidates = allTeachers.filter(t => !cancelledIds.includes(t.uid));
 
       showModal({
@@ -575,23 +652,35 @@ async function openTrainerEventDetail(event) {
           </div>
           <label>Begründung (optional)</label>
           <input type="text" id="cancel-reason" placeholder="z.B. Krankheit" />
+
           <div id="sub-req-section" style="margin-top:8px;">
             <hr style="border:none;border-top:1px solid var(--color-border);margin:12px 0;" />
-            <p style="margin:0 0 8px;font-weight:500;">Vertretung anfragen (optional)</p>
-            <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Sende eine Anfrage an einen anderen Trainer, das Training zu übernehmen.</p>
+            <p style="margin:0 0 4px;font-weight:500;">Vertretung anfragen (optional)</p>
+            <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Sende Anfragen an andere Trainer. Wähle mehrere aus.</p>
+
+            <label style="font-size:0.9rem;">Wie viele Vertretungen werden benötigt?</label>
+            <input type="number" id="sub-needed-count" min="1" max="${subCandidates.length || 1}"
+              value="1" style="width:80px;margin-bottom:10px;" />
+
             ${subCandidates.length ? `
-              <label>Trainer auswählen</label>
-              <select id="sub-target">
-                <option value="">-- keine Anfrage --</option>
-                ${subCandidates.map(t => `<option value="${t.uid}">${t.name}</option>`).join('')}
-              </select>` : '<p class="text-muted" style="font-size:0.85rem;">Keine anderen Trainer verfügbar.</p>'}
+              <label style="font-size:0.9rem;">Trainer auswählen (mehrere möglich)</label>
+              <div id="sub-candidates-list" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;padding:4px 0;">
+                ${subCandidates.map(t => `
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--color-text);padding:4px 6px;border-radius:6px;border:1px solid var(--color-border);">
+                    <input type="checkbox" class="sub-candidate-cb" value="${t.uid}" style="width:16px;height:16px;" />
+                    ${t.name}
+                  </label>`).join('')}
+              </div>` : '<p class="text-muted" style="font-size:0.85rem;">Keine anderen Trainer verfügbar.</p>'}
           </div>
         `,
         confirmLabel: 'Bestätigen',
         onConfirm: async () => {
-          const reason    = document.getElementById('cancel-reason')?.value || '';
-          const type      = document.querySelector('input[name="cancel-type"]:checked')?.value || 'self';
-          const subTarget = document.getElementById('sub-target')?.value || '';
+          const reason      = document.getElementById('cancel-reason')?.value || '';
+          const type        = document.querySelector('input[name="cancel-type"]:checked')?.value || 'self';
+          const neededCount = parseInt(document.getElementById('sub-needed-count')?.value) || 1;
+          const selectedCbs = document.querySelectorAll('.sub-candidate-cb:checked');
+          const selectedUids = Array.from(selectedCbs).map(cb => cb.value);
+
           try {
             if (type === 'self') {
               await firestore.collection('events').doc(ev.id).update({
@@ -600,14 +689,19 @@ async function openTrainerEventDetail(event) {
                 updatedAt:            firebase.firestore.FieldValue.serverTimestamp()
               });
               showToast('Du wurdest abgemeldet.', 'success');
-              if (subTarget) {
-                const targetName = subCandidates.find(t => t.uid === subTarget)?.name || subTarget;
-                await firestore.collection('substituteRequests').add({
-                  eventId: ev.id, requesterId: myUid, targetId: subTarget,
-                  reason, status: 'pending',
-                  createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                showToast(`Vertretungsanfrage an ${targetName} gesendet.`, 'success');
+
+              if (selectedUids.length > 0) {
+                const batch = firestore.batch();
+                for (const targetUid of selectedUids) {
+                  const ref = firestore.collection('substituteRequests').doc();
+                  batch.set(ref, {
+                    eventId: ev.id, requesterId: myUid, targetId: targetUid,
+                    reason, neededCount, status: 'pending',
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                  });
+                }
+                await batch.commit();
+                showToast(`Vertretungsanfrage an ${selectedUids.length} Trainer gesendet.`, 'success');
               }
             } else {
               await firestore.collection('events').doc(ev.id).update({
