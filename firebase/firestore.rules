@@ -38,10 +38,6 @@ service cloud.firestore {
     }
 
     // EVENTS
-    // Trainer duerfen updaten wenn sie im trainers-Array ODER in einer Gruppe des Events sind.
-    // Da Gruppen-Pruefung einen extra-Read erfordern wuerde (teuer), erlauben wir
-    // allen teacher-Rolle das Updaten bestimmter Felder (trainer-safe fields).
-    // Admin/Coordinator duerfen alles.
     match /events/{eventId} {
       allow read:   if isSignedIn();
       allow create: if hasRole('admin') || hasRole('coordinator');
@@ -56,10 +52,9 @@ service cloud.firestore {
         get(/databases/$(database)/documents/events/$(eventId)).data.trainers;
     }
 
-    // Felder die ein Trainer ohne trainers-Array-Eintrag aendern darf
     function onlyTrainerSafeFields() {
       let allowed = ['status', 'cancellationReason', 'trainerLateNote',
-                     'trainerBroadcast', 'trainers', 'updatedAt'];
+                     'trainerBroadcast', 'trainers', 'trainerCancellations', 'updatedAt'];
       return request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(allowed);
     }
@@ -72,6 +67,18 @@ service cloud.firestore {
         isPrivileged() ||
         request.auth.uid == resource.data.userId
       );
+      allow delete: if isPrivileged() ||
+                       request.auth.uid == resource.data.userId;
+    }
+
+    // SUBSTITUTE REQUESTS
+    // Trainer stellen Anfragen und lesen sie; Privilegierte duerfen alles
+    match /substituteRequests/{docId} {
+      allow read:   if isPrivileged();
+      allow create: if hasRole('teacher') || isPrivileged();
+      allow update: if isPrivileged() ||
+                       request.auth.uid == resource.data.requesterId ||
+                       request.auth.uid == resource.data.targetId;
       allow delete: if isPrivileged();
     }
 
