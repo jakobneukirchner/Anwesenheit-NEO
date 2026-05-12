@@ -6,18 +6,26 @@ async function getUserData(uid) {
   return doc.data();
 }
 
-// Branding so früh wie möglich laden – noch vor Login
 applyBranding();
 
 firebaseAuth.onAuthStateChanged(async (user) => {
   const logoutBtn  = document.getElementById('logout-btn');
   const profileBtn = document.getElementById('profile-btn');
   const userNameEl = document.getElementById('app-user-name');
+  const menuBtn    = document.getElementById('mobile-menu-btn');
+
+  // Mobile Drawer Buttons
+  const mobileLogout  = document.getElementById('mobile-logout-btn');
+  const mobileProfile = document.getElementById('mobile-profile-btn');
+  const mobileNameEl  = document.getElementById('mobile-user-name');
 
   if (!user) {
     if (logoutBtn)  logoutBtn.hidden  = true;
     if (profileBtn) profileBtn.hidden = true;
     if (userNameEl) userNameEl.textContent = '';
+    if (menuBtn)  { menuBtn.hidden = true; menuBtn._authVisible = false; }
+    if (mobileLogout)  mobileLogout.hidden  = true;
+    if (mobileProfile) mobileProfile.hidden = true;
     removeDashboardSwitcher();
     renderLoginPage();
     return;
@@ -30,10 +38,14 @@ firebaseAuth.onAuthStateChanged(async (user) => {
     displayName: userData.displayName || user.email
   };
 
+  const displayName = window.currentUser.displayName;
+
   if (userNameEl) {
-    userNameEl.textContent = window.currentUser.displayName;
+    userNameEl.textContent = displayName;
     userNameEl.onclick = () => loadProfilePage();
   }
+  if (mobileNameEl) mobileNameEl.textContent = displayName;
+
   if (logoutBtn) {
     logoutBtn.hidden = false;
     logoutBtn.onclick = () => firebaseAuth.signOut();
@@ -42,18 +54,27 @@ firebaseAuth.onAuthStateChanged(async (user) => {
     profileBtn.hidden = false;
     profileBtn.onclick = () => loadProfilePage();
   }
+  if (mobileLogout) {
+    mobileLogout.hidden = false;
+    mobileLogout.onclick = () => { if(window._mobileDrawerClose) window._mobileDrawerClose(); firebaseAuth.signOut(); };
+  }
+  if (mobileProfile) {
+    mobileProfile.hidden = false;
+    mobileProfile.onclick = () => { if(window._mobileDrawerClose) window._mobileDrawerClose(); loadProfilePage(); };
+  }
+  if (menuBtn) {
+    menuBtn._authVisible = true;
+    if (window._checkBreakpoint) window._checkBreakpoint();
+  }
 
   await applyBranding();
   routeToDashboard(window.currentUser.roles);
 });
 
-// Rollen-Priorität für normales Routing
 const ROLE_ORDER = ['admin', 'coordinator', 'teacher', 'member'];
 
 function getPrimaryRole(roles) {
-  for (const r of ROLE_ORDER) {
-    if (roles.includes(r)) return r;
-  }
+  for (const r of ROLE_ORDER) { if (roles.includes(r)) return r; }
   return 'member';
 }
 
@@ -72,7 +93,14 @@ const ROLE_LABELS_SWITCHER = {
   member:      'Mitglieder'
 };
 
-// Rollen die Zugriff auf Statistiken haben
+const ROLE_ICONS = {
+  admin:       'admin_panel_settings',
+  coordinator: 'supervisor_account',
+  teacher:     'sports',
+  member:      'group',
+  statistics:  'bar_chart'
+};
+
 const STATS_ROLES = ['admin', 'coordinator', 'teacher'];
 
 function routeToDashboard(roles, forceRole) {
@@ -86,82 +114,91 @@ function renderDashboardSwitcher(roles) {
   removeDashboardSwitcher();
   const available = ROLE_ORDER.filter(r => roles.includes(r));
   const hasStats  = STATS_ROLES.some(r => roles.includes(r));
-
-  // Nur anzeigen wenn mehr als 1 Rolle ODER Statistiken verfügbar
   if (available.length <= 1 && !hasStats) return;
 
-  const bar = document.querySelector('.app-actions');
-  if (!bar) return;
+  // ── Desktop Switcher ──
+  const bar = document.querySelector('#app-actions-desktop');
+  if (bar) {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'role-switcher';
+    Object.assign(wrapper.style, { display:'flex', alignItems:'center', gap:'2px', marginRight:'6px' });
 
-  const wrapper = document.createElement('div');
-  wrapper.id = 'role-switcher';
-  Object.assign(wrapper.style, { display:'flex', alignItems:'center', gap:'4px', marginRight:'8px' });
-
-  // Dashboard-Buttons (nur wenn mehrere Rollen)
-  if (available.length > 1) {
-    available.forEach(role => {
+    const makeBtn = (role, label) => {
       const btn = document.createElement('button');
       btn.className = 'btn-text role-switch-btn';
-      btn.textContent = ROLE_LABELS_SWITCHER[role] || role;
       btn.dataset.role = role;
-      Object.assign(btn.style, {
-        fontSize: '0.82rem', padding: '4px 10px', borderRadius: '4px',
-        opacity:    role === window.currentDashboardRole ? '1' : '0.65',
-        background: role === window.currentDashboardRole ? 'rgba(255,255,255,0.18)' : 'none',
-        fontWeight: role === window.currentDashboardRole ? '700' : '400'
-      });
+      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role] || 'dashboard'}</span><span class="btn-label">${label}</span>`;
+      _applyActive(btn, role === window.currentDashboardRole);
       btn.onclick = () => {
         window.currentDashboardRole = role;
         _updateSwitcherActive(wrapper, role);
+        _updateMobileActive(role);
         (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
+        if (window._mobileDrawerClose) window._mobileDrawerClose();
       };
-      wrapper.appendChild(btn);
-    });
-  }
-
-  // Statistiken-Button für berechtigte Rollen
-  if (hasStats) {
-    // Trennlinie wenn schon andere Buttons da sind
-    if (available.length > 1) {
-      const sep = document.createElement('span');
-      sep.textContent = '|';
-      Object.assign(sep.style, { color: 'rgba(255,255,255,0.35)', fontSize: '0.9rem', padding: '0 2px' });
-      wrapper.appendChild(sep);
-    }
-
-    const statsBtn = document.createElement('button');
-    statsBtn.className = 'btn-text role-switch-btn';
-    statsBtn.textContent = '\uD83D\uDCCA Statistiken';
-    statsBtn.dataset.role = 'statistics';
-    Object.assign(statsBtn.style, {
-      fontSize: '0.82rem', padding: '4px 10px', borderRadius: '4px',
-      opacity:    window.currentDashboardRole === 'statistics' ? '1' : '0.65',
-      background: window.currentDashboardRole === 'statistics' ? 'rgba(255,255,255,0.18)' : 'none',
-      fontWeight: window.currentDashboardRole === 'statistics' ? '700' : '400'
-    });
-    statsBtn.onclick = () => {
-      window.currentDashboardRole = 'statistics';
-      _updateSwitcherActive(wrapper, 'statistics');
-      loadStatisticsDashboard();
+      return btn;
     };
-    wrapper.appendChild(statsBtn);
+
+    if (available.length > 1) {
+      available.forEach(r => wrapper.appendChild(makeBtn(r, ROLE_LABELS_SWITCHER[r] || r)));
+    }
+    if (hasStats) {
+      if (available.length > 1) {
+        const sep = document.createElement('span');
+        sep.textContent = '|';
+        Object.assign(sep.style, { color:'rgba(255,255,255,0.35)', fontSize:'0.9rem', padding:'0 2px' });
+        wrapper.appendChild(sep);
+      }
+      wrapper.appendChild(makeBtn('statistics', 'Statistiken'));
+    }
+    bar.insertBefore(wrapper, bar.firstChild);
   }
 
-  bar.insertBefore(wrapper, bar.firstChild);
+  // ── Mobile Drawer Switcher ──
+  const mobileContainer = document.getElementById('mobile-role-switcher');
+  if (mobileContainer) {
+    mobileContainer.innerHTML = '';
+    const allRoles = [...(available.length > 1 ? available : []), ...(hasStats ? ['statistics'] : [])];
+    allRoles.forEach(role => {
+      const label = role === 'statistics' ? 'Statistiken' : (ROLE_LABELS_SWITCHER[role] || role);
+      const btn   = document.createElement('button');
+      btn.className = 'mobile-role-btn' + (role === window.currentDashboardRole ? ' active' : '');
+      btn.dataset.role = role;
+      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role] || 'dashboard'}</span>${label}`;
+      btn.onclick = () => {
+        window.currentDashboardRole = role;
+        _updateSwitcherActive(document.getElementById('role-switcher'), role);
+        _updateMobileActive(role);
+        (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
+        if (window._mobileDrawerClose) window._mobileDrawerClose();
+      };
+      mobileContainer.appendChild(btn);
+    });
+  }
+}
+
+function _applyActive(btn, isActive) {
+  btn.style.opacity    = isActive ? '1' : '0.65';
+  btn.style.background = isActive ? 'rgba(255,255,255,0.18)' : 'none';
+  btn.style.fontWeight = isActive ? '700' : '400';
 }
 
 function _updateSwitcherActive(wrapper, activeRole) {
-  wrapper.querySelectorAll('.role-switch-btn').forEach(b => {
-    const active = b.dataset.role === activeRole;
-    b.style.opacity    = active ? '1' : '0.65';
-    b.style.background = active ? 'rgba(255,255,255,0.18)' : 'none';
-    b.style.fontWeight = active ? '700' : '400';
+  if (!wrapper) return;
+  wrapper.querySelectorAll('.role-switch-btn').forEach(b => _applyActive(b, b.dataset.role === activeRole));
+}
+
+function _updateMobileActive(activeRole) {
+  document.querySelectorAll('.mobile-role-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.role === activeRole);
   });
 }
 
 function removeDashboardSwitcher() {
   const el = document.getElementById('role-switcher');
   if (el) el.remove();
+  const mc = document.getElementById('mobile-role-switcher');
+  if (mc) mc.innerHTML = '';
 }
 
 function renderLoginPage() {
@@ -200,7 +237,7 @@ function renderLoginPage() {
       const msgs = {
         'auth/user-not-found':    'Benutzer nicht gefunden.',
         'auth/wrong-password':    'Falsches Passwort.',
-        'auth/invalid-email':     'Ungültige E-Mail-Adresse.',
+        'auth/invalid-email':     'Ungueltige E-Mail-Adresse.',
         'auth/too-many-requests': 'Zu viele Versuche. Bitte warte kurz.',
         'auth/invalid-credential':'E-Mail oder Passwort falsch.'
       };
