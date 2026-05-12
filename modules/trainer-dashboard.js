@@ -165,13 +165,13 @@ async function openTrainerEventDetail(event) {
       trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
     }));
 
-    // Alle Teacher/Trainer-Nutzer laden (für Vertretungsauswahl)
+    // Alle Nutzer mit Rolle 'teacher', 'admin' oder 'coordinator' laden (für Vertretungsauswahl)
     const allTeachersSnap = await firestore.collection('users').get();
     const allTeachers = [];
     allTeachersSnap.forEach(doc => {
       const d = doc.data();
-      const roles = d.roles || {};
-      if (doc.id !== myUid && (roles.teacher || roles.admin || roles.coordinator)) {
+      const roles = d.roles || [];
+      if (doc.id !== myUid && (roles.includes('teacher') || roles.includes('admin') || roles.includes('coordinator'))) {
         allTeachers.push({ uid: doc.id, name: d.displayName || d.email || doc.id });
       }
     });
@@ -282,7 +282,7 @@ async function openTrainerEventDetail(event) {
     const incomingSubHtml = incomingReqs.map(req => `
       <div class="card" style="margin-bottom:12px;border-left:4px solid var(--color-primary);background:rgba(21,101,192,0.05);">
         <p style="margin:0 0 4px;font-weight:600;">&#128235; Vertretungsanfrage</p>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Du wurdest als mögliche Vertretung angefragt${req.reason ? ': „' + req.reason + '“' : '.'}</p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.88rem;">Du wurdest als mögliche Vertretung angefragt${req.reason ? ': „' + req.reason + '"' : '.'}</p>
         <div style="display:flex;gap:8px;">
           <button class="btn-primary sub-accept-btn" data-sub-id="${req.id}" style="padding:5px 14px;">Annehmen</button>
           <button class="btn-secondary sub-decline-btn" data-sub-id="${req.id}" style="padding:5px 14px;">Ablehnen</button>
@@ -529,7 +529,6 @@ async function openTrainerEventDetail(event) {
     });
 
     document.getElementById('save-all-attendance')?.addEventListener('click', async () => {
-      const errorEl = document.getElementById('detail-error');
       try {
         const batch = firestore.batch();
         container.querySelectorAll('.status-select').forEach(sel => {
@@ -557,7 +556,7 @@ async function openTrainerEventDetail(event) {
     });
 
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
-      // Alle anderen Teacher als mögliche Vertretung (nicht nur am Event eingetragene)
+      // Alle anderen Trainer als mögliche Vertretung (nicht nur am Event eingetragene)
       const subCandidates = allTeachers.filter(t => !cancelledIds.includes(t.uid));
 
       showModal({
