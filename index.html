@@ -34,15 +34,13 @@
     <div class="app-shell">
 
       <header class="app-bar">
-        <!-- Linke Seite: Logo + Titel -->
         <div class="app-brand">
           <div id="app-logo" class="app-logo"></div>
           <span id="app-title">Anwesenheit-NEO</span>
         </div>
 
-        <!-- Rechte Seite Desktop: Role-Switcher + User-Aktionen -->
-        <div class="app-actions" id="app-actions-desktop">
-          <!-- #role-switcher wird von auth.js hier eingefuegt -->
+        <!-- Desktop-Aktionen (per CSS auf Mobile ausgeblendet) -->
+        <div class="app-actions desktop-only" id="app-actions-desktop">
           <span id="app-user-name"
             style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
             title="Mein Konto"></span>
@@ -56,8 +54,8 @@
           </button>
         </div>
 
-        <!-- Hamburger fuer Mobile -->
-        <button id="mobile-menu-btn" class="btn-text btn-icon-only" hidden title="Menu" aria-label="Menu">
+        <!-- Hamburger: NUR auf Mobile sichtbar (CSS .mobile-only) -->
+        <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menu" aria-label="Menu">
           <span class="material-icons">menu</span>
         </button>
       </header>
@@ -65,7 +63,7 @@
       <!-- Mobile Drawer -->
       <div id="mobile-drawer" class="mobile-drawer" hidden>
         <div class="mobile-drawer-inner">
-          <div id="mobile-user-info" style="padding:16px 20px 12px;border-bottom:1px solid var(--color-border);">
+          <div style="padding:16px 20px 12px;border-bottom:1px solid var(--color-border);">
             <div style="display:flex;align-items:center;gap:10px;">
               <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
               <div>
@@ -106,11 +104,10 @@
   <script src="/js/auth.js"></script>
 
   <script>
-    // Mobile Drawer Logic
     (function() {
-      const menuBtn  = document.getElementById('mobile-menu-btn');
-      const drawer   = document.getElementById('mobile-drawer');
-      const overlay  = document.getElementById('mobile-drawer-overlay');
+      const menuBtn = document.getElementById('mobile-menu-btn');
+      const drawer  = document.getElementById('mobile-drawer');
+      const overlay = document.getElementById('mobile-drawer-overlay');
 
       function openDrawer()  { drawer.hidden = false; overlay.hidden = false; document.body.style.overflow = 'hidden'; }
       function closeDrawer() { drawer.hidden = true;  overlay.hidden = true;  document.body.style.overflow = ''; }
@@ -118,17 +115,7 @@
       menuBtn.addEventListener('click', openDrawer);
       overlay.addEventListener('click', closeDrawer);
 
-      // Responsive: Hamburger nur auf kleinen Screens zeigen
-      function checkBreakpoint() {
-        const isMobile = window.innerWidth < 640;
-        menuBtn.hidden = !menuBtn._authVisible || !isMobile;
-        const actionsDesktop = document.getElementById('app-actions-desktop');
-        if (actionsDesktop) actionsDesktop.classList.toggle('hidden-mobile', isMobile);
-      }
-      window.addEventListener('resize', checkBreakpoint);
-      checkBreakpoint();
       window._mobileDrawerClose = closeDrawer;
-      window._checkBreakpoint   = checkBreakpoint;
     })();
   </script>
 </body>
