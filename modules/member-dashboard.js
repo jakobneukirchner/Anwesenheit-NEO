@@ -72,6 +72,20 @@ async function loadMemberDashboard() {
           return uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || uid) : uid;
         }));
       }
+
+      // Trainer-Status laden
+      const trainerIds    = ev.trainers || [];
+      const cancelledIds  = ev.trainerCancellations || [];
+      const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
+      if (allTrainerIds.length) {
+        const trainerNames = {};
+        await Promise.all(allTrainerIds.map(async tid => {
+          const uDoc = await firestore.collection('users').doc(tid).get();
+          trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
+        }));
+        ev._trainerNames    = trainerIds.map(tid => trainerNames[tid] || tid);
+        ev._trainerCancelled = cancelledIds.map(tid => trainerNames[tid] || tid);
+      }
     }));
 
     events.sort((a, b) => (a.startTime?.toMillis?.() || 0) - (b.startTime?.toMillis?.() || 0));
@@ -142,6 +156,31 @@ function buildParticipantInfoHtml(event, isPast) {
   return `<div class="participant-info">${content}</div>`;
 }
 
+/** Trainer-Status Anzeige für Mitglieder */
+function buildTrainerInfoHtml(event, isPast) {
+  if (isPast) return '';
+  const active    = event._trainerNames    || [];
+  const cancelled = event._trainerCancelled || [];
+  if (!active.length && !cancelled.length) return '';
+
+  const activePills = active.map(n =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(46,125,50,0.1);color:var(--color-success,#2e7d32);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;">&#10003; ${n}</span>`
+  ).join(' ');
+
+  const cancelledPills = cancelled.map(n =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(198,40,40,0.1);color:var(--color-error,#c62828);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;text-decoration:line-through;">&#10005; ${n}</span>`
+  ).join(' ');
+
+  const warning = cancelled.length && !active.length
+    ? `<span class="chip chip-error" style="font-size:0.78rem;margin-left:6px;">&#9888; Kein Trainer!</span>` : '';
+
+  return `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px;font-size:0.83rem;">
+      <span class="text-muted">Trainer:</span>
+      ${activePills}${cancelledPills}${warning}
+    </div>`;
+}
+
 function renderMemberEventCard(event, attendance, isPast) {
   const settings       = window.appSettings || {};
   const signupMins     = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
@@ -156,9 +195,8 @@ function renderMemberEventCard(event, attendance, isPast) {
   const locked         = isLockedByTrainer(attendance);
   const isCancelled    = event.status === 'cancelled';
 
-  // 5-Minuten-Rückzug-Fenster
-  const regTime        = attendance?.updatedAt?.toDate?.() || null;
-  const canWithdraw    = !locked
+  const regTime     = attendance?.updatedAt?.toDate?.() || null;
+  const canWithdraw = !locked
     && !isPast
     && attendance?.status === 'registered'
     && !attendance?.trainerSet
@@ -200,6 +238,7 @@ function renderMemberEventCard(event, attendance, isPast) {
        </div>` : '';
 
   const participantInfo = buildParticipantInfoHtml(event, isPast);
+  const trainerInfo     = buildTrainerInfoHtml(event, isPast);
 
   const statusChipClass = {
     registered: 'chip-success', cancelled: 'chip-error', present: 'chip-success',
@@ -215,7 +254,6 @@ function renderMemberEventCard(event, attendance, isPast) {
   const lockedHtml = locked
     ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;">🔒 Vom Trainer eingetragen – keine Änderung möglich.</p>` : '';
 
-  // Countdown für Rückzug
   let withdrawHtml = '';
   if (canWithdraw) {
     const secsLeft = Math.max(0, Math.ceil((5 * 60 * 1000 - (now - regTime)) / 1000));
@@ -223,7 +261,7 @@ function renderMemberEventCard(event, attendance, isPast) {
     const secLeft  = secsLeft % 60;
     withdrawHtml = `
       <div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.85rem;color:var(--color-error,#c62828);">⏰ Versehentlich angemeldet? Noch <strong id="withdraw-countdown-${event.id}">${minLeft}:${String(secLeft).padStart(2,'0')}</strong> zum Rückziehen.</span>
+        <span style="font-size:0.85rem;color:var(--color-error,#c62828);">&#9200; Versehentlich angemeldet? Noch <strong id="withdraw-countdown-${event.id}">${minLeft}:${String(secLeft).padStart(2,'0')}</strong> zum Rückziehen.</span>
         <button class="btn-danger" data-action="withdraw" style="padding:4px 14px;font-size:0.85rem;">Anmeldung zurückziehen</button>
       </div>`;
   }
@@ -239,6 +277,7 @@ function renderMemberEventCard(event, attendance, isPast) {
     </div>
     ${lockedHtml}
     ${event.description ? `<p style="margin:10px 0 4px;">${event.description}</p>` : ''}
+    ${trainerInfo}
     ${participantInfo}
     ${!withinDeadline && !isPast && !locked ? '<p class="text-muted" style="font-size:0.85rem;">⏱ Anmeldefrist abgelaufen</p>' : ''}
     <hr class="divider" />
@@ -257,7 +296,6 @@ function renderMemberEventCard(event, attendance, isPast) {
   if (!locked) {
     const errorEl   = card.querySelector('[data-role="error"]');
 
-    // Anmeldung zurückziehen (löscht Eintrag vollständig)
     const withdrawBtn = card.querySelector('[data-action="withdraw"]');
     if (withdrawBtn) withdrawBtn.onclick = () => guardedAction(async () => {
       try {
@@ -267,7 +305,6 @@ function renderMemberEventCard(event, attendance, isPast) {
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     });
 
-    // Countdown-Timer live aktualisieren
     if (canWithdraw) {
       const countdownEl = card.querySelector(`#withdraw-countdown-${event.id}`);
       if (countdownEl) {
