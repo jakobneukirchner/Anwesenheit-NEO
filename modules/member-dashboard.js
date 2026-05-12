@@ -32,12 +32,10 @@ async function loadMemberDashboard() {
 
     const directSnap = await firestore.collection('events').where('directMembers', 'array-contains', user.uid).get();
     directSnap.forEach(addEvent);
-
     for (const groupId of userGroups) {
       const groupSnap = await firestore.collection('events').where('groupId', '==', groupId).get();
       groupSnap.forEach(addEvent);
     }
-
     for (const eventId of Object.keys(attendanceByEvent)) {
       if (!seen.has(eventId)) {
         const evDoc = await firestore.collection('events').doc(eventId).get();
@@ -54,7 +52,6 @@ async function loadMemberDashboard() {
       return true;
     });
 
-    // Teilnehmerzahlen parallel laden (alle aktiven Termine)
     const visibilityMode = settings.visibilityMode || 'count';
     await Promise.all(events.map(async ev => {
       if (ev.status === 'cancelled') return;
@@ -70,11 +67,10 @@ async function loadMemberDashboard() {
       });
       ev._participantCount = count;
       if (visibilityMode === 'names' && uids.length) {
-        const resolved = await Promise.all(uids.map(async uid => {
+        ev._participantNames = await Promise.all(uids.map(async uid => {
           const uDoc = await firestore.collection('users').doc(uid).get();
           return uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || uid) : uid;
         }));
-        ev._participantNames = resolved;
       }
     }));
 
@@ -127,38 +123,22 @@ function isLockedByTrainer(attendance) {
   return false;
 }
 
-/** Erzeugt die Teilnehmer-Info-Zeile für alle visibilityModes */
 function buildParticipantInfoHtml(event, isPast) {
   if (isPast) return '';
-  const settings  = window.appSettings || {};
-  const visMode   = settings.visibilityMode || 'count';
-  const minPart   = event.minParticipants ?? settings.defaultMinParticipants ?? 0;
-  const count     = event._participantCount ?? null;
-
+  const settings = window.appSettings || {};
+  const visMode  = settings.visibilityMode || 'count';
+  const minPart  = event.minParticipants ?? settings.defaultMinParticipants ?? 0;
+  const count    = event._participantCount ?? null;
   if (visMode === 'none' || count === null) return '';
-
-  const missing = minPart ? Math.max(0, minPart - count) : 0;
-
-  let content = '';
-
-  if (visMode === 'names' && event._participantNames?.length) {
-    // Namen-Modus: Namen auflisten + Benötigt-Info
-    content = `
-      <span class="pi-count">${count} angemeldet</span>:
-      <span>${event._participantNames.join(', ')}</span>`;
-  } else {
-    // count-Modus (Standard)
-    content = `<span class="pi-count">${count} angemeldet</span>`;
-  }
-
+  const missing  = minPart ? Math.max(0, minPart - count) : 0;
+  let content = (visMode === 'names' && event._participantNames?.length)
+    ? `<span class="pi-count">${count} angemeldet</span>: <span>${event._participantNames.join(', ')}</span>`
+    : `<span class="pi-count">${count} angemeldet</span>`;
   if (minPart) {
-    if (missing > 0) {
-      content += ` &nbsp;·&nbsp; <span class="pi-missing">noch ${missing} ben&ouml;tigt</span> <span class="text-muted">(mind. ${minPart})</span>`;
-    } else {
-      content += ` &nbsp;·&nbsp; <span class="pi-ok">&#10004; Mindestanzahl erreicht</span>`;
-    }
+    content += missing > 0
+      ? ` &nbsp;·&nbsp; <span class="pi-missing">noch ${missing} ben&ouml;tigt</span> <span class="text-muted">(mind. ${minPart})</span>`
+      : ` &nbsp;·&nbsp; <span class="pi-ok">&#10004; Mindestanzahl erreicht</span>`;
   }
-
   return `<div class="participant-info">${content}</div>`;
 }
 
@@ -175,6 +155,15 @@ function renderMemberEventCard(event, attendance, isPast) {
   const memberNote     = attendance?.memberNote || '';
   const locked         = isLockedByTrainer(attendance);
   const isCancelled    = event.status === 'cancelled';
+
+  // 5-Minuten-Rückzug-Fenster
+  const regTime        = attendance?.updatedAt?.toDate?.() || null;
+  const canWithdraw    = !locked
+    && !isPast
+    && attendance?.status === 'registered'
+    && !attendance?.trainerSet
+    && regTime
+    && (now - regTime) < 5 * 60 * 1000;
 
   const card = createElement('div', 'card');
 
@@ -226,8 +215,21 @@ function renderMemberEventCard(event, attendance, isPast) {
   const lockedHtml = locked
     ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;">🔒 Vom Trainer eingetragen – keine Änderung möglich.</p>` : '';
 
+  // Countdown für Rückzug
+  let withdrawHtml = '';
+  if (canWithdraw) {
+    const secsLeft = Math.max(0, Math.ceil((5 * 60 * 1000 - (now - regTime)) / 1000));
+    const minLeft  = Math.floor(secsLeft / 60);
+    const secLeft  = secsLeft % 60;
+    withdrawHtml = `
+      <div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.85rem;color:var(--color-error,#c62828);">⏰ Versehentlich angemeldet? Noch <strong id="withdraw-countdown-${event.id}">${minLeft}:${String(secLeft).padStart(2,'0')}</strong> zum Rückziehen.</span>
+        <button class="btn-danger" data-action="withdraw" style="padding:4px 14px;font-size:0.85rem;">Anmeldung zurückziehen</button>
+      </div>`;
+  }
+
   card.innerHTML = `
-    ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}
+    ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}${withdrawHtml}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div>
         <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
@@ -254,6 +256,30 @@ function renderMemberEventCard(event, attendance, isPast) {
 
   if (!locked) {
     const errorEl   = card.querySelector('[data-role="error"]');
+
+    // Anmeldung zurückziehen (löscht Eintrag vollständig)
+    const withdrawBtn = card.querySelector('[data-action="withdraw"]');
+    if (withdrawBtn) withdrawBtn.onclick = () => guardedAction(async () => {
+      try {
+        await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).delete();
+        showToast('Anmeldung erfolgreich zurückgezogen.', 'success');
+        loadMemberDashboard();
+      } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
+    });
+
+    // Countdown-Timer live aktualisieren
+    if (canWithdraw) {
+      const countdownEl = card.querySelector(`#withdraw-countdown-${event.id}`);
+      if (countdownEl) {
+        const timer = setInterval(() => {
+          const remaining = Math.max(0, Math.ceil((5 * 60 * 1000 - (Date.now() - regTime.getTime())) / 1000));
+          const m = Math.floor(remaining / 60), s = remaining % 60;
+          countdownEl.textContent = `${m}:${String(s).padStart(2,'0')}`;
+          if (remaining === 0) { clearInterval(timer); loadMemberDashboard(); }
+        }, 1000);
+      }
+    }
+
     const toggleBtn = card.querySelector('[data-action="toggle"]');
     if (toggleBtn) toggleBtn.onclick = () => guardedAction(async () => {
       try { await memberToggleAttendance(event, attendance, mode, deadline); }

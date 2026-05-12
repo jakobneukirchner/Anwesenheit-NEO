@@ -308,6 +308,14 @@ async function renderScheduleTab(el) {
     const groupsSnap = await firestore.collection('groups').orderBy('name').get();
     const groups = [];
     groupsSnap.forEach(doc => groups.push({ id: doc.id, ...doc.data() }));
+    // Trainer-Liste laden (alle User mit Rolle teacher)
+    const trainersSnap = await firestore.collection('users').orderBy('displayName').get();
+    const allTrainers = [];
+    trainersSnap.forEach(doc => {
+      const d = doc.data();
+      if ((d.roles||[]).includes('teacher')) allTrainers.push({ id: doc.id, ...d });
+    });
+    window._allTrainers = allTrainers;
 
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
@@ -315,17 +323,17 @@ async function renderScheduleTab(el) {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button id="sch-delete-selected" class="btn-danger" hidden style="padding:6px 14px;">Ausgewählte löschen</button>
           <div style="display:flex;border:1px solid var(--color-border);border-radius:6px;overflow:hidden;">
-            <button id="view-list"     class="view-toggle-btn ${scheduleViewMode==='list'    ?'active':''}">🗒 Liste</button>
-            <button id="view-calendar" class="view-toggle-btn ${scheduleViewMode==='calendar'?'active':''}">📅 Kalender</button>
+            <button id="view-list"     class="view-toggle-btn ${scheduleViewMode==='list'    ?'active':''}">&#128221; Liste</button>
+            <button id="view-calendar" class="view-toggle-btn ${scheduleViewMode==='calendar'?'active':''}">&#128197; Kalender</button>
           </div>
           <button class="btn-primary" id="add-event-btn">+ Termin</button>
         </div>
       </div>
       <div id="schedule-content"></div>`;
 
-    const contentEl   = el.querySelector('#schedule-content');
+    const contentEl    = el.querySelector('#schedule-content');
     const deleteSelBtn = el.querySelector('#sch-delete-selected');
-    const renderView  = () => scheduleViewMode === 'list'
+    const renderView   = () => scheduleViewMode === 'list'
       ? renderEventList(contentEl, events, groups, el, deleteSelBtn)
       : renderCalendarView(contentEl, events, groups, el);
 
@@ -355,7 +363,7 @@ function renderEventList(el, events, groups, parentEl, deleteSelBtn) {
               <td>${ev.title||'–'}</td>
               <td style="white-space:nowrap;">${s?formatDateTime(s):'–'}</td>
               <td>${g}</td>
-              <td><span class="chip ${ev.status==='cancelled'?'chip-error':'chip-success'}">${ev.status||'planned'}</span></td>
+              <td><span class="chip ${ev.status==='cancelled'?'chip-error':ev.status==='skipped'?'chip-warning':'chip-success'}">${ev.status==='cancelled'?'Abgesagt':ev.status==='skipped'?'Ausgefallen':'geplant'}</span></td>
               <td>${ev.recurrence&&ev.recurrence!=='none'?ev.recurrence:'–'}</td>
               <td style="white-space:nowrap;">
                 <button class="btn-secondary" data-action="edit" data-id="${ev.id}" style="padding:3px 10px;">Bearbeiten</button>
@@ -427,8 +435,8 @@ function renderCalendarView(el, events, groups, parentEl) {
   for(let day=1;day<=lastDay.getDate();day++){
     const isToday=today.getFullYear()===year&&today.getMonth()===month&&today.getDate()===day;
     const de=byDay[day]||[];
-    const pills=de.slice(0,3).map(ev=>`<div class="cal-event-pill" data-ev-id="${ev.id}" style="font-size:0.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px;padding:1px 5px;margin-bottom:1px;cursor:pointer;background:${ev.status==='cancelled'?'var(--color-error)':'var(--color-primary)'};color:#fff;">${ev.title||'Termin'}</div>`).join('');
-    const more=de.length>3?`<div style="font-size:0.7rem;color:var(--color-text-muted);">+${de.length-3} mehr</div>`:""; 
+    const pills=de.slice(0,3).map(ev=>`<div class="cal-event-pill" data-ev-id="${ev.id}" style="font-size:0.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px;padding:1px 5px;margin-bottom:1px;cursor:pointer;background:${ev.status==='cancelled'?'var(--color-error)':ev.status==='skipped'?'var(--color-warning)':'var(--color-primary)'};color:#fff;">${ev.title||'Termin'}</div>`).join('');
+    const more=de.length>3?`<div style="font-size:0.7rem;color:var(--color-text-muted);">+${de.length-3} mehr</div>`:"";
     html+=`<div style="min-height:90px;border:1px solid var(--color-border);border-radius:6px;padding:4px;background:${isToday?'rgba(21,101,192,0.07)':'var(--color-surface)'};"><div style="font-size:0.82rem;font-weight:${isToday?700:400};color:${isToday?'var(--color-primary)':'var(--color-text)'};margin-bottom:3px;">${day}</div>${pills}${more}</div>`;
   }
   html+=`</div>`;
@@ -439,10 +447,23 @@ function renderCalendarView(el, events, groups, parentEl) {
   el.querySelectorAll('.cal-event-pill').forEach(p=>{ p.onclick=()=>{const ev=events.find(e=>e.id===p.dataset.evId);if(ev)showEventForm(ev,groups,parentEl);}; });
 }
 
-function showEventForm(event, groups, parentEl) {
-  const isNew    = !event;
-  const startVal = event?.startTime?.toDate ? toDatetimeLocal(event.startTime.toDate()) : '';
-  const endVal   = event?.endTime?.toDate   ? toDatetimeLocal(event.endTime.toDate())   : '';
+async function showEventForm(event, groups, parentEl) {
+  const isNew       = !event;
+  const startVal    = event?.startTime?.toDate ? toDatetimeLocal(event.startTime.toDate()) : '';
+  const endVal      = event?.endTime?.toDate   ? toDatetimeLocal(event.endTime.toDate())   : '';
+  const allTrainers = window._allTrainers || [];
+  const selTrainers = new Set(event?.trainers || []);
+
+  // Trainer-Auswahl HTML (Checkbox-Liste mit Suche)
+  const trainerListHtml = allTrainers.length
+    ? allTrainers.map(t => `
+        <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--color-text);background:${selTrainers.has(t.id)?'rgba(21,101,192,0.08)':'transparent'};" class="trainer-pick-row">
+          <input type="checkbox" class="trainer-pick-cb" data-tid="${t.id}" ${selTrainers.has(t.id)?'checked':''} style="width:17px;height:17px;margin-bottom:0;" />
+          <span style="font-weight:500;">${t.displayName||t.email||t.id}</span>
+          <span class="text-muted" style="font-size:0.82rem;">${t.email||''}</span>
+        </label>`).join('')
+    : '<p class="text-muted" style="font-size:0.88rem;">Keine Trainer gefunden. Weise Benutzern zuerst die Rolle „Trainer“ zu.</p>';
+
   showModal({
     title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
     body: `
@@ -455,8 +476,13 @@ function showEventForm(event, groups, parentEl) {
         <option value="">– keine –</option>
         ${groups.map(g=>`<option value="${g.id}" ${event?.groupId===g.id?'selected':''}>${g.name}</option>`).join('')}
       </select>
-      <label>Trainer-UIDs (kommagetrennt)</label>
-      <input type="text" id="ef-trainers" value="${(event?.trainers||[]).join(', ')}" placeholder="uid1, uid2" />
+      <label>Trainer auswählen</label>
+      <div style="border:1px solid var(--color-border);border-radius:6px;padding:4px 0;max-height:180px;overflow-y:auto;background:var(--color-bg-elevated);">
+        <div style="padding:6px 8px 4px;border-bottom:1px solid var(--color-border);">
+          <input type="search" id="ef-trainer-search" placeholder="Trainer suchen..." style="margin-bottom:0;font-size:0.88rem;" />
+        </div>
+        <div id="ef-trainer-list" style="padding:4px 0;">${trainerListHtml}</div>
+      </div>
       <label>Mindest-Teilnehmerzahl</label><input type="number" id="ef-min" value="${event?.minParticipants??0}" min="0" />
       <label>Anmeldefrist (Minuten vor Beginn)</label><input type="number" id="ef-deadline" value="${event?.signupDeadlineMinutes??60}" min="0" />
       <label>Anmeldemodus</label>
@@ -468,10 +494,22 @@ function showEventForm(event, groups, parentEl) {
       <select id="ef-recurrence">
         <option value="none"     ${!event?.recurrence||event?.recurrence==='none'    ?'selected':''}>Einmalig</option>
         <option value="weekly"   ${event?.recurrence==='weekly'  ?'selected':''}>Wöchentlich</option>
-        <option value="biweekly" ${event?.recurrence==='biweekly'?'selected':''}>Zweiwöchentlich</option>
+        <option value="biweekly" ${event?.recurrence==='biweekly'?'selected':''}>Zweuwöchentlich</option>
         <option value="monthly"  ${event?.recurrence==='monthly' ?'selected':''}>Monatlich</option>
       </select>
-      <label>Wiederholung bis</label><input type="date" id="ef-recurrence-end" value="${event?.recurrenceEnd||''}" />`,
+      <label>Wiederholung bis</label><input type="date" id="ef-recurrence-end" value="${event?.recurrenceEnd||''}" />
+      ${!isNew && event?.status !== 'cancelled' ? `
+        <hr class="divider" />
+        <div style="background:rgba(245,124,0,0.07);border-radius:8px;padding:12px;border:1px solid var(--color-warning,#f57c00);">
+          <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#f57c00);">&#128683; Termin ausfallen lassen</p>
+          <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Mitglieder sehen den Termin als ausgefallen (anders als "Abgesagt" bleibt er sichtbar ohne Anmeldung).</p>
+          <label>Begründung (optional)</label>
+          <input type="text" id="ef-skip-reason" placeholder="z.B. Feiertag, kein Trainer verfügbar..." value="${event?.skipReason||''}" />
+          <button type="button" class="btn-danger" id="ef-skip-btn" style="margin-top:0;padding:6px 16px;">
+            ${event?.status==='skipped' ? 'Ausgefallen-Status aufheben' : 'Termin als ausgefallen markieren'}
+          </button>
+        </div>` : ''}
+    `,
     confirmLabel: isNew ? 'Anlegen' : 'Speichern',
     onConfirm: async () => {
       const title    = document.getElementById('ef-title')?.value.trim();
@@ -479,7 +517,7 @@ function showEventForm(event, groups, parentEl) {
       const startStr = document.getElementById('ef-start')?.value;
       const endStr   = document.getElementById('ef-end')?.value;
       const groupId  = document.getElementById('ef-group')?.value||null;
-      const trainers = (document.getElementById('ef-trainers')?.value||'').split(',').map(s=>s.trim()).filter(Boolean);
+      const trainers = [...document.querySelectorAll('.trainer-pick-cb:checked')].map(cb => cb.dataset.tid);
       const minPart  = parseInt(document.getElementById('ef-min')?.value)||0;
       const deadline = parseInt(document.getElementById('ef-deadline')?.value)||60;
       const mode     = document.getElementById('ef-mode')?.value||'opt_in';
@@ -501,6 +539,47 @@ function showEventForm(event, groups, parentEl) {
       renderScheduleTab(parentEl);
     }
   });
+
+  // Trainer-Suche live
+  setTimeout(() => {
+    const searchEl = document.getElementById('ef-trainer-search');
+    const listEl   = document.getElementById('ef-trainer-list');
+    if (searchEl && listEl) {
+      searchEl.oninput = () => {
+        const q = searchEl.value.toLowerCase();
+        listEl.querySelectorAll('.trainer-pick-row').forEach(row => {
+          const name = row.textContent.toLowerCase();
+          row.style.display = name.includes(q) ? '' : 'none';
+        });
+      };
+      // Checkbox-Höherklick Highlight
+      listEl.querySelectorAll('.trainer-pick-cb').forEach(cb => {
+        cb.onchange = () => {
+          cb.closest('.trainer-pick-row').style.background = cb.checked ? 'rgba(21,101,192,0.08)' : 'transparent';
+        };
+      });
+    }
+
+    // Termin ausfallen lassen
+    const skipBtn = document.getElementById('ef-skip-btn');
+    if (skipBtn) {
+      skipBtn.onclick = async () => {
+        const reason = document.getElementById('ef-skip-reason')?.value.trim() || '';
+        const isSkipped = event?.status === 'skipped';
+        try {
+          await firestore.collection('events').doc(event.id).update({
+            status:     isSkipped ? 'planned' : 'skipped',
+            skipReason: isSkipped ? firebase.firestore.FieldValue.delete() : reason,
+            updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+          });
+          showToast(isSkipped ? 'Ausgefallen-Status aufgehoben.' : 'Termin als ausgefallen markiert.', 'success');
+          // Modal schließen
+          document.querySelector('.modal-overlay')?.remove();
+          renderScheduleTab(parentEl);
+        } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
+      };
+    }
+  }, 50);
 }
 
 function generateRecurringDates(startDate, endDate, recurrence, until) {
