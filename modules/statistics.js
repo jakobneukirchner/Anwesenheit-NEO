@@ -1,76 +1,75 @@
 // modules/statistics.js
-// Statistik-Modul: Ranglisten mit Zeitraumauswahl & PDF-Export
+
+// Sonderzeichen für jsPDF normieren (kein Unicode-Support in Standard-Helvetica)
+function pdfSafe(str) {
+  return (str || '')
+    .replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue')
+    .replace(/Ä/g,'Ae').replace(/Ö/g,'Oe').replace(/Ü/g,'Ue')
+    .replace(/ß/g,'ss')
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27FF}]/gu, '')
+    .replace(/[^\x00-\x7F]/g, '')  // alle restlichen non-ASCII raus
+    .trim();
+}
+
+function getBrandName() {
+  return (window.appSettings?.brandingTitle || '').trim() || 'Anwesenheit-NEO';
+}
 
 async function loadStatisticsDashboard() {
   const container = document.getElementById('app-content');
   container.innerHTML = `<div class="loading-center">Lade Statistiken...</div>`;
 
-  try {
-    // Zeitraum: Standard = aktuelles Jahr
-    const now   = new Date();
-    const yearStart = new Date(now.getFullYear(), 0, 1);
-    const yearEnd   = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
-
-    const toInputVal = d => d.toISOString().slice(0, 10);
-
-    container.innerHTML = `
-      <h2 style="margin-top:0;">&#128202; Statistiken & Ranglisten</h2>
-
-      <div class="card" style="margin-bottom:16px;">
-        <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;">
-          <div>
-            <label style="font-size:0.85rem;">Von</label>
-            <input type="date" id="stat-from" value="${toInputVal(yearStart)}" />
-          </div>
-          <div>
-            <label style="font-size:0.85rem;">Bis</label>
-            <input type="date" id="stat-to" value="${toInputVal(yearEnd)}" />
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn-text stat-preset" data-preset="year">Dieses Jahr</button>
-            <button class="btn-text stat-preset" data-preset="lastYear">Letztes Jahr</button>
-            <button class="btn-text stat-preset" data-preset="quarter">Dieses Quartal</button>
-            <button class="btn-text stat-preset" data-preset="month">Dieser Monat</button>
-          </div>
-          <button class="btn-primary" id="stat-load-btn">Laden</button>
-        </div>
-      </div>
-
-      <div id="stat-results"><p class="text-muted">Zeitraum auswählen und auf "Laden" klicken.</p></div>
-    `;
-
-    // Preset-Buttons
-    container.querySelectorAll('.stat-preset').forEach(btn => {
-      btn.onclick = () => {
-        const n = new Date();
-        let from, to;
-        if (btn.dataset.preset === 'year') {
-          from = new Date(n.getFullYear(), 0, 1);
-          to   = new Date(n.getFullYear(), 11, 31);
-        } else if (btn.dataset.preset === 'lastYear') {
-          from = new Date(n.getFullYear() - 1, 0, 1);
-          to   = new Date(n.getFullYear() - 1, 11, 31);
-        } else if (btn.dataset.preset === 'quarter') {
-          const q = Math.floor(n.getMonth() / 3);
-          from = new Date(n.getFullYear(), q * 3, 1);
-          to   = new Date(n.getFullYear(), q * 3 + 3, 0);
-        } else if (btn.dataset.preset === 'month') {
-          from = new Date(n.getFullYear(), n.getMonth(), 1);
-          to   = new Date(n.getFullYear(), n.getMonth() + 1, 0);
-        }
-        document.getElementById('stat-from').value = toInputVal(from);
-        document.getElementById('stat-to').value   = toInputVal(to);
-      };
-    });
-
-    document.getElementById('stat-load-btn').onclick = () => runStatistics();
-
-    // Erstes Laden direkt
-    runStatistics();
-
-  } catch (e) {
-    container.innerHTML = `<p class="text-error">Fehler: ${e.message}</p>`;
+  // Sicherstellen dass appSettings geladen ist
+  if (!window.appSettings) {
+    try {
+      const sDoc = await firestore.collection('settings').doc('global').get();
+      window.appSettings = sDoc.exists ? sDoc.data() : {};
+    } catch(e) { window.appSettings = {}; }
   }
+
+  const now       = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const yearEnd   = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
+  const toInputVal = d => d.toISOString().slice(0, 10);
+
+  container.innerHTML = `
+    <h2 style="margin-top:0;">&#128202; Statistiken &amp; Ranglisten</h2>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;">
+        <div>
+          <label style="font-size:0.85rem;">Von</label>
+          <input type="date" id="stat-from" value="${toInputVal(yearStart)}" />
+        </div>
+        <div>
+          <label style="font-size:0.85rem;">Bis</label>
+          <input type="date" id="stat-to" value="${toInputVal(yearEnd)}" />
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-text stat-preset" data-preset="year">Dieses Jahr</button>
+          <button class="btn-text stat-preset" data-preset="lastYear">Letztes Jahr</button>
+          <button class="btn-text stat-preset" data-preset="quarter">Dieses Quartal</button>
+          <button class="btn-text stat-preset" data-preset="month">Dieser Monat</button>
+        </div>
+        <button class="btn-primary" id="stat-load-btn">Laden</button>
+      </div>
+    </div>
+    <div id="stat-results"><p class="text-muted">Zeitraum auswaehlen und auf "Laden" klicken.</p></div>
+  `;
+
+  container.querySelectorAll('.stat-preset').forEach(btn => {
+    btn.onclick = () => {
+      const n = new Date(); let from, to;
+      if      (btn.dataset.preset === 'year')     { from=new Date(n.getFullYear(),0,1);       to=new Date(n.getFullYear(),11,31); }
+      else if (btn.dataset.preset === 'lastYear') { from=new Date(n.getFullYear()-1,0,1);     to=new Date(n.getFullYear()-1,11,31); }
+      else if (btn.dataset.preset === 'quarter')  { const q=Math.floor(n.getMonth()/3); from=new Date(n.getFullYear(),q*3,1); to=new Date(n.getFullYear(),q*3+3,0); }
+      else if (btn.dataset.preset === 'month')    { from=new Date(n.getFullYear(),n.getMonth(),1); to=new Date(n.getFullYear(),n.getMonth()+1,0); }
+      document.getElementById('stat-from').value = toInputVal(from);
+      document.getElementById('stat-to').value   = toInputVal(to);
+    };
+  });
+  document.getElementById('stat-load-btn').onclick = () => runStatistics();
+  runStatistics();
 }
 
 async function runStatistics() {
@@ -80,196 +79,161 @@ async function runStatistics() {
 
   const fromVal = document.getElementById('stat-from')?.value;
   const toVal   = document.getElementById('stat-to')?.value;
-  if (!fromVal || !toVal) { resultsEl.innerHTML = '<p class="text-error">Bitte Zeitraum auswählen.</p>'; return; }
+  if (!fromVal || !toVal) { resultsEl.innerHTML = '<p class="text-error">Bitte Zeitraum auswaehlen.</p>'; return; }
 
   const fromDate = new Date(fromVal + 'T00:00:00');
   const toDate   = new Date(toVal   + 'T23:59:59');
 
   try {
-    // Events im Zeitraum laden
     const evSnap = await firestore.collection('events')
       .where('startTime', '>=', firebase.firestore.Timestamp.fromDate(fromDate))
-      .where('startTime', '<=', firebase.firestore.Timestamp.fromDate(toDate))
-      .get();
+      .where('startTime', '<=', firebase.firestore.Timestamp.fromDate(toDate)).get();
 
-    const events = [];
-    evSnap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
+    const allEvents = [];
+    evSnap.forEach(doc => allEvents.push({ id: doc.id, ...doc.data() }));
 
-    if (!events.length) {
-      resultsEl.innerHTML = '<p class="text-muted">Keine Termine im ausgewählten Zeitraum gefunden.</p>';
+    if (!allEvents.length) {
+      resultsEl.innerHTML = '<p class="text-muted">Keine Termine im ausgewaehlten Zeitraum gefunden.</p>';
       return;
     }
 
-    const eventIds = events.map(e => e.id);
+    // Ausgefallene/abgesagte Termine von Zeitberechnungen ausschliessen
+    const activeEvents    = allEvents.filter(e => e.status !== 'cancelled' && e.status !== 'skipped');
+    const activeEventIds  = activeEvents.map(e => e.id);
 
-    // Event-Dauer berechnen (in Minuten)
+    // Dauer pro Event (nur aktive)
     const eventDuration = {};
-    events.forEach(ev => {
+    activeEvents.forEach(ev => {
       const s = ev.startTime?.toDate?.();
       const e = ev.endTime?.toDate?.();
-      eventDuration[ev.id] = (s && e) ? Math.round((e - s) / 60000) : 60; // Default 60 Min
+      eventDuration[ev.id] = (s && e) ? Math.round((e - s) / 60000) : 60;
     });
 
-    // Alle Anwesenheits-Einträge für diese Events laden (in Batches von 30)
+    // Attendance laden (nur aktive Events)
     const attendances = [];
-    const chunks = [];
-    for (let i = 0; i < eventIds.length; i += 30) chunks.push(eventIds.slice(i, i + 30));
-    for (const chunk of chunks) {
-      const snap = await firestore.collection('eventAttendance')
-        .where('eventId', 'in', chunk).get();
-      snap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
+    if (activeEventIds.length) {
+      const chunks = [];
+      for (let i = 0; i < activeEventIds.length; i += 30) chunks.push(activeEventIds.slice(i, i + 30));
+      for (const chunk of chunks) {
+        const snap = await firestore.collection('eventAttendance').where('eventId', 'in', chunk).get();
+        snap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
+      }
     }
 
-    // Alle betroffenen User laden
-    const userIds = [...new Set(attendances.map(a => a.userId))];
+    // User laden
+    const userIds = [...new Set([
+      ...attendances.map(a => a.userId),
+      ...activeEvents.flatMap(e => e.trainers || [])
+    ])];
     const userMap = {};
     await Promise.all(userIds.map(async uid => {
       const uDoc = await firestore.collection('users').doc(uid).get();
       userMap[uid] = uDoc.exists
-        ? { name: uDoc.data().displayName || uDoc.data().email || uid, email: uDoc.data().email || '' }
-        : { name: uid, email: '' };
+        ? { name: uDoc.data().displayName || uDoc.data().email || uid, email: uDoc.data().email || '', roles: uDoc.data().roles || [] }
+        : { name: uid, email: '', roles: [] };
     }));
 
-    // Statistiken pro Mitglied berechnen
-    const stats = {};
-    const initUser = (uid) => {
-      if (!stats[uid]) stats[uid] = {
-        uid,
-        name:              userMap[uid]?.name || uid,
-        email:             userMap[uid]?.email || '',
-        totalEvents:       0,   // Termine für die registriert
-        present:           0,   // Tatsächlich anwesend
-        absent_excused:    0,
-        absent_unexcused:  0,
-        late:              0,   // verspätet (beide Arten)
-        cancelled:         0,   // selbst abgemeldet
-        presentMinutes:    0,   // Gesamtzeit anwesend in Minuten
-        registeredMinutes: 0,   // Gesamtzeit registriert (unabh. von Status)
-        attendanceRate:    0,   // wird später berechnet
-        punctualityRate:   0,
+    // ===== MITGLIEDER-STATISTIKEN =====
+    const memberStats = {};
+    const initMember = uid => {
+      if (!memberStats[uid]) memberStats[uid] = {
+        uid, name: userMap[uid]?.name || uid, email: userMap[uid]?.email || '',
+        totalEvents: 0, present: 0, absent_excused: 0, absent_unexcused: 0,
+        late: 0, cancelled: 0, presentMinutes: 0, registeredMinutes: 0
       };
     };
-
     attendances.forEach(att => {
-      initUser(att.userId);
-      const s = stats[att.userId];
+      initMember(att.userId);
+      const s   = memberStats[att.userId];
       const dur = eventDuration[att.eventId] || 60;
       s.totalEvents++;
       s.registeredMinutes += dur;
-      if (att.status === 'present') {
-        s.present++;
-        s.presentMinutes += dur;
-      } else if (att.status === 'absent_excused')   { s.absent_excused++; }
-      else if (att.status === 'absent_unexcused')   { s.absent_unexcused++; }
-      else if (att.status === 'late_excused' || att.status === 'late_unexcused') {
-        s.late++;
-        s.presentMinutes += Math.round(dur * 0.75); // Verspätete zählen mit 75%
-      } else if (att.status === 'cancelled') { s.cancelled++; }
+      if (att.status === 'present')                                          { s.present++;         s.presentMinutes += dur; }
+      else if (att.status === 'absent_excused')                              { s.absent_excused++; }
+      else if (att.status === 'absent_unexcused')                            { s.absent_unexcused++; }
+      else if (att.status === 'late_excused' || att.status === 'late_unexcused') { s.late++;        s.presentMinutes += Math.round(dur * 0.75); }
+      else if (att.status === 'cancelled')                                   { s.cancelled++; }
     });
-
-    // Abgeleitete Metriken
-    Object.values(stats).forEach(s => {
+    Object.values(memberStats).forEach(s => {
       s.attendanceRate  = s.totalEvents > 0 ? Math.round((s.present + s.late) / s.totalEvents * 100) : 0;
       s.punctualityRate = (s.present + s.late) > 0 ? Math.round(s.present / (s.present + s.late) * 100) : 100;
       s.absentRate      = s.totalEvents > 0 ? Math.round((s.absent_excused + s.absent_unexcused) / s.totalEvents * 100) : 0;
       s.presentHours    = (s.presentMinutes / 60).toFixed(1);
     });
+    const allMemberStats = Object.values(memberStats);
 
-    const allStats = Object.values(stats);
-    if (!allStats.length) {
-      resultsEl.innerHTML = '<p class="text-muted">Keine Mitgliederdaten im Zeitraum.</p>';
-      return;
-    }
+    // ===== TRAINER-STATISTIKEN =====
+    const trainerStats = {};
+    const initTrainer = uid => {
+      if (!trainerStats[uid]) trainerStats[uid] = {
+        uid, name: userMap[uid]?.name || uid, email: userMap[uid]?.email || '',
+        totalAssigned: 0,    // Termine als Trainer eingeplant
+        totalTrained: 0,     // Termine die nicht ausgefallen sind
+        cancelledEvents: 0,  // selbst abgemeldet (trainerCancellations)
+        trainedMinutes: 0
+      };
+    };
+    activeEvents.forEach(ev => {
+      const dur        = eventDuration[ev.id] || 60;
+      const trainers   = ev.trainers || [];
+      const cancelled  = ev.trainerCancellations || [];
+      trainers.forEach(uid => {
+        initTrainer(uid);
+        trainerStats[uid].totalAssigned++;
+        trainerStats[uid].totalTrained++;
+        trainerStats[uid].trainedMinutes += dur;
+      });
+      cancelled.forEach(uid => {
+        initTrainer(uid);
+        trainerStats[uid].totalAssigned++;
+        trainerStats[uid].cancelledEvents++;
+      });
+    });
+    Object.values(trainerStats).forEach(s => {
+      s.reliabilityRate = s.totalAssigned > 0 ? Math.round((s.totalAssigned - s.cancelledEvents) / s.totalAssigned * 100) : 100;
+      s.trainedHours    = (s.trainedMinutes / 60).toFixed(1);
+    });
+    const allTrainerStats = Object.values(trainerStats);
 
-    // Ranglisten-Definitionen
-    const rankings = [
-      {
-        id: 'most_present',
-        title: '🏆 Meiste Anwesenheiten',
-        desc: 'Mitglieder mit den meisten tatsächlich anwesenden Terminen',
-        sort: (a, b) => b.present - a.present,
-        value: s => `${s.present} Termine`,
-        medal: true,
-      },
-      {
-        id: 'most_hours',
-        title: '⏱️ Höchste Anwesenheitszeit',
-        desc: 'Mitglieder mit der meisten tatsächlichen Zeit im Training',
-        sort: (a, b) => b.presentMinutes - a.presentMinutes,
-        value: s => `${s.presentHours} Std.`,
-        medal: true,
-      },
-      {
-        id: 'best_rate',
-        title: '📊 Höchste Anwesenheitsquote',
-        desc: 'Anteil anwesend+verspätet an allen Terminen (mind. 3 Termine)',
-        filter: s => s.totalEvents >= 3,
-        sort: (a, b) => b.attendanceRate - a.attendanceRate,
-        value: s => `${s.attendanceRate}% (${s.totalEvents} Termine)`,
-        medal: true,
-      },
-      {
-        id: 'most_punctual',
-        title: '⏰ Pünktlichste Mitglieder',
-        desc: 'Höchste Pünktlichkeitsrate (anwesend ohne Verspätung, mind. 3 Termine)',
-        filter: s => s.totalEvents >= 3,
-        sort: (a, b) => b.punctualityRate - a.punctualityRate,
-        value: s => `${s.punctualityRate}% pünktlich`,
-        medal: true,
-      },
-      {
-        id: 'most_active',
-        title: '🔥 Aktivste Mitglieder',
-        desc: 'Meiste Termine insgesamt (registriert für)',
-        sort: (a, b) => b.totalEvents - a.totalEvents,
-        value: s => `${s.totalEvents} Termine gesamt`,
-        medal: true,
-      },
-      {
-        id: 'least_unexcused',
-        title: '✅ Wenigste unentschuldigte Fehlzeiten',
-        desc: 'Mitglieder mit den wenigsten unentschuldigten Fehlzeiten',
-        filter: s => s.totalEvents >= 3,
-        sort: (a, b) => a.absent_unexcused - b.absent_unexcused || b.totalEvents - a.totalEvents,
-        value: s => `${s.absent_unexcused}x unentschuldigt`,
-        medal: false,
-      },
-      {
-        id: 'most_improved',
-        title: '📈 Höchste gesamte Trainingszeit (registriert)',
-        desc: 'Meiste Zeit für die man eingeschrieben war',
-        sort: (a, b) => b.registeredMinutes - a.registeredMinutes,
-        value: s => `${(s.registeredMinutes/60).toFixed(1)} Std. eingeplant`,
-        medal: false,
-      },
+    // ===== RANGLISTEN-DEFINITIONEN =====
+    const memberRankings = [
+      { id:'most_present',   title:'Meiste Anwesenheiten',          desc:'Mitglieder mit den meisten anwesenden Terminen',                       sort:(a,b)=>b.present-a.present,              value:s=>`${s.present} Termine`,                        medal:true  },
+      { id:'most_hours',     title:'Hoechste Anwesenheitszeit',     desc:'Mitglieder mit der meisten tatsaechlichen Trainingszeit',              sort:(a,b)=>b.presentMinutes-a.presentMinutes, value:s=>`${s.presentHours} Std.`,                     medal:true  },
+      { id:'best_rate',      title:'Hoechste Anwesenheitsquote',    desc:'Anteil anwesend+verspaetet an allen Terminen (mind. 3)',               filter:s=>s.totalEvents>=3, sort:(a,b)=>b.attendanceRate-a.attendanceRate,   value:s=>`${s.attendanceRate}% (${s.totalEvents} Termine)`, medal:true  },
+      { id:'most_punctual',  title:'Puenktlichste Mitglieder',      desc:'Hoechste Puenktlichkeitsrate (mind. 3 Termine)',                      filter:s=>s.totalEvents>=3, sort:(a,b)=>b.punctualityRate-a.punctualityRate, value:s=>`${s.punctualityRate}% puenktlich`,            medal:true  },
+      { id:'most_active',    title:'Aktivste Mitglieder',           desc:'Meiste Termine insgesamt eingeschrieben',                             sort:(a,b)=>b.totalEvents-a.totalEvents,       value:s=>`${s.totalEvents} Termine gesamt`,             medal:true  },
+      { id:'least_unexcused',title:'Wenigste unentsch. Fehlzeiten', desc:'Mitglieder mit den wenigsten unentschuldigten Fehlzeiten (mind. 3)',  filter:s=>s.totalEvents>=3, sort:(a,b)=>a.absent_unexcused-b.absent_unexcused||b.totalEvents-a.totalEvents, value:s=>`${s.absent_unexcused}x unentschuldigt`, medal:false },
+      { id:'most_registered',title:'Meiste eingeplante Zeit',       desc:'Meiste Gesamtzeit fuer die man eingeschrieben war',                   sort:(a,b)=>b.registeredMinutes-a.registeredMinutes, value:s=>`${(s.registeredMinutes/60).toFixed(1)} Std. eingeplant`, medal:false },
     ];
 
-    // Ranglisten rendern
-    let html = `
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-        <p class="text-muted" style="margin:0;font-size:0.88rem;">
-          Zeitraum: <strong>${fromDate.toLocaleDateString('de-DE')}</strong> – <strong>${toDate.toLocaleDateString('de-DE')}</strong>
-          &nbsp;·&nbsp; ${events.length} Termine &nbsp;·&nbsp; ${allStats.length} Mitglieder
-        </p>
-        <button class="btn-primary" id="stat-export-pdf">&#128196; Als PDF exportieren</button>
-      </div>
-    `;
+    const trainerRankings = [
+      { id:'tr_most_trained',   title:'Meiste Trainings (Trainer)',      desc:'Trainer mit den meisten durchgefuehrten Einheiten',           sort:(a,b)=>b.totalTrained-a.totalTrained,      value:s=>`${s.totalTrained} Trainings`,          medal:true  },
+      { id:'tr_most_hours',     title:'Meiste Trainingsstunden (Trainer)', desc:'Trainer mit der meisten Zeit auf dem Platz/in der Halle',  sort:(a,b)=>b.trainedMinutes-a.trainedMinutes,  value:s=>`${s.trainedHours} Std.`,               medal:true  },
+      { id:'tr_most_reliable',  title:'Zuverlaessigste Trainer',          desc:'Hoechste Zuverlaessigkeitsrate (kein Abmelden, mind. 2)',    filter:s=>s.totalAssigned>=2, sort:(a,b)=>b.reliabilityRate-a.reliabilityRate, value:s=>`${s.reliabilityRate}% zuverlaessig`,   medal:true  },
+      { id:'tr_least_cancel',   title:'Wenigste Absagen (Trainer)',       desc:'Trainer mit den wenigsten eigenen Abmeldungen',             sort:(a,b)=>a.cancelledEvents-b.cancelledEvents||b.totalAssigned-a.totalAssigned, value:s=>`${s.cancelledEvents}x abgemeldet`, medal:false },
+    ];
 
-    rankings.forEach(rank => {
-      let data = allStats.filter(rank.filter || (() => true)).sort(rank.sort).slice(0, 10);
-      if (!data.length) return;
-      const medals = ['🥇', '🥈', '🥉'];
-      html += `
+    // ===== HTML RENDERN =====
+    const renderRankCard = (rank, dataArr, sectionLabel) => {
+      const data = dataArr.filter(rank.filter || (()=>true)).sort(rank.sort).slice(0,10);
+      if (!data.length) return '';
+      const medals = ['&#129351;','&#129352;','&#129353;'];
+      return `
         <div class="card" style="margin-bottom:16px;" id="rank-${rank.id}">
-          <h3 style="margin:0 0 4px;">${rank.title}</h3>
-          <p class="text-muted" style="margin:0 0 12px;font-size:0.85rem;">${rank.desc}</p>
-          <div style="overflow-x:auto;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
+            <div>
+              <h3 style="margin:0 0 2px;">${rank.title}</h3>
+              <p class="text-muted" style="margin:0;font-size:0.85rem;">${rank.desc}</p>
+            </div>
+            <button class="btn-secondary stat-pdf-single" data-rank-id="${rank.id}" style="padding:5px 12px;font-size:0.85rem;white-space:nowrap;">&#128196; PDF</button>
+          </div>
+          <div style="overflow-x:auto;margin-top:10px;">
             <table>
               <thead><tr><th style="width:40px;">#</th><th>Name</th><th>Wert</th></tr></thead>
               <tbody>
-                ${data.map((s, i) => `
-                  <tr style="${i < 3 && rank.medal ? 'font-weight:600;' : ''}">
-                    <td style="font-size:1.1rem;text-align:center;">${rank.medal && i < 3 ? medals[i] : (i + 1) + '.'}</td>
+                ${data.map((s,i)=>`
+                  <tr style="${i<3&&rank.medal?'font-weight:600;':''}">
+                    <td style="font-size:1.1rem;text-align:center;">${rank.medal&&i<3?medals[i]:(i+1)+'.'}</td>
                     <td>${s.name}</td>
                     <td>${rank.value(s)}</td>
                   </tr>`).join('')}
@@ -277,145 +241,185 @@ async function runStatistics() {
             </table>
           </div>
         </div>`;
-    });
+    };
+
+    let html = `
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+        <p class="text-muted" style="margin:0;font-size:0.88rem;">
+          Zeitraum: <strong>${fromDate.toLocaleDateString('de-DE')}</strong> &ndash; <strong>${toDate.toLocaleDateString('de-DE')}</strong>
+          &nbsp;&middot;&nbsp; ${activeEvents.length} aktive Termine (${allEvents.length - activeEvents.length} ausgefallen/abgesagt)
+          &nbsp;&middot;&nbsp; ${allMemberStats.length} Mitglieder
+        </p>
+        <button class="btn-primary" id="stat-export-all-pdf">&#128196; Alle als PDF</button>
+      </div>
+
+      <h3 style="margin-bottom:8px;">&#128100; Mitglieder-Ranglisten</h3>
+      ${memberRankings.map(r => renderRankCard(r, allMemberStats, 'Mitglieder')).join('')}
+    `;
+
+    if (allTrainerStats.length) {
+      html += `
+        <h3 style="margin-top:24px;margin-bottom:8px;">&#127775; Trainer-Ranglisten</h3>
+        ${trainerRankings.map(r => renderRankCard(r, allTrainerStats, 'Trainer')).join('')}
+      `;
+    }
 
     resultsEl.innerHTML = html;
 
-    // PDF Export
-    document.getElementById('stat-export-pdf')?.addEventListener('click', () => {
-      exportStatisticsPDF(fromDate, toDate, events.length, allStats, rankings);
+    // Alle Rankings zusammen fuer den "Alle als PDF"-Button
+    const allRankings     = [...memberRankings, ...trainerRankings];
+    const allStatsForRank = (rank) => memberRankings.includes(rank) ? allMemberStats : allTrainerStats;
+
+    document.getElementById('stat-export-all-pdf')?.addEventListener('click', () => {
+      exportStatisticsPDF({
+        fromDate, toDate,
+        eventCount: activeEvents.length,
+        memberCount: allMemberStats.length,
+        rankings: allRankings,
+        statsForRank: allStatsForRank,
+        singleRank: null,
+        filename: `Statistik_Alle_${fromDate.toISOString().slice(0,10)}_${toDate.toISOString().slice(0,10)}.pdf`
+      });
     });
 
-  } catch (e) {
-    resultsEl.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
+    resultsEl.querySelectorAll('.stat-pdf-single').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const rankId = btn.dataset.rankId;
+        const rank   = allRankings.find(r => r.id === rankId);
+        if (!rank) return;
+        const statsArr = allStatsForRank(rank);
+        exportStatisticsPDF({
+          fromDate, toDate,
+          eventCount: activeEvents.length,
+          memberCount: allMemberStats.length,
+          rankings: allRankings,
+          statsForRank: allStatsForRank,
+          singleRank: rank,
+          statsArr,
+          filename: `Statistik_${pdfSafe(rank.title).replace(/\s+/g,'_')}_${fromDate.toISOString().slice(0,10)}.pdf`
+        });
+      });
+    });
+
+  } catch(e) {
+    resultsEl.innerHTML = `<p class="text-error">Fehler: ${e.message}</p>`;
     console.error(e);
   }
 }
 
-function exportStatisticsPDF(fromDate, toDate, eventCount, allStats, rankings) {
-  if (typeof window.jspdf === 'undefined' && typeof window.jsPDF === 'undefined') {
-    showToast('PDF-Bibliothek nicht geladen. Bitte Seite neu laden.', 'error');
-    return;
-  }
-  const { jsPDF } = window.jspdf || window;
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-
-  const pageW  = doc.internal.pageSize.getWidth();
-  const pageH  = doc.internal.pageSize.getHeight();
-  const margin = 15;
+function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankings, statsForRank, singleRank, statsArr, filename }) {
+  const jsPDFCtor = (window.jspdf?.jsPDF) || window.jsPDF;
+  if (!jsPDFCtor) { showToast('PDF-Bibliothek nicht geladen. Bitte Seite neu laden.', 'error'); return; }
+  const doc      = new jsPDFCtor({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageW    = doc.internal.pageSize.getWidth();
+  const pageH    = doc.internal.pageSize.getHeight();
+  const margin   = 15;
   const contentW = pageW - margin * 2;
   let y = margin;
+  const brand = pdfSafe(getBrandName());
 
-  const addPage = () => {
-    doc.addPage();
-    y = margin;
-    drawHeader();
-    y += 8;
-  };
+  const addPage = () => { doc.addPage(); y = margin; drawPageHeader(); y += 8; };
+  const checkY  = (h=10) => { if (y + h > pageH - margin - 8) addPage(); };
 
-  const checkY = (needed = 10) => {
-    if (y + needed > pageH - margin) addPage();
-  };
-
-  const drawHeader = () => {
-    // Brand-Balken
+  const drawPageHeader = () => {
     doc.setFillColor(21, 101, 192);
     doc.rect(0, 0, pageW, 14, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text('Anwesenheit-NEO', margin, 9.5);
+    doc.setFontSize(11);
+    doc.text(brand, margin, 9.5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.text('Statistik-Auswertung', pageW - margin, 9.5, { align: 'right' });
     doc.setTextColor(0, 0, 0);
   };
 
-  const drawFooter = (pageNum) => {
+  const drawFooter = (pageNum, total) => {
     doc.setFontSize(7);
     doc.setTextColor(150, 150, 150);
-    doc.text(`Seite ${pageNum} · Exportiert am ${new Date().toLocaleDateString('de-DE')} · Anwesenheit-NEO`, pageW / 2, pageH - 6, { align: 'center' });
+    doc.text(
+      `Seite ${pageNum} von ${total}  |  Exportiert am ${new Date().toLocaleDateString('de-DE')}  |  ${brand}`,
+      pageW / 2, pageH - 5, { align: 'center' }
+    );
     doc.setTextColor(0, 0, 0);
   };
 
   // Erste Seite
-  drawHeader();
+  drawPageHeader();
   y = 22;
 
-  // Titel
   doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(21, 101, 192);
-  doc.text('Statistik & Ranglisten', margin, y);
+  doc.text(singleRank ? pdfSafe(singleRank.title) : 'Statistik & Ranglisten', margin, y);
   y += 8;
   doc.setTextColor(0, 0, 0);
-  doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Zeitraum: ${fromDate.toLocaleDateString('de-DE')} – ${toDate.toLocaleDateString('de-DE')}   ·   ${eventCount} Termine   ·   ${allStats.length} Mitglieder`, margin, y);
+  doc.setFontSize(9);
+  const dateStr = `${fromDate.toLocaleDateString('de-DE')} - ${toDate.toLocaleDateString('de-DE')}`;
+  doc.text(`Zeitraum: ${dateStr}   |   ${eventCount} aktive Termine   |   ${memberCount} Mitglieder`, margin, y);
   y += 10;
 
-  let pageNum = 1;
+  const ranksToExport = singleRank ? [singleRank] : rankings;
 
-  rankings.forEach(rank => {
-    let data = allStats.filter(rank.filter || (() => true)).sort(rank.sort).slice(0, 10);
+  ranksToExport.forEach(rank => {
+    const data = (statsArr || statsForRank(rank))
+      .filter(rank.filter || (()=>true))
+      .sort(rank.sort)
+      .slice(0, 10);
     if (!data.length) return;
 
-    checkY(30);
+    checkY(36);
 
-    // Abschnitts-Titel
-    doc.setFillColor(240, 245, 255);
-    doc.rect(margin, y - 4, contentW, 8, 'F');
-    doc.setFontSize(11);
+    // Abschnitts-Header
+    doc.setFillColor(230, 240, 255);
+    doc.rect(margin, y - 5, contentW, 9, 'F');
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
     doc.setTextColor(21, 101, 192);
-    doc.text(rank.title.replace(/[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{27FF}]/gu, '').trim(), margin + 2, y + 0.5);
+    doc.text(pdfSafe(rank.title), margin + 3, y + 0.5);
     y += 8;
-    doc.setFontSize(8);
+
     doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
     doc.setTextColor(100, 100, 100);
-    doc.text(rank.desc, margin, y);
+    doc.text(pdfSafe(rank.desc), margin, y);
     y += 6;
     doc.setTextColor(0, 0, 0);
 
     // Tabellen-Header
     doc.setFillColor(21, 101, 192);
     doc.rect(margin, y, contentW, 6, 'F');
-    doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
     doc.setTextColor(255, 255, 255);
-    doc.text('#', margin + 2, y + 4);
-    doc.text('Name', margin + 14, y + 4);
-    doc.text('Wert', margin + contentW - 2, y + 4, { align: 'right' });
+    doc.text('#', margin + 3, y + 4);
+    doc.text('Name', margin + 16, y + 4);
+    doc.text('Wert', margin + contentW - 3, y + 4, { align: 'right' });
     y += 6;
     doc.setTextColor(0, 0, 0);
 
-    // Zeilen
     data.forEach((s, i) => {
       checkY(7);
-      const isTop3 = i < 3 && rank.medal;
-      doc.setFillColor(i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 255 : 255);
-      if (isTop3) doc.setFillColor(255, 248, 220);
+      const top3 = i < 3 && rank.medal;
+      if (top3)        doc.setFillColor(255, 248, 210);
+      else if (i%2===0) doc.setFillColor(247, 249, 255);
+      else              doc.setFillColor(255, 255, 255);
       doc.rect(margin, y, contentW, 6, 'F');
-      doc.setFont('helvetica', isTop3 ? 'bold' : 'normal');
+      doc.setFont('helvetica', top3 ? 'bold' : 'normal');
       doc.setFontSize(8.5);
-      const rankLabel = ['1.', '2.', '3.'][i] || `${i + 1}.`;
-      doc.text(rankLabel, margin + 2, y + 4);
-      doc.text(s.name.substring(0, 35), margin + 14, y + 4);
-      doc.text(rank.value(s), margin + contentW - 2, y + 4, { align: 'right' });
+      doc.text((['1.','2.','3.'][i] || `${i+1}.`), margin + 3, y + 4);
+      doc.text(pdfSafe(s.name).substring(0, 38), margin + 16, y + 4);
+      doc.text(pdfSafe(rank.value(s)), margin + contentW - 3, y + 4, { align: 'right' });
       y += 6;
     });
-
-    y += 8;
+    y += 10;
   });
 
-  // Footers auf allen Seiten
-  const totalPages = doc.internal.getNumberOfPages();
-  for (let p = 1; p <= totalPages; p++) {
-    doc.setPage(p);
-    drawFooter(p);
-  }
+  // Footers
+  const total = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= total; p++) { doc.setPage(p); drawFooter(p, total); }
 
-  const filename = `Statistik_${fromDate.toISOString().slice(0,10)}_${toDate.toISOString().slice(0,10)}.pdf`;
   doc.save(filename);
-  showToast('PDF erfolgreich exportiert.', 'success');
+  showToast('PDF exportiert.', 'success');
 }
