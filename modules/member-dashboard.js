@@ -48,39 +48,35 @@ async function loadMemberDashboard() {
     events = events.filter(e => {
       const t = e.startTime?.toDate?.();
       if (!t) return false;
-      // Zeitfenster-Check
       if (t < pastCutOff || t > cutOff) return false;
-      // Abgesagte Termine IMMER anzeigen (egal ob vergangen oder nicht, egal ob Attendance)
       if (e.status === 'cancelled') return true;
-      // Vergangene normale Termine nur wenn Attendance vorhanden
       if (t <= now) return !!attendanceByEvent[e.id];
       return true;
     });
 
-    // Teilnehmerzahlen nur für aktive Termine
+    // Teilnehmerzahlen parallel laden (alle aktiven Termine)
     const visibilityMode = settings.visibilityMode || 'count';
-    for (const ev of events) {
-      if (ev.status === 'cancelled') continue;
+    await Promise.all(events.map(async ev => {
+      if (ev.status === 'cancelled') return;
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
       let count = 0;
-      const names = [];
+      const uids = [];
       attSnap.forEach(doc => {
         const d = doc.data();
         if (['registered','present','late_excused','late_unexcused'].includes(d.status)) {
           count++;
-          if (visibilityMode === 'names') names.push(d.userId);
+          if (visibilityMode === 'names') uids.push(d.userId);
         }
       });
       ev._participantCount = count;
-      if (visibilityMode === 'names' && names.length) {
-        const resolved = [];
-        for (const uid of names) {
+      if (visibilityMode === 'names' && uids.length) {
+        const resolved = await Promise.all(uids.map(async uid => {
           const uDoc = await firestore.collection('users').doc(uid).get();
-          resolved.push(uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || uid) : uid);
-        }
+          return uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || uid) : uid;
+        }));
         ev._participantNames = resolved;
       }
-    }
+    }));
 
     events.sort((a, b) => (a.startTime?.toMillis?.() || 0) - (b.startTime?.toMillis?.() || 0));
 
@@ -131,12 +127,45 @@ function isLockedByTrainer(attendance) {
   return false;
 }
 
+/** Erzeugt die Teilnehmer-Info-Zeile für alle visibilityModes */
+function buildParticipantInfoHtml(event, isPast) {
+  if (isPast) return '';
+  const settings  = window.appSettings || {};
+  const visMode   = settings.visibilityMode || 'count';
+  const minPart   = event.minParticipants ?? settings.defaultMinParticipants ?? 0;
+  const count     = event._participantCount ?? null;
+
+  if (visMode === 'none' || count === null) return '';
+
+  const missing = minPart ? Math.max(0, minPart - count) : 0;
+
+  let content = '';
+
+  if (visMode === 'names' && event._participantNames?.length) {
+    // Namen-Modus: Namen auflisten + Benötigt-Info
+    content = `
+      <span class="pi-count">${count} angemeldet</span>:
+      <span>${event._participantNames.join(', ')}</span>`;
+  } else {
+    // count-Modus (Standard)
+    content = `<span class="pi-count">${count} angemeldet</span>`;
+  }
+
+  if (minPart) {
+    if (missing > 0) {
+      content += ` &nbsp;·&nbsp; <span class="pi-missing">noch ${missing} ben&ouml;tigt</span> <span class="text-muted">(mind. ${minPart})</span>`;
+    } else {
+      content += ` &nbsp;·&nbsp; <span class="pi-ok">&#10004; Mindestanzahl erreicht</span>`;
+    }
+  }
+
+  return `<div class="participant-info">${content}</div>`;
+}
+
 function renderMemberEventCard(event, attendance, isPast) {
   const settings       = window.appSettings || {};
   const signupMins     = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
   const mode           = event.mode || settings.defaultMode || 'opt_in';
-  const visMode        = settings.visibilityMode || 'count';
-  const minPart        = event.minParticipants ?? settings.defaultMinParticipants ?? 0;
   const start          = event.startTime?.toDate ? event.startTime.toDate() : null;
   const end            = event.endTime?.toDate   ? event.endTime.toDate()   : null;
   const now            = new Date();
@@ -181,13 +210,7 @@ function renderMemberEventCard(event, attendance, isPast) {
         <p style="margin:4px 0 0;">${attendance.trainerNoteMember}</p>
        </div>` : '';
 
-  let participantInfo = '';
-  if (!isPast) {
-    if (visMode === 'names' && event._participantNames)
-      participantInfo = `<p class="text-muted" style="font-size:0.85rem;">Teilnehmer: ${event._participantNames.join(', ')}</p>`;
-    else if (visMode === 'count' && event._participantCount != null)
-      participantInfo = `<p class="text-muted" style="font-size:0.85rem;">Angemeldete Teilnehmer: ${event._participantCount}${minPart ? ' (mind. ' + minPart + ' benötigt)' : ''}</p>`;
-  }
+  const participantInfo = buildParticipantInfoHtml(event, isPast);
 
   const statusChipClass = {
     registered: 'chip-success', cancelled: 'chip-error', present: 'chip-success',

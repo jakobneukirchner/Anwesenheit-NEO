@@ -98,6 +98,10 @@ button { font:inherit; cursor:pointer; }
 .btn-danger:hover { opacity:0.88; }
 .btn-text      { background:none; border:none; color:#fff; padding:4px 8px; font-weight:500; }
 
+/* btn-text innerhalb einer Card (weißer Hintergrund) → primäre Farbe statt weiß */
+.card .btn-text { color: var(--color-primary); }
+.card .btn-text:hover { text-decoration: underline; }
+
 /* View-Toggle (Kalender/Liste) */
 .view-toggle-btn {
   background: none;
@@ -173,3 +177,17 @@ tr:hover td { background-color:rgba(21,101,192,0.04); }
 .cal-event-pill { transition: opacity 0.1s; }
 .cal-event-pill:hover { opacity: 0.82; }
 .cal-event-pill.cancelled { background: var(--color-error) !important; text-decoration:line-through; }
+
+/* Teilnehmer-Info Block auf Mitglieder-Cards */
+.participant-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0 4px;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+.participant-info .pi-count { font-weight: 600; color: var(--color-text); }
+.participant-info .pi-missing { font-weight: 600; color: var(--color-warning, #e65100); }
+.participant-info .pi-ok { font-weight: 600; color: var(--color-success, #2e7d32); }
