@@ -54,7 +54,6 @@ async function loadMemberDashboard() {
 
     const visibilityMode = settings.visibilityMode || 'count';
     await Promise.all(events.map(async ev => {
-      // Trainer-Status IMMER laden (auch für abgesagte Termine, damit die Anzeige stimmt)
       const trainerIds    = ev.trainers || [];
       const cancelledIds  = ev.trainerCancellations || [];
       const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
@@ -151,8 +150,8 @@ function buildParticipantInfoHtml(event, isPast) {
     : `<span class="pi-count">${count} angemeldet</span>`;
   if (minPart) {
     content += missing > 0
-      ? ` &nbsp;·&nbsp; <span class="pi-missing">noch ${missing} ben&ouml;tigt</span> <span class="text-muted">(mind. ${minPart})</span>`
-      : ` &nbsp;·&nbsp; <span class="pi-ok">&#10004; Mindestanzahl erreicht</span>`;
+      ? ` &nbsp;&middot;&nbsp; <span class="pi-missing">noch ${missing} ben&ouml;tigt</span> <span class="text-muted">(mind. ${minPart})</span>`
+      : ` &nbsp;&middot;&nbsp; <span class="pi-ok"><span class="material-icons" style="font-size:14px;vertical-align:middle;">check</span> Mindestanzahl erreicht</span>`;
   }
   return `<div class="participant-info">${content}</div>`;
 }
@@ -164,15 +163,15 @@ function buildTrainerInfoHtml(event, isPast) {
   if (!active.length && !cancelled.length) return '';
 
   const activePills = active.map(n =>
-    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(46,125,50,0.1);color:var(--color-success,#2e7d32);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;">&#10003; ${n}</span>`
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(46,125,50,0.1);color:var(--color-success,#2e7d32);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;"><span class="material-icons" style="font-size:13px;">check</span>${n}</span>`
   ).join(' ');
 
   const cancelledPills = cancelled.map(n =>
-    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(198,40,40,0.1);color:var(--color-error,#c62828);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;text-decoration:line-through;">&#10005; ${n}</span>`
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(198,40,40,0.1);color:var(--color-error,#c62828);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;text-decoration:line-through;"><span class="material-icons" style="font-size:13px;">close</span>${n}</span>`
   ).join(' ');
 
   const warning = cancelled.length && !active.length
-    ? `<span class="chip chip-error" style="font-size:0.78rem;margin-left:6px;">&#9888; Kein Trainer!</span>` : '';
+    ? `<span class="chip chip-error" style="font-size:0.78rem;margin-left:6px;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span> Kein Trainer!</span>` : '';
 
   return `
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px;font-size:0.83rem;">
@@ -215,7 +214,9 @@ function renderMemberEventCard(event, attendance, isPast) {
           <h3 style="margin:0 0 2px;text-decoration:line-through;color:var(--color-text-muted);">${event.title || 'Termin'}</h3>
           <p class="text-muted" style="margin:0;font-size:0.88rem;text-decoration:line-through;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
         </div>
-        <span class="chip chip-error">❌ Abgesagt</span>
+        <span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;">
+          <span class="material-icons" style="font-size:14px;">cancel</span> Abgesagt
+        </span>
       </div>
       ${event.cancellationReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>` : ''}
       ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}“</p>` : ''}
@@ -224,7 +225,10 @@ function renderMemberEventCard(event, attendance, isPast) {
   }
 
   const trainerLateHtml = event.trainerLateNote
-    ? `<div class="chip chip-warning" style="margin-bottom:8px;">⚠️ Trainer meldet Verspätung: ${event.trainerLateNote}</div>` : '';
+    ? `<div class="chip chip-warning" style="margin-bottom:8px;display:inline-flex;align-items:center;gap:4px;">
+        <span class="material-icons" style="font-size:15px;">schedule</span>
+        Trainer meldet Verspätung: ${event.trainerLateNote}
+       </div>` : '';
 
   const broadcastHtml = event.trainerBroadcast
     ? `<div style="background:rgba(21,101,192,0.08);border-left:3px solid var(--color-primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
@@ -253,7 +257,10 @@ function renderMemberEventCard(event, attendance, isPast) {
     : (memberStatus === 'cancelled' ? 'Wieder anmelden' : 'Abmelden');
 
   const lockedHtml = locked
-    ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;">🔒 Vom Trainer eingetragen – keine Änderung möglich.</p>` : '';
+    ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;display:flex;align-items:center;gap:4px;">
+        <span class="material-icons" style="font-size:15px;">lock</span>
+        Vom Trainer eingetragen – keine Änderung möglich.
+       </p>` : '';
 
   let withdrawHtml = '';
   if (canWithdraw) {
@@ -263,10 +270,19 @@ function renderMemberEventCard(event, attendance, isPast) {
     const secLeft  = secsLeft % 60;
     withdrawHtml = `
       <div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.85rem;color:var(--color-error,#c62828);">&#9200; Versehentlich angemeldet? Noch <strong id="withdraw-countdown-${event.id}">${minLeft}:${String(secLeft).padStart(2,'0')}</strong> zum Rückziehen.</span>
+        <span style="font-size:0.85rem;color:var(--color-error,#c62828);display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">timer</span>
+          Versehentlich angemeldet? Noch <strong id="withdraw-countdown-${event.id}">${minLeft}:${String(secLeft).padStart(2,'0')}</strong> zum Rückziehen.
+        </span>
         <button class="btn-danger" data-action="withdraw" style="padding:4px 14px;font-size:0.85rem;">Anmeldung zurückziehen</button>
       </div>`;
   }
+
+  const deadlineHtml = !withinDeadline && !isPast && !locked
+    ? `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;">
+        <span class="material-icons" style="font-size:15px;">schedule</span>
+        Anmeldefrist abgelaufen
+       </p>` : '';
 
   card.innerHTML = `
     ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}${withdrawHtml}
@@ -281,16 +297,16 @@ function renderMemberEventCard(event, attendance, isPast) {
     ${event.description ? `<p style="margin:10px 0 4px;">${event.description}</p>` : ''}
     ${trainerInfo}
     ${participantInfo}
-    ${!withinDeadline && !isPast && !locked ? '<p class="text-muted" style="font-size:0.85rem;">⏱ Anmeldefrist abgelaufen</p>' : ''}
+    ${deadlineHtml}
     <hr class="divider" />
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${!isPast && withinDeadline && !locked ? `<button class="btn-primary" data-action="toggle">${toggleLabel}</button>` : ''}
-      ${!isPast && !locked ? `<button class="btn-secondary" data-action="late">Verspätung melden</button>` : ''}
+      ${!isPast && !locked ? `<button class="btn-secondary" data-action="late" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">schedule</span> Verspätung melden</button>` : ''}
     </div>
     <div style="margin-top:12px;">
       <label>Mein Hinweis (für Trainer sichtbar)</label>
       <textarea rows="2" data-role="note" ${locked ? 'disabled style="opacity:0.6;"' : ''}>${memberNote}</textarea>
-      ${!locked ? `<button class="btn-secondary" data-action="save-note" style="margin-top:0;">Hinweis speichern</button>` : ''}
+      ${!locked ? `<button class="btn-secondary" data-action="save-note" style="margin-top:0;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">save</span> Hinweis speichern</button>` : ''}
     </div>
     <div data-role="error" class="text-error"></div>
   `;
@@ -383,7 +399,6 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
     ? (currentStatus === 'registered' ? 'cancelled' : 'registered')
     : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
 
-  // firstRegisteredAt wird NUR beim allerersten Anmelden gesetzt
   const isFirstRegistration = newStatus === 'registered' && !attendance?.firstRegisteredAt;
 
   const updateData = {

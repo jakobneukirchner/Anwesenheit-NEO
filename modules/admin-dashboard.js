@@ -57,6 +57,13 @@ async function renderAdminSystemTab(el) {
     const doc  = await firestore.collection('settings').doc('global').get();
     const data = doc.exists ? doc.data() : {};
 
+    // Aktuelle Rollennamen aus Settings oder Fallback
+    const rl = data.roleLabels || {};
+    const labelTeacher     = rl.teacher     || 'Trainer';
+    const labelCoordinator = rl.coordinator || 'Koordinator';
+    const labelAdmin       = rl.admin       || 'Admin';
+    const labelMember      = rl.member      || 'Mitglied';
+
     el.innerHTML = `
       <div class="card">
         <h3 style="margin-top:0;">Branding</h3>
@@ -66,17 +73,23 @@ async function renderAdminSystemTab(el) {
         <input type="url" id="as-logo" value="${data.logoUrl || ''}" placeholder="https://..." />
         <label>Favicon-URL</label>
         <input type="url" id="as-favicon" value="${data.faviconUrl || ''}" placeholder="https://..." />
-        <button class="btn-primary" id="as-save-branding" style="margin-bottom:0;">Branding speichern</button>
+        <button class="btn-primary" id="as-save-branding" style="margin-bottom:0;display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">save</span>
+          Branding speichern
+        </button>
       </div>
 
       <div class="card">
-        <h3 style="margin-top:0;">Rate-Limit & Sicherheit</h3>
-        <p class="text-muted">Gilt für Mitglieder (Trainer/Koordinator/Admin ausgenommen)</p>
+        <h3 style="margin-top:0;">Rate-Limit &amp; Sicherheit</h3>
+        <p class="text-muted">Gilt f&uuml;r ${labelMember}s (${labelTeacher} / ${labelCoordinator} / ${labelAdmin} ausgenommen)</p>
         <label>Max. Aktionen pro Zeitfenster</label>
         <input type="number" id="as-rl-max" value="${data.rateLimitMaxActions || 100}" min="1" />
         <label>Zeitfenster (Minuten)</label>
         <input type="number" id="as-rl-win" value="${data.rateLimitWindowMinutes || 10}" min="1" />
-        <button class="btn-primary" id="as-save-rl">Rate-Limit speichern</button>
+        <button class="btn-primary" id="as-save-rl" style="display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">save</span>
+          Rate-Limit speichern
+        </button>
       </div>
 
       <div class="card">
@@ -86,7 +99,10 @@ async function renderAdminSystemTab(el) {
           <input type="checkbox" id="as-allow-pw" ${data.authAllowPassword !== false ? 'checked' : ''} />
           E-Mail/Passwort-Anmeldung aktiviert
         </label>
-        <button class="btn-primary" id="as-save-auth" style="margin-top:8px;">Auth-Einstellungen speichern</button>
+        <button class="btn-primary" id="as-save-auth" style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">save</span>
+          Auth-Einstellungen speichern
+        </button>
       </div>
     `;
 
