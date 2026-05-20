@@ -52,9 +52,9 @@ async function renderUsersTab(el) {
         <h3 style="margin:0;">Benutzer (${users.length})</h3>
         <button class="btn-primary" id="add-user-btn">+ Benutzer anlegen</button>
       </div>
-      <div style="overflow-x:auto;">
-        <table>
-          <thead><tr><th>Name</th><th>E-Mail</th><th>Rollen</th><th>Aktionen</th></tr></thead>
+      <div style="width:100%;overflow-x:auto;">
+        <table style="width:100%;table-layout:auto;min-width:500px;">
+          <thead><tr><th>Name</th><th>E-Mail</th><th>Rollen</th><th style="white-space:nowrap;">Aktionen</th></tr></thead>
           <tbody>
             ${users.map(u => `
               <tr>
@@ -172,17 +172,22 @@ async function renderGroupsTab(el) {
         <h3 style="margin:0;">Trainingsgruppen (${groups.length})</h3>
         <button class="btn-primary" id="add-group-btn">+ Gruppe anlegen</button>
       </div>
-      <div class="dashboard-grid">
-        ${groups.map(g => `
-          <div class="card" style="margin-bottom:0;">
-            <h4 style="margin:0 0 4px;">${g.name}</h4>
-            <p class="text-muted" style="margin:0 0 10px;font-size:0.88rem;">${g.description||''}</p>
-            <div style="display:flex;gap:8px;">
-              <button class="btn-secondary" data-gid="${g.id}" data-action="members" style="padding:5px 12px;">Mitglieder</button>
-              <button class="btn-secondary" data-gid="${g.id}" data-action="edit"    style="padding:5px 12px;">Bearbeiten</button>
-            </div>
-          </div>`).join('')}
-        ${!groups.length ? '<p class="text-muted">Noch keine Gruppen angelegt.</p>' : ''}
+      <div style="width:100%;overflow-x:auto;">
+        <table style="width:100%;table-layout:auto;min-width:400px;">
+          <thead><tr><th>Name</th><th>Beschreibung</th><th style="white-space:nowrap;">Aktionen</th></tr></thead>
+          <tbody>
+            ${groups.map(g => `
+              <tr>
+                <td style="font-weight:500;">${g.name}</td>
+                <td class="text-muted" style="font-size:0.88rem;">${g.description||''}</td>
+                <td style="white-space:nowrap;">
+                  <button class="btn-secondary" data-gid="${g.id}" data-action="members" style="padding:5px 12px;">Mitglieder</button>
+                  <button class="btn-secondary" data-gid="${g.id}" data-action="edit"    style="padding:5px 12px;margin-left:4px;">Bearbeiten</button>
+                </td>
+              </tr>`).join('')}
+            ${!groups.length ? '<tr><td colspan="3" class="text-muted">Noch keine Gruppen angelegt.</td></tr>' : ''}
+          </tbody>
+        </table>
       </div>`;
     el.querySelector('#add-group-btn').onclick = () => showGroupForm(null, el);
     el.querySelectorAll('[data-action="edit"]').forEach(btn => btn.onclick = () => showGroupForm(groups.find(g => g.id === btn.dataset.gid), el));
@@ -308,7 +313,6 @@ async function renderScheduleTab(el) {
     const groupsSnap = await firestore.collection('groups').orderBy('name').get();
     const groups = [];
     groupsSnap.forEach(doc => groups.push({ id: doc.id, ...doc.data() }));
-    // Trainer-Liste laden (alle User mit Rolle teacher)
     const trainersSnap = await firestore.collection('users').orderBy('displayName').get();
     const allTrainers = [];
     trainersSnap.forEach(doc => {
@@ -323,8 +327,8 @@ async function renderScheduleTab(el) {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button id="sch-delete-selected" class="btn-danger" hidden style="padding:6px 14px;">Ausgewählte löschen</button>
           <div style="display:flex;border:1px solid var(--color-border);border-radius:6px;overflow:hidden;">
-            <button id="view-list"     class="view-toggle-btn ${scheduleViewMode==='list'    ?'active':''}">&#128221; Liste</button>
-            <button id="view-calendar" class="view-toggle-btn ${scheduleViewMode==='calendar'?'active':''}">&#128197; Kalender</button>
+            <button id="view-list"     class="view-toggle-btn ${scheduleViewMode==='list'    ?'active':''}"><span class="material-icons" style="font-size:16px;vertical-align:middle;">list</span> Liste</button>
+            <button id="view-calendar" class="view-toggle-btn ${scheduleViewMode==='calendar'?'active':''}"><span class="material-icons" style="font-size:16px;vertical-align:middle;">calendar_month</span> Kalender</button>
           </div>
           <button class="btn-primary" id="add-event-btn">+ Termin</button>
         </div>
@@ -348,11 +352,11 @@ function renderEventList(el, events, groups, parentEl, deleteSelBtn) {
   if (!events.length) { el.innerHTML = '<p class="text-muted">Keine Termine vorhanden.</p>'; return; }
   const sorted = [...events].sort((a,b) => (a.startTime?.toMillis?.()??0) - (b.startTime?.toMillis?.()??0));
   el.innerHTML = `
-    <div style="overflow-x:auto;">
-      <table>
+    <div style="width:100%;overflow-x:auto;">
+      <table style="width:100%;table-layout:auto;min-width:600px;">
         <thead><tr>
           <th style="width:36px;"><input type="checkbox" id="sel-all" style="width:16px;height:16px;" /></th>
-          <th>Titel</th><th>Start</th><th>Gruppe</th><th>Status</th><th>Wiederholung</th><th>Aktionen</th>
+          <th>Titel</th><th>Start</th><th>Gruppe</th><th>Status</th><th>Wiederholung</th><th style="white-space:nowrap;">Aktionen</th>
         </tr></thead>
         <tbody>
           ${sorted.map(ev => {
@@ -454,7 +458,6 @@ async function showEventForm(event, groups, parentEl) {
   const allTrainers = window._allTrainers || [];
   const selTrainers = new Set(event?.trainers || []);
 
-  // Trainer-Auswahl HTML (Checkbox-Liste mit Suche)
   const trainerListHtml = allTrainers.length
     ? allTrainers.map(t => `
         <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--color-text);background:${selTrainers.has(t.id)?'rgba(21,101,192,0.08)':'transparent'};" class="trainer-pick-row">
@@ -501,7 +504,7 @@ async function showEventForm(event, groups, parentEl) {
       ${!isNew && event?.status !== 'cancelled' ? `
         <hr class="divider" />
         <div style="background:rgba(245,124,0,0.07);border-radius:8px;padding:12px;border:1px solid var(--color-warning,#f57c00);">
-          <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#f57c00);">&#128683; Termin ausfallen lassen</p>
+          <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#f57c00);display:flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:18px;">block</span> Termin ausfallen lassen</p>
           <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Mitglieder sehen den Termin als ausgefallen (anders als "Abgesagt" bleibt er sichtbar ohne Anmeldung).</p>
           <label>Begründung (optional)</label>
           <input type="text" id="ef-skip-reason" placeholder="z.B. Feiertag, kein Trainer verfügbar..." value="${event?.skipReason||''}" />
@@ -540,7 +543,6 @@ async function showEventForm(event, groups, parentEl) {
     }
   });
 
-  // Trainer-Suche live
   setTimeout(() => {
     const searchEl = document.getElementById('ef-trainer-search');
     const listEl   = document.getElementById('ef-trainer-list');
@@ -552,7 +554,6 @@ async function showEventForm(event, groups, parentEl) {
           row.style.display = name.includes(q) ? '' : 'none';
         });
       };
-      // Checkbox-Höherklick Highlight
       listEl.querySelectorAll('.trainer-pick-cb').forEach(cb => {
         cb.onchange = () => {
           cb.closest('.trainer-pick-row').style.background = cb.checked ? 'rgba(21,101,192,0.08)' : 'transparent';
@@ -560,7 +561,6 @@ async function showEventForm(event, groups, parentEl) {
       });
     }
 
-    // Termin ausfallen lassen
     const skipBtn = document.getElementById('ef-skip-btn');
     if (skipBtn) {
       skipBtn.onclick = async () => {
@@ -573,7 +573,6 @@ async function showEventForm(event, groups, parentEl) {
             updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
           });
           showToast(isSkipped ? 'Ausgefallen-Status aufgehoben.' : 'Termin als ausgefallen markiert.', 'success');
-          // Modal schließen
           document.querySelector('.modal-overlay')?.remove();
           renderScheduleTab(parentEl);
         } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
@@ -625,10 +624,16 @@ async function renderCoordSettingsTab(el) {
           <option value="count" ${!data.visibilityMode||data.visibilityMode==='count'?'selected':''}>Nur Anzahl</option>
           <option value="none"  ${data.visibilityMode==='none' ?'selected':''}>Nichts anzeigen</option>
         </select>
+        <label>Rükzugsfenster für Mitglieder (Minuten nach Anmeldung)</label>
+        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Wie lange ein Mitglied seine Anmeldung zurückziehen kann. Einmalig pro Termin – danach nicht mehr möglich.</p>
+        <input type="number" id="cs-withdraw-window" value="${data.withdrawWindowMinutes??60}" min="1" />
         <hr class="divider" />
         <h4>Rollen-Labels</h4>
         ${['admin','coordinator','teacher','member'].map(r=>`<label>${getRoleLabel(r)}</label><input type="text" id="rl-${r}" value="${data.roleLabels?.[r]||getRoleLabel(r)}" />`).join('')}
-        <button class="btn-primary" id="cs-save" style="margin-top:4px;">Einstellungen speichern</button>
+        <button class="btn-primary" id="cs-save" style="margin-top:4px;display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">save</span>
+          Einstellungen speichern
+        </button>
       </div>`;
     el.querySelector('#cs-save').onclick = async () => {
       const updates = {
@@ -637,6 +642,7 @@ async function renderCoordSettingsTab(el) {
         defaultMode:               document.getElementById('cs-mode')?.value||'opt_in',
         defaultEventLookAhead:     parseInt(document.getElementById('cs-lookahead')?.value)||30,
         visibilityMode:            document.getElementById('cs-vis')?.value||'count',
+        withdrawWindowMinutes:     parseInt(document.getElementById('cs-withdraw-window')?.value)||60,
         roleLabels: { admin:document.getElementById('rl-admin')?.value||'Admin', coordinator:document.getElementById('rl-coordinator')?.value||'Koordinator', teacher:document.getElementById('rl-teacher')?.value||'Trainer', member:document.getElementById('rl-member')?.value||'Mitglied' }
       };
       await firestore.collection('settings').doc('global').set(updates,{merge:true});

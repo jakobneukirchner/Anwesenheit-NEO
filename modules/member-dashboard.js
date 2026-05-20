@@ -183,6 +183,8 @@ function buildTrainerInfoHtml(event, isPast) {
 function renderMemberEventCard(event, attendance, isPast) {
   const settings       = window.appSettings || {};
   const signupMins     = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
+  // Rükzugsfenster aus Settings (Minuten), Standard 60
+  const WITHDRAW_WINDOW_MS = ((settings.withdrawWindowMinutes ?? 60) * 60 * 1000);
   const mode           = event.mode || settings.defaultMode || 'opt_in';
   const start          = event.startTime?.toDate ? event.startTime.toDate() : null;
   const end            = event.endTime?.toDate   ? event.endTime.toDate()   : null;
@@ -194,10 +196,14 @@ function renderMemberEventCard(event, attendance, isPast) {
   const locked         = isLockedByTrainer(attendance);
   const isCancelled    = event.status === 'cancelled';
 
-  const WITHDRAW_WINDOW_MS = 60 * 60 * 1000;
   const firstRegTime = attendance?.firstRegisteredAt?.toDate?.() || null;
+
+  // Einmalig: nur anzeigen wenn noch nicht benutzt (hasWithdrawn === false/undefined)
+  const alreadyWithdrawn = !!attendance?.hasWithdrawn;
+
   const canWithdraw  = !locked
     && !isPast
+    && !alreadyWithdrawn
     && attendance?.status === 'registered'
     && !attendance?.trainerSet
     && firstRegTime
@@ -317,7 +323,14 @@ function renderMemberEventCard(event, attendance, isPast) {
     const withdrawBtn = card.querySelector('[data-action="withdraw"]');
     if (withdrawBtn) withdrawBtn.onclick = () => guardedAction(async () => {
       try {
-        await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).delete();
+        // Anmeldung löschen UND hasWithdrawn=true setzen, damit kein zweites Mal möglich
+        await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
+          eventId: event.id,
+          userId:  window.currentUser.firebaseUser.uid,
+          hasWithdrawn: true,
+          status: 'cancelled',
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
         showToast('Anmeldung erfolgreich zurückgezogen.', 'success');
         loadMemberDashboard();
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
