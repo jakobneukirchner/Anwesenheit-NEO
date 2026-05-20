@@ -169,7 +169,7 @@ async function renderGroupsTab(el) {
     snap.forEach(doc => groups.push({ id: doc.id, ...doc.data() }));
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 style="margin:0;">Trainingsgruppen (${groups.length})</h3>
+        <h3 style="margin:0;">Gruppen (${groups.length})</h3>
         <button class="btn-primary" id="add-group-btn">+ Gruppe anlegen</button>
       </div>
       <div style="width:100%;overflow-x:auto;">
@@ -457,6 +457,8 @@ async function showEventForm(event, groups, parentEl) {
   const endVal      = event?.endTime?.toDate   ? toDatetimeLocal(event.endTime.toDate())   : '';
   const allTrainers = window._allTrainers || [];
   const selTrainers = new Set(event?.trainers || []);
+  // Dynamische Label-Namen
+  const teacherLabel = getRoleLabel('teacher');
 
   const trainerListHtml = allTrainers.length
     ? allTrainers.map(t => `
@@ -465,7 +467,7 @@ async function showEventForm(event, groups, parentEl) {
           <span style="font-weight:500;">${t.displayName||t.email||t.id}</span>
           <span class="text-muted" style="font-size:0.82rem;">${t.email||''}</span>
         </label>`).join('')
-    : '<p class="text-muted" style="font-size:0.88rem;">Keine Trainer gefunden. Weise Benutzern zuerst die Rolle „Trainer“ zu.</p>';
+    : `<p class="text-muted" style="font-size:0.88rem;">Keine ${teacherLabel} gefunden. Weise Benutzern zuerst die Rolle „${teacherLabel}“ zu.</p>`;
 
   showModal({
     title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
@@ -474,15 +476,15 @@ async function showEventForm(event, groups, parentEl) {
       <label>Beschreibung</label><textarea id="ef-desc" rows="2">${event?.description||''}</textarea>
       <label>Start</label><input type="datetime-local" id="ef-start" value="${startVal}" />
       <label>Ende</label><input type="datetime-local" id="ef-end" value="${endVal}" />
-      <label>Trainingsgruppe</label>
+      <label>Gruppe</label>
       <select id="ef-group">
         <option value="">– keine –</option>
         ${groups.map(g=>`<option value="${g.id}" ${event?.groupId===g.id?'selected':''}>${g.name}</option>`).join('')}
       </select>
-      <label>Trainer auswählen</label>
+      <label>${teacherLabel} auswählen</label>
       <div style="border:1px solid var(--color-border);border-radius:6px;padding:4px 0;max-height:180px;overflow-y:auto;background:var(--color-bg-elevated);">
         <div style="padding:6px 8px 4px;border-bottom:1px solid var(--color-border);">
-          <input type="search" id="ef-trainer-search" placeholder="Trainer suchen..." style="margin-bottom:0;font-size:0.88rem;" />
+          <input type="search" id="ef-trainer-search" placeholder="${teacherLabel} suchen..." style="margin-bottom:0;font-size:0.88rem;" />
         </div>
         <div id="ef-trainer-list" style="padding:4px 0;">${trainerListHtml}</div>
       </div>
@@ -507,7 +509,7 @@ async function showEventForm(event, groups, parentEl) {
           <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#f57c00);display:flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:18px;">block</span> Termin ausfallen lassen</p>
           <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Mitglieder sehen den Termin als ausgefallen (anders als "Abgesagt" bleibt er sichtbar ohne Anmeldung).</p>
           <label>Begründung (optional)</label>
-          <input type="text" id="ef-skip-reason" placeholder="z.B. Feiertag, kein Trainer verfügbar..." value="${event?.skipReason||''}" />
+          <input type="text" id="ef-skip-reason" placeholder="z.B. Feiertag, kein ${teacherLabel} verfügbar..." value="${event?.skipReason||''}" />
           <button type="button" class="btn-danger" id="ef-skip-btn" style="margin-top:0;padding:6px 16px;">
             ${event?.status==='skipped' ? 'Ausgefallen-Status aufheben' : 'Termin als ausgefallen markieren'}
           </button>
@@ -624,7 +626,7 @@ async function renderCoordSettingsTab(el) {
           <option value="count" ${!data.visibilityMode||data.visibilityMode==='count'?'selected':''}>Nur Anzahl</option>
           <option value="none"  ${data.visibilityMode==='none' ?'selected':''}>Nichts anzeigen</option>
         </select>
-        <label>Rükzugsfenster für Mitglieder (Minuten nach Anmeldung)</label>
+        <label>Rückzugsfenster für Mitglieder (Minuten nach Anmeldung)</label>
         <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Wie lange ein Mitglied seine Anmeldung zurückziehen kann. Einmalig pro Termin – danach nicht mehr möglich.</p>
         <input type="number" id="cs-withdraw-window" value="${data.withdrawWindowMinutes??60}" min="1" />
         <hr class="divider" />
