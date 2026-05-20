@@ -19,8 +19,10 @@ service cloud.firestore {
     }
 
     // USERS
+    // Jeder eingeloggte User darf User-Dokumente lesen (z.B. Trainernamen, Teilnehmernamen).
+    // Schreiben bleibt weiterhin eingeschränkt.
     match /users/{uid} {
-      allow read: if isPrivileged() || request.auth.uid == uid;
+      allow read:   if isSignedIn();
       allow create: if hasRole('admin') || hasRole('coordinator');
       allow update: if hasRole('admin') || hasRole('coordinator') ||
                        (request.auth.uid == uid && onlyUpdatingOwnFields());
@@ -72,7 +74,6 @@ service cloud.firestore {
     }
 
     // SUBSTITUTE REQUESTS
-    // Trainer stellen Anfragen und lesen sie; Privilegierte duerfen alles
     match /substituteRequests/{docId} {
       allow read:   if isPrivileged();
       allow create: if hasRole('teacher') || isPrivileged();
