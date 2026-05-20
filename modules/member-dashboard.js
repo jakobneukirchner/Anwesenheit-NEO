@@ -158,6 +158,7 @@ function buildParticipantInfoHtml(event, isPast) {
 
 function buildTrainerInfoHtml(event, isPast) {
   if (isPast) return '';
+  const tLabel    = getRoleLabel('teacher');
   const active    = event._trainerNames    || [];
   const cancelled = event._trainerCancelled || [];
   if (!active.length && !cancelled.length) return '';
@@ -171,19 +172,19 @@ function buildTrainerInfoHtml(event, isPast) {
   ).join(' ');
 
   const warning = cancelled.length && !active.length
-    ? `<span class="chip chip-error" style="font-size:0.78rem;margin-left:6px;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span> Kein Trainer!</span>` : '';
+    ? `<span class="chip chip-error" style="font-size:0.78rem;margin-left:6px;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span> Kein ${tLabel}!</span>` : '';
 
   return `
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px;font-size:0.83rem;">
-      <span class="text-muted">Trainer:</span>
+      <span class="text-muted">${tLabel}:</span>
       ${activePills}${cancelledPills}${warning}
     </div>`;
 }
 
 function renderMemberEventCard(event, attendance, isPast) {
   const settings       = window.appSettings || {};
+  const tLabel         = getRoleLabel('teacher');
   const signupMins     = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
-  // Rükzugsfenster aus Settings (Minuten), Standard 60
   const WITHDRAW_WINDOW_MS = ((settings.withdrawWindowMinutes ?? 60) * 60 * 1000);
   const mode           = event.mode || settings.defaultMode || 'opt_in';
   const start          = event.startTime?.toDate ? event.startTime.toDate() : null;
@@ -197,8 +198,6 @@ function renderMemberEventCard(event, attendance, isPast) {
   const isCancelled    = event.status === 'cancelled';
 
   const firstRegTime = attendance?.firstRegisteredAt?.toDate?.() || null;
-
-  // Einmalig: nur anzeigen wenn noch nicht benutzt (hasWithdrawn === false/undefined)
   const alreadyWithdrawn = !!attendance?.hasWithdrawn;
 
   const canWithdraw  = !locked
@@ -233,18 +232,18 @@ function renderMemberEventCard(event, attendance, isPast) {
   const trainerLateHtml = event.trainerLateNote
     ? `<div class="chip chip-warning" style="margin-bottom:8px;display:inline-flex;align-items:center;gap:4px;">
         <span class="material-icons" style="font-size:15px;">schedule</span>
-        Trainer meldet Verspätung: ${event.trainerLateNote}
+        ${tLabel} meldet Verspätung: ${event.trainerLateNote}
        </div>` : '';
 
   const broadcastHtml = event.trainerBroadcast
     ? `<div style="background:rgba(21,101,192,0.08);border-left:3px solid var(--color-primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
-        <span style="font-size:0.8rem;font-weight:600;color:var(--color-primary);text-transform:uppercase;letter-spacing:.04em;">Nachricht vom Trainer</span>
+        <span style="font-size:0.8rem;font-weight:600;color:var(--color-primary);text-transform:uppercase;letter-spacing:.04em;">Nachricht vom ${tLabel}</span>
         <p style="margin:4px 0 0;">${event.trainerBroadcast}</p>
        </div>` : '';
 
   const trainerNoteHtml = attendance?.trainerNoteMember
     ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
-        <span style="font-size:0.8rem;font-weight:600;color:var(--color-warning,#f57c00);text-transform:uppercase;letter-spacing:.04em;">Persönliche Notiz deines Trainers</span>
+        <span style="font-size:0.8rem;font-weight:600;color:var(--color-warning,#f57c00);text-transform:uppercase;letter-spacing:.04em;">Persönliche Notiz deines ${tLabel}s</span>
         <p style="margin:4px 0 0;">${attendance.trainerNoteMember}</p>
        </div>` : '';
 
@@ -265,7 +264,7 @@ function renderMemberEventCard(event, attendance, isPast) {
   const lockedHtml = locked
     ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;display:flex;align-items:center;gap:4px;">
         <span class="material-icons" style="font-size:15px;">lock</span>
-        Vom Trainer eingetragen – keine Änderung möglich.
+        Vom ${tLabel} eingetragen – keine Änderung möglich.
        </p>` : '';
 
   let withdrawHtml = '';
@@ -310,7 +309,7 @@ function renderMemberEventCard(event, attendance, isPast) {
       ${!isPast && !locked ? `<button class="btn-secondary" data-action="late" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">schedule</span> Verspätung melden</button>` : ''}
     </div>
     <div style="margin-top:12px;">
-      <label>Mein Hinweis (für Trainer sichtbar)</label>
+      <label>Mein Hinweis (für ${tLabel} sichtbar)</label>
       <textarea rows="2" data-role="note" ${locked ? 'disabled style="opacity:0.6;"' : ''}>${memberNote}</textarea>
       ${!locked ? `<button class="btn-secondary" data-action="save-note" style="margin-top:0;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">save</span> Hinweis speichern</button>` : ''}
     </div>
@@ -323,7 +322,6 @@ function renderMemberEventCard(event, attendance, isPast) {
     const withdrawBtn = card.querySelector('[data-action="withdraw"]');
     if (withdrawBtn) withdrawBtn.onclick = () => guardedAction(async () => {
       try {
-        // Anmeldung löschen UND hasWithdrawn=true setzen, damit kein zweites Mal möglich
         await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
           eventId: event.id,
           userId:  window.currentUser.firebaseUser.uid,
@@ -360,7 +358,7 @@ function renderMemberEventCard(event, attendance, isPast) {
       showModal({
         title: 'Verspätung melden',
         body: `
-          <p>Verspätungen werden immer als <strong>entschuldigt</strong> eingetragen – unentschuldigt kann nur ein Trainer eintragen.</p>
+          <p>Verspätungen werden immer als <strong>entschuldigt</strong> eingetragen – unentschuldigt kann nur ein ${tLabel} eintragen.</p>
           <label>Begründung (optional)</label>
           <input type="text" id="late-reason-input" placeholder="z.B. Zug hatte Verspätung" />
         `,
