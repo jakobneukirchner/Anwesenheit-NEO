@@ -3,7 +3,8 @@
 async function loadTrainerDashboard() {
   const container = document.getElementById('app-content');
   const user = window.currentUser.firebaseUser;
-  container.innerHTML = `<div class="loading-center">Lade Trainer-Termine...</div>`;
+  const tLabel = getRoleLabel('teacher');
+  container.innerHTML = `<div class="loading-center">Lade ${tLabel}-Termine...</div>`;
 
   try {
     const settingsDoc  = await firestore.collection('settings').doc('global').get();
@@ -59,7 +60,7 @@ async function loadTrainerDashboard() {
     const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
 
     container.innerHTML = `
-      <h2 style="margin-top:0;">Trainer-Dashboard</h2>
+      <h2 style="margin-top:0;">${tLabel}-Dashboard</h2>
       <p class="text-muted" style="margin-top:-8px;margin-bottom:16px;font-size:0.85rem;">
         Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong> (${lookAheadDays} Tage im Voraus)
       </p>
@@ -155,6 +156,7 @@ function renderTrainerEventSummaryCard(event, isPast) {
 async function openTrainerEventDetail(event) {
   const container = document.getElementById('app-content');
   const myUid     = window.currentUser.firebaseUser.uid;
+  const tLabel    = getRoleLabel('teacher');
   container.innerHTML = `<div class="loading-center">Lade Termin-Details...</div>`;
 
   try {
@@ -176,6 +178,10 @@ async function openTrainerEventDetail(event) {
       const uDoc = await firestore.collection('users').doc(tid).get();
       trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
     }));
+
+    // Name des eingeloggten Trainers für Broadcast-Header
+    const myUserDoc  = await firestore.collection('users').doc(myUid).get();
+    const myName     = myUserDoc.exists ? (myUserDoc.data().displayName || myUserDoc.data().email || myUid) : myUid;
 
     const allTeachersSnap = await firestore.collection('users').get();
     const allTeachers = [];
@@ -278,7 +284,7 @@ async function openTrainerEventDetail(event) {
         </td>
         <td>
           <input type="text" class="trainer-note-internal" data-att-id="${att.id}"
-            placeholder="Interne Notiz (nur Trainer)" value="${att.trainerNoteInternal || ''}"
+            placeholder="Interne Notiz (nur ${tLabel})" value="${att.trainerNoteInternal || ''}"
             style="min-width:120px;font-size:0.85rem;" />
         </td>
         <td>
@@ -307,7 +313,7 @@ async function openTrainerEventDetail(event) {
       <div class="card" style="margin-bottom:16px;">
         <h4 style="margin:0 0 10px;display:flex;align-items:center;gap:6px;">
           <span class="material-icons" style="color:var(--color-primary);">group</span>
-          Trainer dieses Termins
+          ${tLabel} dieses Termins
         </h4>
         ${trainerIds.map(tid => `
           <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--color-border);">
@@ -431,7 +437,7 @@ async function openTrainerEventDetail(event) {
           <span class="material-icons" style="color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </h4>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${myName}“ angezeigt.</p>
         <textarea id="event-broadcast" rows="2" placeholder="z.B. Bitte Sportschuhe mitbringen...">${ev.trainerBroadcast || ''}</textarea>
         <button class="btn-secondary" id="save-broadcast" style="margin-top:0;display:inline-flex;align-items:center;gap:4px;">
           <span class="material-icons" style="font-size:16px;">save</span> Nachricht speichern
@@ -458,7 +464,7 @@ async function openTrainerEventDetail(event) {
             <table>
               <thead><tr>
                 <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th>
-                <th>Interne Notiz <small class="text-muted">(nur Trainer)</small></th>
+                <th>Interne Notiz <small class="text-muted">(nur ${tLabel})</small></th>
                 <th>Notiz an Mitglied</th>
                 <th>Hinweis v. Mitglied</th>
               </tr></thead>
@@ -522,7 +528,7 @@ async function openTrainerEventDetail(event) {
     document.getElementById('revoke-self-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Abmeldung widerrufen',
-        body: '<p>Möchtest du deine Abmeldung rükgängig machen und dich wieder als Trainer eintragen?</p>',
+        body: `<p>Möchtest du deine Abmeldung rükgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
         confirmLabel: 'Ja, wieder eintragen',
         onConfirm: async () => {
           try {
@@ -536,7 +542,7 @@ async function openTrainerEventDetail(event) {
               myActiveSubReqs.forEach(r => batch.update(firestore.collection('substituteRequests').doc(r.id), { status: 'revoked' }));
               await batch.commit();
             }
-            showToast('Abmeldung widerrufen. Du bist wieder als Trainer eingetragen.', 'success');
+            showToast(`Abmeldung widerrufen. Du bist wieder als ${tLabel} eingetragen.`, 'success');
             openTrainerEventDetail(ev);
           } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
         }
@@ -564,7 +570,7 @@ async function openTrainerEventDetail(event) {
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             })
           ]);
-          showToast('Vertretung angenommen. Du bist jetzt als Trainer eingetragen.', 'success');
+          showToast(`Vertretung angenommen. Du bist jetzt als ${tLabel} eingetragen.`, 'success');
           openTrainerEventDetail(ev);
         } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
       };
@@ -601,7 +607,6 @@ async function openTrainerEventDetail(event) {
       };
     });
 
-    // Broadcast speichern
     document.getElementById('save-broadcast')?.addEventListener('click', async () => {
       const msg = document.getElementById('event-broadcast')?.value.trim() || '';
       try {
@@ -614,13 +619,11 @@ async function openTrainerEventDetail(event) {
       } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
     });
 
-    // Alle anwesend markieren
     document.getElementById('mark-all-present')?.addEventListener('click', () => {
       container.querySelectorAll('.presence-cb').forEach(cb => cb.checked = true);
       container.querySelectorAll('.status-select').forEach(sel => sel.value = 'present');
     });
 
-    // Alle speichern
     document.getElementById('save-all-attendance')?.addEventListener('click', async () => {
       try {
         const batch = firestore.batch();
@@ -641,7 +644,6 @@ async function openTrainerEventDetail(event) {
       } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
     });
 
-    // Training absagen / Abmelden
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Abmelden oder Training absagen',
@@ -704,7 +706,6 @@ async function openTrainerEventDetail(event) {
       });
     });
 
-    // Verspätung melden
     document.getElementById('trainer-late-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Verspätung melden',

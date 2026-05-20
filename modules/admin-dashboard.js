@@ -3,8 +3,9 @@
 
 async function loadAdminDashboard() {
   const container = document.getElementById('app-content');
+  const aLabel = getRoleLabel('admin');
   container.innerHTML = `
-    <h2 style="margin-top:0;">Admin-Dashboard</h2>
+    <h2 style="margin-top:0;">${aLabel}-Dashboard</h2>
     <div class="tabs">
       <button class="tab-btn active" data-tab="users">Benutzer</button>
       <button class="tab-btn"        data-tab="groups">Gruppen</button>
@@ -57,7 +58,6 @@ async function renderAdminSystemTab(el) {
     const doc  = await firestore.collection('settings').doc('global').get();
     const data = doc.exists ? doc.data() : {};
 
-    // Aktuelle Rollennamen aus Settings oder Fallback
     const rl = data.roleLabels || {};
     const labelTeacher     = rl.teacher     || 'Trainer';
     const labelCoordinator = rl.coordinator || 'Koordinator';
