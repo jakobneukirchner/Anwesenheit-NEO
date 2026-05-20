@@ -16,6 +16,20 @@ function getBrandName() {
   return (window.appSettings?.brandingTitle || '').trim() || 'Anwesenheit-NEO';
 }
 
+function _statsBackBtn() {
+  const roles = window.currentUser?.roles || [];
+  const role  = window.currentDashboardRole;
+  const loaders = {
+    admin:       () => loadAdminDashboard(),
+    coordinator: () => loadCoordinatorDashboard(),
+    teacher:     () => loadTrainerDashboard(),
+    member:      () => loadMemberDashboard(),
+  };
+  // Gehe zur zuletzt aktiven Nicht-Statistik-Rolle zurück
+  const fallbackRole = ['admin','coordinator','teacher','member'].find(r => roles.includes(r)) || 'member';
+  return loaders[fallbackRole] || loaders.member;
+}
+
 async function loadStatisticsDashboard() {
   const container = document.getElementById('app-content');
   container.innerHTML = `<div class="loading-center">Lade Statistiken...</div>`;
@@ -34,7 +48,16 @@ async function loadStatisticsDashboard() {
   const toInputVal = d => d.toISOString().slice(0, 10);
 
   container.innerHTML = `
-    <h2 style="margin-top:0;">&#128202; Statistiken &amp; Ranglisten</h2>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+      <button class="btn-secondary" id="stat-back-btn" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
+        <span class="material-icons" style="font-size:18px;">arrow_back</span>
+        Zurück
+      </button>
+      <h2 style="margin:0;display:inline-flex;align-items:center;gap:8px;">
+        <span class="material-icons" style="color:var(--color-primary);">bar_chart</span>
+        Statistiken &amp; Ranglisten
+      </h2>
+    </div>
     <div class="card" style="margin-bottom:16px;">
       <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px;">
         <div>
@@ -46,16 +69,21 @@ async function loadStatisticsDashboard() {
           <input type="date" id="stat-to" value="${toInputVal(yearEnd)}" />
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn-text stat-preset" data-preset="year">Dieses Jahr</button>
-          <button class="btn-text stat-preset" data-preset="lastYear">Letztes Jahr</button>
-          <button class="btn-text stat-preset" data-preset="quarter">Dieses Quartal</button>
-          <button class="btn-text stat-preset" data-preset="month">Dieser Monat</button>
+          <button class="btn-text stat-preset" data-preset="year" style="color:var(--color-primary);">Dieses Jahr</button>
+          <button class="btn-text stat-preset" data-preset="lastYear" style="color:var(--color-primary);">Letztes Jahr</button>
+          <button class="btn-text stat-preset" data-preset="quarter" style="color:var(--color-primary);">Dieses Quartal</button>
+          <button class="btn-text stat-preset" data-preset="month" style="color:var(--color-primary);">Dieser Monat</button>
         </div>
-        <button class="btn-primary" id="stat-load-btn">Laden</button>
+        <button class="btn-primary" id="stat-load-btn" style="display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">refresh</span>
+          Laden
+        </button>
       </div>
     </div>
-    <div id="stat-results"><p class="text-muted">Zeitraum auswaehlen und auf "Laden" klicken.</p></div>
+    <div id="stat-results"><p class="text-muted">Zeitraum auswählen und auf "Laden" klicken.</p></div>
   `;
+
+  document.getElementById('stat-back-btn').onclick = _statsBackBtn();
 
   container.querySelectorAll('.stat-preset').forEach(btn => {
     btn.onclick = () => {
@@ -79,7 +107,7 @@ async function runStatistics() {
 
   const fromVal = document.getElementById('stat-from')?.value;
   const toVal   = document.getElementById('stat-to')?.value;
-  if (!fromVal || !toVal) { resultsEl.innerHTML = '<p class="text-error">Bitte Zeitraum auswaehlen.</p>'; return; }
+  if (!fromVal || !toVal) { resultsEl.innerHTML = '<p class="text-error">Bitte Zeitraum auswählen.</p>'; return; }
 
   const fromDate = new Date(fromVal + 'T00:00:00');
   const toDate   = new Date(toVal   + 'T23:59:59');
@@ -93,11 +121,11 @@ async function runStatistics() {
     evSnap.forEach(doc => allEvents.push({ id: doc.id, ...doc.data() }));
 
     if (!allEvents.length) {
-      resultsEl.innerHTML = '<p class="text-muted">Keine Termine im ausgewaehlten Zeitraum gefunden.</p>';
+      resultsEl.innerHTML = '<p class="text-muted">Keine Termine im ausgewählten Zeitraum gefunden.</p>';
       return;
     }
 
-    // Ausgefallene/abgesagte Termine von Zeitberechnungen ausschliessen
+    // Ausgefallene/abgesagte Termine von Zeitberechnungen ausschließen
     const activeEvents    = allEvents.filter(e => e.status !== 'cancelled' && e.status !== 'skipped');
     const activeEventIds  = activeEvents.map(e => e.id);
 
@@ -167,9 +195,9 @@ async function runStatistics() {
     const initTrainer = uid => {
       if (!trainerStats[uid]) trainerStats[uid] = {
         uid, name: userMap[uid]?.name || uid, email: userMap[uid]?.email || '',
-        totalAssigned: 0,    // Termine als Trainer eingeplant
-        totalTrained: 0,     // Termine die nicht ausgefallen sind
-        cancelledEvents: 0,  // selbst abgemeldet (trainerCancellations)
+        totalAssigned: 0,
+        totalTrained: 0,
+        cancelledEvents: 0,
         trainedMinutes: 0
       };
     };
@@ -197,27 +225,39 @@ async function runStatistics() {
 
     // ===== RANGLISTEN-DEFINITIONEN =====
     const memberRankings = [
-      { id:'most_present',   title:'Meiste Anwesenheiten',          desc:'Mitglieder mit den meisten anwesenden Terminen',                       sort:(a,b)=>b.present-a.present,              value:s=>`${s.present} Termine`,                        medal:true  },
-      { id:'most_hours',     title:'Hoechste Anwesenheitszeit',     desc:'Mitglieder mit der meisten tatsaechlichen Trainingszeit',              sort:(a,b)=>b.presentMinutes-a.presentMinutes, value:s=>`${s.presentHours} Std.`,                     medal:true  },
-      { id:'best_rate',      title:'Hoechste Anwesenheitsquote',    desc:'Anteil anwesend+verspaetet an allen Terminen (mind. 3)',               filter:s=>s.totalEvents>=3, sort:(a,b)=>b.attendanceRate-a.attendanceRate,   value:s=>`${s.attendanceRate}% (${s.totalEvents} Termine)`, medal:true  },
-      { id:'most_punctual',  title:'Puenktlichste Mitglieder',      desc:'Hoechste Puenktlichkeitsrate (mind. 3 Termine)',                      filter:s=>s.totalEvents>=3, sort:(a,b)=>b.punctualityRate-a.punctualityRate, value:s=>`${s.punctualityRate}% puenktlich`,            medal:true  },
-      { id:'most_active',    title:'Aktivste Mitglieder',           desc:'Meiste Termine insgesamt eingeschrieben',                             sort:(a,b)=>b.totalEvents-a.totalEvents,       value:s=>`${s.totalEvents} Termine gesamt`,             medal:true  },
-      { id:'least_unexcused',title:'Wenigste unentsch. Fehlzeiten', desc:'Mitglieder mit den wenigsten unentschuldigten Fehlzeiten (mind. 3)',  filter:s=>s.totalEvents>=3, sort:(a,b)=>a.absent_unexcused-b.absent_unexcused||b.totalEvents-a.totalEvents, value:s=>`${s.absent_unexcused}x unentschuldigt`, medal:false },
-      { id:'most_registered',title:'Meiste eingeplante Zeit',       desc:'Meiste Gesamtzeit fuer die man eingeschrieben war',                   sort:(a,b)=>b.registeredMinutes-a.registeredMinutes, value:s=>`${(s.registeredMinutes/60).toFixed(1)} Std. eingeplant`, medal:false },
+      { id:'most_present',   title:'Meiste Anwesenheiten',          desc:'Mitglieder mit den meisten anwesenden Terminen',                      sort:(a,b)=>b.present-a.present,              value:s=>`${s.present} Termine`,                           medal:true  },
+      { id:'most_hours',     title:'Höchste Anwesenheitszeit',      desc:'Mitglieder mit der meisten tatsächlichen Trainingszeit',              sort:(a,b)=>b.presentMinutes-a.presentMinutes, value:s=>`${s.presentHours} Std.`,                        medal:true  },
+      { id:'best_rate',      title:'Höchste Anwesenheitsquote',     desc:'Anteil anwesend+verspätet an allen Terminen (mind. 3)',               filter:s=>s.totalEvents>=3, sort:(a,b)=>b.attendanceRate-a.attendanceRate,   value:s=>`${s.attendanceRate}% (${s.totalEvents} Termine)`,medal:true  },
+      { id:'most_punctual',  title:'Pünktlichste Mitglieder',       desc:'Höchste Pünktlichkeitsrate (mind. 3 Termine)',                       filter:s=>s.totalEvents>=3, sort:(a,b)=>b.punctualityRate-a.punctualityRate, value:s=>`${s.punctualityRate}% pünktlich`,               medal:true  },
+      { id:'most_active',    title:'Aktivste Mitglieder',           desc:'Meiste Termine insgesamt eingeschrieben',                            sort:(a,b)=>b.totalEvents-a.totalEvents,       value:s=>`${s.totalEvents} Termine gesamt`,                medal:true  },
+      { id:'least_unexcused',title:'Wenigste unentsch. Fehlzeiten', desc:'Mitglieder mit den wenigsten unentschuldigten Fehlzeiten (mind. 3)', filter:s=>s.totalEvents>=3, sort:(a,b)=>a.absent_unexcused-b.absent_unexcused||b.totalEvents-a.totalEvents, value:s=>`${s.absent_unexcused}x unentschuldigt`, medal:false },
+      { id:'most_registered',title:'Meiste eingeplante Zeit',       desc:'Meiste Gesamtzeit für die man eingeschrieben war',                   sort:(a,b)=>b.registeredMinutes-a.registeredMinutes, value:s=>`${(s.registeredMinutes/60).toFixed(1)} Std. eingeplant`, medal:false },
     ];
 
     const trainerRankings = [
-      { id:'tr_most_trained',   title:'Meiste Trainings (Trainer)',      desc:'Trainer mit den meisten durchgefuehrten Einheiten',           sort:(a,b)=>b.totalTrained-a.totalTrained,      value:s=>`${s.totalTrained} Trainings`,          medal:true  },
-      { id:'tr_most_hours',     title:'Meiste Trainingsstunden (Trainer)', desc:'Trainer mit der meisten Zeit auf dem Platz/in der Halle',  sort:(a,b)=>b.trainedMinutes-a.trainedMinutes,  value:s=>`${s.trainedHours} Std.`,               medal:true  },
-      { id:'tr_most_reliable',  title:'Zuverlaessigste Trainer',          desc:'Hoechste Zuverlaessigkeitsrate (kein Abmelden, mind. 2)',    filter:s=>s.totalAssigned>=2, sort:(a,b)=>b.reliabilityRate-a.reliabilityRate, value:s=>`${s.reliabilityRate}% zuverlaessig`,   medal:true  },
-      { id:'tr_least_cancel',   title:'Wenigste Absagen (Trainer)',       desc:'Trainer mit den wenigsten eigenen Abmeldungen',             sort:(a,b)=>a.cancelledEvents-b.cancelledEvents||b.totalAssigned-a.totalAssigned, value:s=>`${s.cancelledEvents}x abgemeldet`, medal:false },
+      { id:'tr_most_trained',  title:'Meiste Trainings (Trainer)',       desc:'Trainer mit den meisten durchgeführten Einheiten',          sort:(a,b)=>b.totalTrained-a.totalTrained,      value:s=>`${s.totalTrained} Trainings`,         medal:true  },
+      { id:'tr_most_hours',    title:'Meiste Trainingsstunden (Trainer)',desc:'Trainer mit der meisten Zeit auf dem Platz/in der Halle',   sort:(a,b)=>b.trainedMinutes-a.trainedMinutes,  value:s=>`${s.trainedHours} Std.`,              medal:true  },
+      { id:'tr_most_reliable', title:'Zuverlässigste Trainer',           desc:'Höchste Zuverlässigkeitsrate (kein Abmelden, mind. 2)',     filter:s=>s.totalAssigned>=2, sort:(a,b)=>b.reliabilityRate-a.reliabilityRate, value:s=>`${s.reliabilityRate}% zuverlässig`, medal:true  },
+      { id:'tr_least_cancel',  title:'Wenigste Absagen (Trainer)',       desc:'Trainer mit den wenigsten eigenen Abmeldungen',             sort:(a,b)=>a.cancelledEvents-b.cancelledEvents||b.totalAssigned-a.totalAssigned, value:s=>`${s.cancelledEvents}x abgemeldet`, medal:false },
     ];
 
+    // Podest-Darstellung ohne Emojis
+    const podestLabel = (i, medal) => {
+      if (!medal || i >= 3) return `${i + 1}.`;
+      return ['1.', '2.', '3.'][i];
+    };
+    const podestStyle = (i, medal) => {
+      if (!medal || i >= 3) return '';
+      const colors = ['#b8860b', '#888', '#a0522d'];
+      return `color:${colors[i]};font-weight:700;`;
+    };
+
     // ===== HTML RENDERN =====
-    const renderRankCard = (rank, dataArr, sectionLabel) => {
-      const data = dataArr.filter(rank.filter || (()=>true)).sort(rank.sort).slice(0,10);
-      if (!data.length) return '';
-      const medals = ['&#129351;','&#129352;','&#129353;'];
+    const renderRankCard = (rank) => {
+      const data = (rank.filter ? (s => rank.filter(s)) : (() => true));
+      const filtered = (rank === memberRankings[0] || memberRankings.includes(rank) ? allMemberStats : allTrainerStats)
+        .filter(data).sort(rank.sort).slice(0, 10);
+      if (!filtered.length) return '';
       return `
         <div class="card" style="margin-bottom:16px;" id="rank-${rank.id}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:4px;">
@@ -225,15 +265,18 @@ async function runStatistics() {
               <h3 style="margin:0 0 2px;">${rank.title}</h3>
               <p class="text-muted" style="margin:0;font-size:0.85rem;">${rank.desc}</p>
             </div>
-            <button class="btn-secondary stat-pdf-single" data-rank-id="${rank.id}" style="padding:5px 12px;font-size:0.85rem;white-space:nowrap;">&#128196; PDF</button>
+            <button class="btn-secondary stat-pdf-single" data-rank-id="${rank.id}" style="padding:5px 12px;font-size:0.85rem;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">picture_as_pdf</span>
+              PDF
+            </button>
           </div>
           <div style="overflow-x:auto;margin-top:10px;">
             <table>
               <thead><tr><th style="width:40px;">#</th><th>Name</th><th>Wert</th></tr></thead>
               <tbody>
-                ${data.map((s,i)=>`
+                ${filtered.map((s,i)=>`
                   <tr style="${i<3&&rank.medal?'font-weight:600;':''}">
-                    <td style="font-size:1.1rem;text-align:center;">${rank.medal&&i<3?medals[i]:(i+1)+'.'}</td>
+                    <td style="text-align:center;${podestStyle(i,rank.medal)}">${podestLabel(i,rank.medal)}</td>
                     <td>${s.name}</td>
                     <td>${rank.value(s)}</td>
                   </tr>`).join('')}
@@ -250,23 +293,32 @@ async function runStatistics() {
           &nbsp;&middot;&nbsp; ${activeEvents.length} aktive Termine (${allEvents.length - activeEvents.length} ausgefallen/abgesagt)
           &nbsp;&middot;&nbsp; ${allMemberStats.length} Mitglieder
         </p>
-        <button class="btn-primary" id="stat-export-all-pdf">&#128196; Alle als PDF</button>
+        <button class="btn-primary" id="stat-export-all-pdf" style="display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">picture_as_pdf</span>
+          Alle als PDF
+        </button>
       </div>
 
-      <h3 style="margin-bottom:8px;">&#128100; Mitglieder-Ranglisten</h3>
-      ${memberRankings.map(r => renderRankCard(r, allMemberStats, 'Mitglieder')).join('')}
+      <h3 style="margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        <span class="material-icons" style="color:var(--color-primary);">group</span>
+        Mitglieder-Ranglisten
+      </h3>
+      ${memberRankings.map(r => renderRankCard(r)).join('')}
     `;
 
     if (allTrainerStats.length) {
       html += `
-        <h3 style="margin-top:24px;margin-bottom:8px;">&#127775; Trainer-Ranglisten</h3>
-        ${trainerRankings.map(r => renderRankCard(r, allTrainerStats, 'Trainer')).join('')}
+        <h3 style="margin-top:24px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="color:var(--color-primary);">sports</span>
+          Trainer-Ranglisten
+        </h3>
+        ${trainerRankings.map(r => renderRankCard(r)).join('')}
       `;
     }
 
     resultsEl.innerHTML = html;
 
-    // Alle Rankings zusammen fuer den "Alle als PDF"-Button
+    // Alle Rankings zusammen für den "Alle als PDF"-Button
     const allRankings     = [...memberRankings, ...trainerRankings];
     const allStatsForRank = (rank) => memberRankings.includes(rank) ? allMemberStats : allTrainerStats;
 
@@ -363,7 +415,8 @@ function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankin
   const ranksToExport = singleRank ? [singleRank] : rankings;
 
   ranksToExport.forEach(rank => {
-    const data = (statsArr || statsForRank(rank))
+    const allStatsArr = statsArr || statsForRank(rank);
+    const data = allStatsArr
       .filter(rank.filter || (()=>true))
       .sort(rank.sort)
       .slice(0, 10);
@@ -402,7 +455,7 @@ function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankin
     data.forEach((s, i) => {
       checkY(7);
       const top3 = i < 3 && rank.medal;
-      if (top3)        doc.setFillColor(255, 248, 210);
+      if (top3)         doc.setFillColor(255, 248, 210);
       else if (i%2===0) doc.setFillColor(247, 249, 255);
       else              doc.setFillColor(255, 255, 255);
       doc.rect(margin, y, contentW, 6, 'F');
