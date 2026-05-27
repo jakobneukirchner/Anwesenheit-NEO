@@ -5,16 +5,13 @@ window.roleLabels  = { admin: 'Admin', coordinator: 'Koordinator', teacher: 'Tra
 
 // Sofort beim Script-Load aufrufen – funktioniert auch ohne Authentifizierung,
 // sofern die Firestore-Regel für settings/global public read erlaubt.
-// Fehler werden still ignoriert (z.B. wenn Regeln strict sind),
-// dann wird das Branding nach dem Login via auth.js nachgeladen.
 (async function applyBrandingEarly() {
   try {
     const doc = await firestore.collection('settings').doc('global').get();
     if (!doc.exists) return;
     _applyBrandingData(doc.data());
   } catch (e) {
-    // Kein Fehler ausgeben – Firestore-Regeln erlauben möglicherweise keinen anonymen Zugriff.
-    // Branding wird nach dem Login in auth.js nachgeladen.
+    // Kein Fehler – Firestore-Regeln erlauben möglicherweise keinen anonymen Zugriff.
   }
 })();
 
@@ -47,4 +44,25 @@ function _applyBrandingData(data) {
     if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
     link.href = data.faviconUrl;
   }
+}
+
+/**
+ * Gibt die konfigurierte Bestätigungs-Zeitfenster-Einstellung zurück.
+ * Standard: 120 Minuten nach Terminende.
+ * Nach Ablauf dieses Zeitfensters sind Buttons "Teilnahme bestätigen" / "Abmelden"
+ * für Mitglieder nicht mehr verfügbar; ausstehende Bestätigungen gelten als unentschuldigt.
+ */
+function getConfirmationWindowMinutes() {
+  return window.appSettings?.confirmationWindowMinutes ?? 120;
+}
+
+/**
+ * Gibt zurück ob ein Termin noch im Bestätigungs-Zeitfenster liegt.
+ * @param {Date} eventEndTime - Endzeit des Termins
+ * @returns {boolean}
+ */
+function isInConfirmationWindow(eventEndTime) {
+  if (!eventEndTime) return false;
+  const windowMs = getConfirmationWindowMinutes() * 60 * 1000;
+  return (Date.now() - eventEndTime.getTime()) <= windowMs;
 }
