@@ -233,10 +233,11 @@ function renderLoginPage() {
   // Karte braucht position:relative für das Overlay
   document.getElementById('login-card').style.position = 'relative';
 
-  const form     = document.getElementById('login-form');
-  const errorEl  = document.getElementById('login-error');
-  const overlay  = document.getElementById('login-loading-overlay');
+  const form      = document.getElementById('login-form');
+  const errorEl   = document.getElementById('login-error');
+  const overlay   = document.getElementById('login-loading-overlay');
   const submitBtn = document.getElementById('login-submit-btn');
+  const emailInput = document.getElementById('login-email');
 
   function showLoading(on) {
     overlay.style.display = on ? 'flex' : 'none';
@@ -250,31 +251,55 @@ function renderLoginPage() {
         <span class="material-icons" style="font-size:18px;flex-shrink:0;">error</span>
         <span>${msg}</span>
       </div>`;
-    // Schütteln
     if (card) {
       card.classList.remove('login-shake');
-      void card.offsetWidth; // reflow um Animation neu zu starten
+      void card.offsetWidth;
       card.classList.add('login-shake');
     }
   }
 
+  // Echtzeit-Hinweis wenn E-Mail leer bleibt und Fokus verlassen wird
+  emailInput.addEventListener('blur', () => {
+    if (!emailInput.value.trim()) {
+      errorEl.innerHTML = `
+        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
+          <span class="material-icons" style="font-size:18px;flex-shrink:0;">info</span>
+          <span>Bitte gib deine E-Mail-Adresse ein.</span>
+        </div>`;
+    } else {
+      // Hinweis wegräumen wenn wieder was drin steht
+      const box = errorEl.querySelector('.login-error-box');
+      if (box && box.querySelector('span:last-child')?.textContent?.includes('E-Mail-Adresse')) {
+        errorEl.innerHTML = '';
+      }
+    }
+  });
+
   form.onsubmit = async (e) => {
     e.preventDefault();
+    const email    = emailInput.value.trim();
+    const password = document.getElementById('login-password').value;
+
+    // Explizite Prüfung: E-Mail leer?
+    if (!email) {
+      showError('Bitte gib deine E-Mail-Adresse ein.');
+      emailInput.focus();
+      return;
+    }
+
     errorEl.innerHTML = '';
     showLoading(true);
-    const email    = document.getElementById('login-email').value.trim();
-    const password = document.getElementById('login-password').value;
     try {
       await firebaseAuth.signInWithEmailAndPassword(email, password);
-      // onAuthStateChanged übernimmt Navigation; Overlay bleibt sichtbar bis Seite wechselt
+      // onAuthStateChanged übernimmt Navigation
     } catch (err) {
       console.error(err);
       showLoading(false);
       const msgs = {
-        'auth/user-not-found':   'Benutzer nicht gefunden.',
-        'auth/wrong-password':   'Falsches Passwort.',
-        'auth/invalid-email':    'Ungültige E-Mail-Adresse.',
-        'auth/too-many-requests':'Zu viele Versuche. Bitte warte kurz.',
+        'auth/user-not-found':    'Benutzer nicht gefunden.',
+        'auth/wrong-password':    'Falsches Passwort.',
+        'auth/invalid-email':     'Ungültige E-Mail-Adresse.',
+        'auth/too-many-requests': 'Zu viele Versuche. Bitte warte kurz.',
         'auth/invalid-credential':'E-Mail oder Passwort falsch.'
       };
       showError(msgs[err.code] || 'Anmeldung fehlgeschlagen.');
@@ -282,8 +307,8 @@ function renderLoginPage() {
   };
 
   document.getElementById('forgot-pw-btn').onclick = async () => {
-    const email = document.getElementById('login-email').value.trim();
-    if (!email) { showError('Bitte zuerst E-Mail eingeben.'); return; }
+    const email = emailInput.value.trim();
+    if (!email) { showError('Bitte zuerst E-Mail-Adresse eingeben.'); emailInput.focus(); return; }
     try {
       await firebaseAuth.sendPasswordResetEmail(email);
       errorEl.innerHTML = `<div style="color:var(--color-success);font-size:0.85rem;margin-top:4px;display:flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">check_circle</span>Passwort-Reset-E-Mail wurde gesendet.</div>`;
