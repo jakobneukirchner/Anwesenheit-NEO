@@ -1,511 +1,562 @@
 // modules/member-report.js
-// "Meine Mitglieder" – Teilnahmeberichte & PDF-Export für Betreuer und Koordinatoren
+// Dashboard "Meine Mitglieder" – Teilnahme-/Fehlquoten + PDF-Export
+// Betreuer: nur eigene Mitglieder | Koordinator/Admin: alle Mitglieder
 
-/**
- * Lädt das Meine-Mitglieder-Dashboard.
- * @param {string} mode - 'trainer' (eigene Mitglieder) oder 'coordinator' (alle Mitglieder)
- */
-async function loadMemberReportDashboard(mode = 'trainer') {
+async function loadMemberReportDashboard() {
   const container = document.getElementById('app-content');
-  const myUid     = window.currentUser?.firebaseUser?.uid;
-  container.innerHTML = `<div class="loading-center">Lade Mitgliederberichte...</div>`;
+  const myUid     = window.currentUser.firebaseUser.uid;
+  const myRoles   = window.currentUser.roles || [];
+  const isCoord   = myRoles.includes('coordinator') || myRoles.includes('admin');
+  const tLabel    = getRoleLabel('teacher');
+
+  container.innerHTML = `<div class="loading-center">Lade Mitglieder-Berichte...</div>`;
 
   try {
-    // ── 1. Mitglieder laden ──────────────────────────────────────────────────
-    let members = [];
+    const settingsDoc = await firestore.collection('settings').doc('global').get();
+    const settings    = settingsDoc.exists ? settingsDoc.data() : {};
+    window.appSettings = settings;
 
-    if (mode === 'coordinator') {
-      // Alle Mitglieder
-      const snap = await firestore.collection('users').orderBy('displayName').get();
-      snap.forEach(doc => {
-        const d = doc.data();
-        if ((d.roles || []).includes('member')) {
-          members.push({ id: doc.id, ...d });
-        }
-      });
+    // ── Alle Nutzer laden ───────────────────────────────────────────────────
+    const usersSnap = await firestore.collection('users').get();
+    const allUsers  = [];
+    usersSnap.forEach(doc => {
+      const d = doc.data();
+      allUsers.push({ uid: doc.id, ...d });
+    });
+
+    // ── Eigene Gruppen ermitteln (für Betreuer-Filter) ──────────────────────
+    let relevantMembers = [];
+    if (isCoord) {
+      // Koordinator/Admin: alle Mitglieder
+      relevantMembers = allUsers.filter(u => (u.roles || []).includes('member'));
     } else {
-      // Nur Mitglieder, die der Trainer betreut (= in Gruppen des Trainers)
-      const trainerDoc  = await firestore.collection('users').doc(myUid).get();
-      const trainerData = trainerDoc.exists ? trainerDoc.data() : {};
-      const trainerGroups = trainerData.groups || [];
+      // Betreuer: Mitglieder aus eigenen Gruppen
+      const myUserDoc = await firestore.collection('users').doc(myUid).get();
+      const myGroups  = myUserDoc.exists ? (myUserDoc.data().groups || []) : [];
+      if (!myGroups.length) {
+        container.innerHTML = `
+          <div class="card" style="max-width:480px;margin:48px auto;text-align:center;">
+            <span class="material-icons" style="font-size:40px;color:var(--color-text-faint);margin-bottom:12px;">group_off</span>
+            <h3 style="margin:0 0 8px;">Keine Gruppen zugewiesen</h3>
+            <p class="text-muted">Du bist noch keiner Gruppe zugewiesen. Bitte wende dich an einen Koordinator.</p>
+          </div>`;
+        return;
+      }
+      // Mitglieder aller eigenen Gruppen sammeln
+      const memberSet = new Set();
+      allUsers.forEach(u => {
+        if (!(u.roles || []).includes('member')) return;
+        const userGroups = u.groups || [];
+        if (userGroups.some(g => myGroups.includes(g))) memberSet.add(u.uid);
+      });
+      relevantMembers = allUsers.filter(u => memberSet.has(u.uid));
+    }
 
-      if (!trainerGroups.length) {
-        // Fallback: alle Mitglieder anzeigen wenn Trainer keiner Gruppe zugewiesen
-        const snap = await firestore.collection('users').orderBy('displayName').get();
-        snap.forEach(doc => {
-          const d = doc.data();
-          if ((d.roles || []).includes('member')) members.push({ id: doc.id, ...d });
-        });
-      } else {
-        const memberSet = new Set();
-        for (const gid of trainerGroups) {
-          const gDoc = await firestore.collection('groups').doc(gid).get();
-          if (gDoc.exists) {
-            (gDoc.data().members || []).forEach(uid => memberSet.add(uid));
-          }
-        }
-        await Promise.all([...memberSet].map(async uid => {
-          const uDoc = await firestore.collection('users').doc(uid).get();
-          if (uDoc.exists) {
-            const d = uDoc.data();
-            if ((d.roles || []).includes('member')) members.push({ id: uid, ...d });
-          }
-        }));
-        members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '', 'de'));
+    if (!relevantMembers.length) {
+      container.innerHTML = `
+        <div class="card" style="max-width:480px;margin:48px auto;text-align:center;">
+          <span class="material-icons" style="font-size:40px;color:var(--color-text-faint);margin-bottom:12px;">person_off</span>
+          <h3 style="margin:0 0 8px;">Keine Mitglieder gefunden</h3>
+          <p class="text-muted">In deinen Gruppen sind noch keine Mitglieder vorhanden.</p>
+        </div>`;
+      return;
+    }
+
+    // ── Zeitraum-Filter ─────────────────────────────────────────────────────
+    const now          = new Date();
+    const defaultFrom  = new Date(now.getFullYear(), now.getMonth() - 2, 1); // 3 Monate zurück
+    const defaultTo    = now;
+
+    // ── UI aufbauen ─────────────────────────────────────────────────────────
+    container.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
+        <div>
+          <h2 style="margin:0 0 4px;">Meine ${isCoord ? 'Mitglieder' : 'Mitglieder'}</h2>
+          <p class="text-muted" style="margin:0;font-size:0.85rem;">
+            ${relevantMembers.length} Mitglied${relevantMembers.length !== 1 ? 'er' : ''}
+            ${isCoord ? '(alle)' : '(deine Gruppen)'}
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <button class="btn-secondary" id="export-pdf-btn" style="display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">picture_as_pdf</span> PDF exportieren
+          </button>
+        </div>
+      </div>
+
+      <!-- Zeitraum-Filter -->
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
+          <div style="flex:1;min-width:140px;">
+            <label style="font-size:0.85rem;color:var(--color-text-muted);display:block;margin-bottom:4px;">Von</label>
+            <input type="date" id="filter-from" value="${_fmtDateInput(defaultFrom)}" />
+          </div>
+          <div style="flex:1;min-width:140px;">
+            <label style="font-size:0.85rem;color:var(--color-text-muted);display:block;margin-bottom:4px;">Bis</label>
+            <input type="date" id="filter-to" value="${_fmtDateInput(defaultTo)}" />
+          </div>
+          <button class="btn-primary" id="apply-filter-btn" style="display:inline-flex;align-items:center;gap:4px;padding:8px 18px;">
+            <span class="material-icons" style="font-size:16px;">filter_list</span> Anwenden
+          </button>
+        </div>
+      </div>
+
+      <!-- Suchfeld -->
+      <div style="margin-bottom:12px;position:relative;">
+        <span class="material-icons" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--color-text-faint);font-size:18px;">search</span>
+        <input type="text" id="member-report-search" placeholder="Mitglied suchen..." style="padding-left:36px;" />
+      </div>
+
+      <!-- Tabelle -->
+      <div id="report-table-wrap">
+        <div class="loading-center">Lade Statistiken...</div>
+      </div>
+    `;
+
+    // Filter anwenden
+    const applyAndRender = async () => {
+      const fromVal = document.getElementById('filter-from')?.value;
+      const toVal   = document.getElementById('filter-to')?.value;
+      const from    = fromVal ? new Date(fromVal) : defaultFrom;
+      const to      = toVal   ? new Date(toVal + 'T23:59:59') : defaultTo;
+      const wrap    = document.getElementById('report-table-wrap');
+      if (wrap) wrap.innerHTML = `<div class="loading-center">Lade Statistiken...</div>`;
+      const stats = await _computeMemberStats(relevantMembers, from, to);
+      if (wrap) renderReportTable(wrap, stats, from, to, isCoord, tLabel);
+    };
+
+    document.getElementById('apply-filter-btn')?.addEventListener('click', applyAndRender);
+    document.getElementById('member-report-search')?.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      document.querySelectorAll('.member-report-row').forEach(row => {
+        row.style.display = row.dataset.name.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+    document.getElementById('export-pdf-btn')?.addEventListener('click', () => {
+      const fromVal = document.getElementById('filter-from')?.value;
+      const toVal   = document.getElementById('filter-to')?.value;
+      const from    = fromVal ? new Date(fromVal) : defaultFrom;
+      const to      = toVal   ? new Date(toVal + 'T23:59:59') : defaultTo;
+      exportReportPDF(from, to, isCoord);
+    });
+
+    // Initial rendern
+    await applyAndRender();
+
+  } catch (err) {
+    console.error(err);
+    container.innerHTML = `<p class="text-error">Fehler beim Laden: ${err.message}</p>`;
+  }
+}
+
+// ── Statistiken berechnen ────────────────────────────────────────────────────
+async function _computeMemberStats(members, from, to) {
+  const stats = [];
+
+  for (const member of members) {
+    // Alle Anwesenheits-Einträge dieses Mitglieds laden
+    const attSnap = await firestore.collection('eventAttendance')
+      .where('userId', '==', member.uid)
+      .get();
+
+    const attendances = [];
+    attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
+
+    // Zugehörige Events laden und nach Zeitraum filtern
+    const eventIds = [...new Set(attendances.map(a => a.eventId).filter(Boolean))];
+    const eventMap = {};
+    for (const eid of eventIds) {
+      const eDoc = await firestore.collection('events').doc(eid).get();
+      if (!eDoc.exists) continue;
+      const ev = eDoc.data();
+      const t  = ev.startTime?.toDate?.();
+      if (t && t >= from && t <= to && ev.status !== 'cancelled' && ev.status !== 'skipped') {
+        eventMap[eid] = { id: eid, ...ev, _start: t };
       }
     }
 
-    // ── 2. Vergangene Termine der letzten 180 Tage laden ────────────────────
-    const since = new Date();
-    since.setDate(since.getDate() - 180);
-    const sinceTs = firebase.firestore.Timestamp.fromDate(since);
-    const now     = new Date();
+    // Nur Einträge im Zeitraum
+    const relevant = attendances.filter(a => eventMap[a.eventId]);
 
-    const evSnap = await firestore.collection('events')
-      .where('startTime', '>=', sinceTs)
-      .orderBy('startTime', 'desc')
-      .get();
+    const total             = relevant.length;
+    const present           = relevant.filter(a => a.status === 'present').length;
+    const lateExcused       = relevant.filter(a => a.status === 'late_excused').length;
+    const lateUnexcused     = relevant.filter(a => a.status === 'late_unexcused').length;
+    const absentExcused     = relevant.filter(a => a.status === 'absent_excused').length;
+    const absentUnexcused   = relevant.filter(a => a.status === 'absent_unexcused').length;
+    const registered        = relevant.filter(a => a.status === 'registered').length;
+    const confirmPending    = relevant.filter(a => a.status === 'confirmation_pending').length;
+    const cancelled         = relevant.filter(a => a.status === 'cancelled').length;
 
-    const allPastEvents = [];
-    evSnap.forEach(doc => {
-      const d = doc.data();
-      const t = d.startTime?.toDate?.();
-      if (t && t <= now) allPastEvents.push({ id: doc.id, ...d });
+    const attended          = present + lateExcused + lateUnexcused; // zählt als anwesend
+    const absent            = absentExcused + absentUnexcused;
+    const excusedTotal      = absentExcused + lateExcused;
+    const unexcusedTotal    = absentUnexcused + lateUnexcused;
+
+    const attendanceRate    = total > 0 ? Math.round((attended / total) * 100) : null;
+    const absenceRate       = total > 0 ? Math.round((absent   / total) * 100) : null;
+    const excusedRate       = absent > 0 ? Math.round((excusedTotal / absent) * 100) : null;
+
+    stats.push({
+      uid: member.uid,
+      name: member.displayName || member.email || member.uid,
+      email: member.email || '',
+      groups: member.groups || [],
+      total,
+      present,
+      attended,
+      absent,
+      absentExcused,
+      absentUnexcused,
+      lateExcused,
+      lateUnexcused,
+      registered,
+      confirmPending,
+      cancelled,
+      excusedTotal,
+      unexcusedTotal,
+      attendanceRate,
+      absenceRate,
+      excusedRate,
     });
-
-    // ── 3. Attendance je Mitglied auswerten ──────────────────────────────────
-    const memberStats = await Promise.all(members.map(async member => {
-      const attSnap = await firestore.collection('eventAttendance')
-        .where('userId', '==', member.id)
-        .get();
-
-      const attMap = {};
-      attSnap.forEach(doc => { attMap[doc.data().eventId] = doc.data(); });
-
-      const memberGroupIds = member.groups || [];
-      const relevantEvents = allPastEvents.filter(ev => {
-        const inGroup = ev.groupId && memberGroupIds.includes(ev.groupId);
-        const direct  = (ev.directMembers || []).includes(member.id);
-        const hasAtt  = !!attMap[ev.id];
-        return inGroup || direct || hasAtt;
-      });
-
-      let present         = 0;
-      let absentExcused   = 0;
-      let absentUnexcused = 0;
-      let total           = 0;
-
-      relevantEvents.forEach(ev => {
-        if (ev.status === 'cancelled' || ev.status === 'skipped') return;
-        total++;
-        const att = attMap[ev.id];
-        if (!att) {
-          if (ev.mode === 'opt_out') absentUnexcused++;
-          else total--; // nie angemeldet → nicht werten
-        } else {
-          switch (att.status) {
-            case 'present':
-            case 'late_excused':
-            case 'late_unexcused':  present++;         break;
-            case 'absent_excused':  absentExcused++;   break;
-            case 'absent_unexcused': absentUnexcused++; break;
-            case 'cancelled':       total--;            break; // abgemeldet → nicht werten
-            case 'confirmation_pending': /* ausstehend → als fehlend werten */ absentUnexcused++; break;
-            default: total--;
-          }
-        }
-      });
-
-      const absTotal       = absentExcused + absentUnexcused;
-      const attendanceRate = total > 0 ? Math.round((present / total) * 100) : null;
-      const excusedRate    = absTotal > 0 ? Math.round((absentExcused / absTotal) * 100) : null;
-      const absenceRate    = total > 0 ? Math.round((absTotal / total) * 100) : null;
-
-      return {
-        member,
-        total,
-        present,
-        absentExcused,
-        absentUnexcused,
-        attendanceRate,
-        absenceRate,
-        excusedRate,
-        relevantEventCount: relevantEvents.filter(ev => ev.status !== 'cancelled' && ev.status !== 'skipped').length
-      };
-    }));
-
-    // ── 4. Render ────────────────────────────────────────────────────────────
-    const title = mode === 'coordinator'
-      ? 'Alle Mitglieder – Teilnahmeberichte'
-      : 'Meine Mitglieder – Teilnahmeberichte';
-
-    container.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
-        <div>
-          <h2 style="margin:0 0 4px;">${title}</h2>
-          <p class="text-muted" style="margin:0;font-size:0.84rem;">
-            Zeitraum: letzte 180 Tage &nbsp;·&nbsp; ${members.length} Mitglied${members.length !== 1 ? 'er' : ''}
-          </p>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn-secondary" id="report-filter-btn"
-            style="display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:16px;">filter_list</span> Filter
-          </button>
-          <button class="btn-primary" id="report-pdf-btn"
-            style="display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:16px;">picture_as_pdf</span> Als PDF exportieren
-          </button>
-        </div>
-      </div>
-
-      <div id="report-filter-bar" style="display:none;margin-bottom:12px;">
-        <div class="card" style="padding:12px 16px;">
-          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-            <div>
-              <label style="font-size:0.82rem;font-weight:500;">Sortieren nach</label>
-              <select id="report-sort" style="font-size:0.85rem;margin-bottom:0;margin-top:4px;min-width:180px;">
-                <option value="name">Name (A–Z)</option>
-                <option value="attendance_asc">Teilnahmequote (aufsteigend)</option>
-                <option value="attendance_desc">Teilnahmequote (absteigend)</option>
-                <option value="absence_desc">Fehlquote (absteigend)</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size:0.82rem;font-weight:500;">Min. Termine</label>
-              <input type="number" id="report-min-events" value="0" min="0"
-                style="font-size:0.85rem;margin-bottom:0;margin-top:4px;width:80px;" />
-            </div>
-            <button class="btn-primary" id="report-apply-filter"
-              style="padding:6px 16px;font-size:0.85rem;">Anwenden</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="report-table-container"></div>
-    `;
-
-    document.getElementById('report-filter-btn').onclick = () => {
-      const bar = document.getElementById('report-filter-bar');
-      bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
-    };
-    document.getElementById('report-pdf-btn').onclick     = () => exportReportAsPDF(memberStats, title);
-    document.getElementById('report-apply-filter').onclick = () => renderReportTable(memberStats);
-
-    renderReportTable(memberStats);
-
-  } catch (e) {
-    console.error(e);
-    container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
   }
+
+  // Sortierung: alphabetisch nach Name
+  stats.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  return stats;
 }
 
-/* ── Tabelle rendern ───────────────────────────────────────────────────────── */
-function renderReportTable(stats) {
-  const tableEl = document.getElementById('report-table-container');
-  if (!tableEl) return;
-
-  const sortBy = document.getElementById('report-sort')?.value || 'name';
-  const minEvt = parseInt(document.getElementById('report-min-events')?.value) || 0;
-  let filtered = stats.filter(s => s.relevantEventCount >= minEvt);
-
-  switch (sortBy) {
-    case 'name':
-      filtered.sort((a, b) => (a.member.displayName || '').localeCompare(b.member.displayName || '', 'de'));
-      break;
-    case 'attendance_asc':
-      filtered.sort((a, b) => (a.attendanceRate ?? -1) - (b.attendanceRate ?? -1));
-      break;
-    case 'attendance_desc':
-      filtered.sort((a, b) => (b.attendanceRate ?? -1) - (a.attendanceRate ?? -1));
-      break;
-    case 'absence_desc':
-      filtered.sort((a, b) => (b.absenceRate ?? -1) - (a.absenceRate ?? -1));
-      break;
-  }
-
-  if (!filtered.length) {
-    tableEl.innerHTML = '<p class="text-muted" style="padding:16px 0;">Keine Mitglieder gefunden.</p>';
+// ── Tabelle rendern ──────────────────────────────────────────────────────────
+function renderReportTable(wrap, stats, from, to, isCoord, tLabel) {
+  if (!stats.length) {
+    wrap.innerHTML = '<p class="text-muted">Keine Daten für den gewählten Zeitraum.</p>';
     return;
   }
 
-  const rateColor = (rate, invert = false) => {
+  const pct = (v) => v !== null && v !== undefined ? `${v}%` : '–';
+  const num = (v) => v !== null && v !== undefined ? v : 0;
+
+  const rateColor = (rate) => {
     if (rate === null) return 'var(--color-text-muted)';
-    if (invert) {
-      if (rate >= 30) return 'var(--color-error)';
-      if (rate >= 15) return 'var(--color-warning)';
-      return 'var(--color-success)';
-    } else {
-      if (rate >= 80) return 'var(--color-success)';
-      if (rate >= 50) return 'var(--color-warning)';
-      return 'var(--color-error)';
-    }
+    if (rate >= 80) return 'var(--color-success)';
+    if (rate >= 60) return 'var(--color-warning)';
+    return 'var(--color-error)';
+  };
+  const absColor = (rate) => {
+    if (rate === null) return 'var(--color-text-muted)';
+    if (rate <= 10) return 'var(--color-success)';
+    if (rate <= 25) return 'var(--color-warning)';
+    return 'var(--color-error)';
   };
 
-  tableEl.innerHTML = `
-    <div style="overflow-x:auto;">
-      <table id="report-main-table" style="width:100%;min-width:700px;">
-        <thead>
-          <tr>
-            <th>Mitglied</th>
-            <th style="text-align:center;">Termine<br><span style="font-weight:400;font-size:0.78rem;color:var(--color-text-muted);">(gewertet)</span></th>
-            <th style="text-align:center;">Anwesend</th>
-            <th style="text-align:center;">Teilnahmequote</th>
-            <th style="text-align:center;">Fehlquote</th>
-            <th style="text-align:center;">Entsch.-Quote</th>
-            <th style="text-align:center;">Unentsch.<br>gefehlt</th>
-            <th style="text-align:center;">Entsch.<br>gefehlt</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${filtered.map(s => {
-            const m       = s.member;
-            const attRate = s.attendanceRate !== null ? `${s.attendanceRate}%` : '–';
-            const absRate = s.absenceRate    !== null ? `${s.absenceRate}%`    : '–';
-            const excRate = s.excusedRate    !== null ? `${s.excusedRate}%`    : '–';
-            return `
-              <tr>
-                <td>
-                  <div style="font-weight:500;">${m.displayName || '–'}</div>
-                  <div style="font-size:0.8rem;color:var(--color-text-muted);">${m.email || ''}</div>
-                </td>
-                <td style="text-align:center;font-weight:600;">${s.total}</td>
-                <td style="text-align:center;">${s.present}</td>
-                <td style="text-align:center;font-weight:700;color:${rateColor(s.attendanceRate)};">${attRate}</td>
-                <td style="text-align:center;font-weight:700;color:${rateColor(s.absenceRate, true)};">${absRate}</td>
-                <td style="text-align:center;font-weight:600;color:var(--color-warning);">${excRate}</td>
-                <td style="text-align:center;color:var(--color-error);">${s.absentUnexcused}</td>
-                <td style="text-align:center;color:var(--color-warning);">${s.absentExcused}</td>
-                <td>
-                  <button class="btn-secondary member-report-detail-btn" data-uid="${m.id}"
-                    style="padding:3px 12px;font-size:0.82rem;white-space:nowrap;">
-                    Details
-                  </button>
-                </td>
-              </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    </div>`;
+  const dateRange = `${_fmtDate(from)} – ${_fmtDate(to)}`;
 
-  tableEl.querySelectorAll('.member-report-detail-btn').forEach(btn => {
-    btn.onclick = () => {
-      const stat = filtered.find(s => s.member.id === btn.dataset.uid);
-      if (stat) showMemberReportDetail(stat);
-    };
-  });
-}
-
-/* ── Detail-Modal für einzelnes Mitglied ──────────────────────────────────── */
-async function showMemberReportDetail(stat) {
-  const m = stat.member;
-  const since = new Date();
-  since.setDate(since.getDate() - 180);
-  const sinceTs = firebase.firestore.Timestamp.fromDate(since);
-  const now     = new Date();
-
-  const attSnap = await firestore.collection('eventAttendance')
-    .where('userId', '==', m.id)
-    .get();
-  const attMap = {};
-  attSnap.forEach(doc => { attMap[doc.data().eventId] = doc.data(); });
-
-  const evSnap = await firestore.collection('events')
-    .where('startTime', '>=', sinceTs)
-    .orderBy('startTime', 'desc')
-    .get();
-
-  const memberGroupIds = m.groups || [];
-  const events = [];
-  evSnap.forEach(doc => {
-    const d = doc.data();
-    const t = d.startTime?.toDate?.();
-    if (!t || t > now) return;
-    const inGroup = d.groupId && memberGroupIds.includes(d.groupId);
-    const direct  = (d.directMembers || []).includes(m.id);
-    const hasAtt  = !!attMap[doc.id];
-    if ((inGroup || direct || hasAtt) && d.status !== 'cancelled') {
-      events.push({ id: doc.id, ...d });
-    }
-  });
-
-  const statusLabel = (att, ev) => {
-    if (!att) {
-      return ev?.mode === 'opt_out'
-        ? `<span class="chip chip-error" style="font-size:0.78rem;">Unentsch. gefehlt</span>`
-        : `<span class="chip" style="font-size:0.78rem;background:var(--color-surface-offset);">Nicht angemeldet</span>`;
-    }
-    const map = {
-      present:              `<span class="chip chip-success" style="font-size:0.78rem;">Anwesend</span>`,
-      late_excused:         `<span class="chip chip-success" style="font-size:0.78rem;">Anwesend (verspätet)</span>`,
-      late_unexcused:       `<span class="chip chip-warning" style="font-size:0.78rem;">Verspätet (unentsch.)</span>`,
-      absent_excused:       `<span class="chip chip-warning" style="font-size:0.78rem;">Entsch. gefehlt</span>`,
-      absent_unexcused:     `<span class="chip chip-error" style="font-size:0.78rem;">Unentsch. gefehlt</span>`,
-      cancelled:            `<span class="chip" style="font-size:0.78rem;background:var(--color-surface-offset);">Abgemeldet</span>`,
-      confirmation_pending: `<span class="chip chip-warning" style="font-size:0.78rem;">Ausstehend</span>`,
-    };
-    return map[att.status] || `<span class="chip" style="font-size:0.78rem;">${att.status}</span>`;
-  };
-
-  const rows = events.map(ev => {
-    const start = ev.startTime?.toDate?.();
-    const att   = attMap[ev.id];
-    return `<tr>
-      <td style="font-size:0.85rem;white-space:nowrap;">${start ? formatDateTime(start) : '–'}</td>
-      <td style="font-size:0.85rem;font-weight:500;">${ev.title || '–'}</td>
-      <td>${statusLabel(att, ev)}</td>
-      <td style="font-size:0.82rem;color:var(--color-text-muted);">${att?.trainerNoteMember || att?.memberNote || ''}</td>
-    </tr>`;
-  }).join('');
-
-  showModal({
-    title: `Detailbericht: ${m.displayName || m.email}`,
-    body: `
-      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
-        <div class="card" style="margin:0;flex:1;min-width:90px;text-align:center;padding:12px;">
-          <p class="text-muted" style="margin:0 0 4px;font-size:0.78rem;">Termine</p>
-          <p style="margin:0;font-weight:700;font-size:1.4rem;">${stat.total}</p>
-        </div>
-        <div class="card" style="margin:0;flex:1;min-width:90px;text-align:center;padding:12px;">
-          <p class="text-muted" style="margin:0 0 4px;font-size:0.78rem;">Teilnahmequote</p>
-          <p style="margin:0;font-weight:700;font-size:1.4rem;color:${stat.attendanceRate >= 80 ? 'var(--color-success)' : stat.attendanceRate >= 50 ? 'var(--color-warning)' : 'var(--color-error)'};">
-            ${stat.attendanceRate !== null ? stat.attendanceRate + '%' : '–'}
-          </p>
-        </div>
-        <div class="card" style="margin:0;flex:1;min-width:90px;text-align:center;padding:12px;">
-          <p class="text-muted" style="margin:0 0 4px;font-size:0.78rem;">Fehlquote</p>
-          <p style="margin:0;font-weight:700;font-size:1.4rem;color:${stat.absenceRate >= 30 ? 'var(--color-error)' : stat.absenceRate >= 15 ? 'var(--color-warning)' : 'var(--color-success)'};">
-            ${stat.absenceRate !== null ? stat.absenceRate + '%' : '–'}
-          </p>
-        </div>
-        <div class="card" style="margin:0;flex:1;min-width:90px;text-align:center;padding:12px;">
-          <p class="text-muted" style="margin:0 0 4px;font-size:0.78rem;">Entschuldigt-Quote</p>
-          <p style="margin:0;font-weight:700;font-size:1.4rem;color:var(--color-warning);">
-            ${stat.excusedRate !== null ? stat.excusedRate + '%' : '–'}
-          </p>
-        </div>
+  wrap.innerHTML = `
+    <div id="report-print-area">
+      <div id="report-print-header" style="display:none;margin-bottom:20px;">
+        <h2 style="margin:0 0 4px;">Teilnahmebericht</h2>
+        <p style="margin:0;font-size:0.9rem;color:#666;">Zeitraum: ${dateRange} · Erstellt: ${_fmtDate(new Date())}</p>
       </div>
-      <div style="overflow-x:auto;max-height:380px;overflow-y:auto;">
-        <table style="min-width:480px;">
+      <div style="overflow-x:auto;">
+        <table id="report-table" style="font-size:0.88rem;">
           <thead>
-            <tr>
-              <th>Datum</th>
-              <th>Termin</th>
-              <th>Status</th>
-              <th>Notiz</th>
+            <tr style="background:var(--color-surface-offset);">
+              <th style="text-align:left;padding:10px 12px;font-weight:600;">Mitglied</th>
+              <th style="padding:10px 8px;text-align:center;" title="Termine gesamt">Termine</th>
+              <th style="padding:10px 8px;text-align:center;" title="Anwesenheitsquote">Anw.-Quote</th>
+              <th style="padding:10px 8px;text-align:center;" title="Fehlquote">Fehlquote</th>
+              <th style="padding:10px 8px;text-align:center;" title="Entschuldigt von Fehlzeiten">Entsch.-Quote</th>
+              <th style="padding:10px 8px;text-align:center;">Anwesend</th>
+              <th style="padding:10px 8px;text-align:center;">Entsch. gefehlt</th>
+              <th style="padding:10px 8px;text-align:center;">Unentsch. gefehlt</th>
+              <th style="padding:10px 8px;text-align:center;">Abgemeldet</th>
+              <th style="padding:10px 8px;text-align:center;">Offen</th>
             </tr>
           </thead>
-          <tbody>
-            ${rows || '<tr><td colspan="4" class="text-muted" style="padding:16px;">Keine Daten im Zeitraum.</td></tr>'}
+          <tbody id="report-tbody">
+            ${stats.map(s => `
+              <tr class="member-report-row" data-uid="${s.uid}" data-name="${s.name}"
+                  style="border-bottom:1px solid var(--color-border);cursor:pointer;"
+                  onclick="openMemberReportDetail('${s.uid}')">
+                <td style="padding:10px 12px;">
+                  <div style="font-weight:500;">${s.name}</div>
+                  ${s.email ? `<div style="font-size:0.78rem;color:var(--color-text-muted);">${s.email}</div>` : ''}
+                </td>
+                <td style="padding:10px 8px;text-align:center;">${num(s.total)}</td>
+                <td style="padding:10px 8px;text-align:center;">
+                  <span style="font-weight:700;color:${rateColor(s.attendanceRate)};">${pct(s.attendanceRate)}</span>
+                </td>
+                <td style="padding:10px 8px;text-align:center;">
+                  <span style="font-weight:700;color:${absColor(s.absenceRate)};">${pct(s.absenceRate)}</span>
+                </td>
+                <td style="padding:10px 8px;text-align:center;">
+                  <span style="color:${s.excusedRate !== null ? 'var(--color-text)' : 'var(--color-text-faint)'};">${
+                    s.excusedRate !== null ? pct(s.excusedRate) + ' entsch.' : '–'
+                  }</span>
+                </td>
+                <td style="padding:10px 8px;text-align:center;color:var(--color-success);font-weight:600;">${num(s.attended)}</td>
+                <td style="padding:10px 8px;text-align:center;color:var(--color-warning);">${num(s.absentExcused)}</td>
+                <td style="padding:10px 8px;text-align:center;color:var(--color-error);">${num(s.absentUnexcused)}</td>
+                <td style="padding:10px 8px;text-align:center;color:var(--color-text-muted);">${num(s.cancelled)}</td>
+                <td style="padding:10px 8px;text-align:center;color:var(--color-text-muted);">${num(s.registered + s.confirmPending)}</td>
+              </tr>`).join('')}
           </tbody>
         </table>
-      </div>`,
-    confirmLabel: 'Schließen',
-    onConfirm: () => {}
+      </div>
+    </div>
+  `;
+
+  // Hover-Effekt für Tabellenzeilen
+  document.querySelectorAll('.member-report-row').forEach(row => {
+    row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-offset)');
+    row.addEventListener('mouseleave', () => row.style.background = '');
   });
 }
 
-/* ── PDF-Export ────────────────────────────────────────────────────────────── */
-function exportReportAsPDF(stats, title) {
-  const since = new Date();
-  since.setDate(since.getDate() - 180);
-  const periodFrom = since.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const printDate  = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const appName    = document.getElementById('app-title')?.textContent || 'Anwesenheit';
+// ── Detailansicht einzelnes Mitglied ─────────────────────────────────────────
+async function openMemberReportDetail(uid) {
+  const container = document.getElementById('app-content');
+  container.innerHTML = `<div class="loading-center">Lade Detailbericht...</div>`;
 
-  const tableRows = stats.map(s => {
-    const attRate = s.attendanceRate !== null ? `${s.attendanceRate}%` : '–';
-    const absRate = s.absenceRate    !== null ? `${s.absenceRate}%`    : '–';
-    const excRate = s.excusedRate    !== null ? `${s.excusedRate}%`    : '–';
+  try {
+    const userDoc  = await firestore.collection('users').doc(uid).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const name     = userData.displayName || userData.email || uid;
 
-    const attColor = s.attendanceRate >= 80 ? '#2e7d32' : s.attendanceRate >= 50 ? '#e65100' : '#c62828';
-    const absColor = s.absenceRate    >= 30 ? '#c62828' : s.absenceRate    >= 15 ? '#e65100' : '#2e7d32';
+    const attSnap = await firestore.collection('eventAttendance').where('userId', '==', uid).get();
+    const attendances = [];
+    attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
-    return `
-      <tr>
-        <td>
-          <strong>${s.member.displayName || '–'}</strong>
-          <br><small style="color:#666;">${s.member.email || ''}</small>
-        </td>
-        <td style="text-align:center;">${s.total}</td>
-        <td style="text-align:center;">${s.present}</td>
-        <td style="text-align:center;font-weight:700;color:${attColor};">${attRate}</td>
-        <td style="text-align:center;font-weight:700;color:${absColor};">${absRate}</td>
-        <td style="text-align:center;">${excRate}</td>
-        <td style="text-align:center;">${s.absentUnexcused}</td>
-        <td style="text-align:center;">${s.absentExcused}</td>
-      </tr>`;
-  }).join('');
-
-  const printWin = window.open('', '_blank');
-  if (!printWin) {
-    if (typeof showToast === 'function') showToast('Popup-Blocker aktiv – bitte erlauben.', 'warning');
-    return;
-  }
-
-  printWin.document.write(`<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8" />
-  <title>${title}</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 11pt; color: #1a1a1a; padding: 28px 36px; }
-    h1 { font-size: 17pt; margin-bottom: 4px; }
-    .meta { color: #555; font-size: 9pt; margin-bottom: 20px; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
-    table { width: 100%; border-collapse: collapse; }
-    thead tr { background: #f0f0f0; }
-    th { padding: 8px 10px; text-align: left; font-size: 9pt; font-weight: 600; border-bottom: 2px solid #ccc; }
-    td { padding: 7px 10px; font-size: 9.5pt; border-bottom: 1px solid #e8e8e8; vertical-align: top; }
-    tr:nth-child(even) td { background: #fafafa; }
-    .footer { margin-top: 24px; font-size: 8pt; color: #888; border-top: 1px solid #ccc; padding-top: 8px; display: flex; justify-content: space-between; }
-    .no-print { display: flex; gap: 8px; margin-bottom: 18px; }
-    @media print {
-      .no-print { display: none !important; }
-      body { padding: 0; }
+    const eventIds = [...new Set(attendances.map(a => a.eventId).filter(Boolean))];
+    const events   = {};
+    for (const eid of eventIds) {
+      const eDoc = await firestore.collection('events').doc(eid).get();
+      if (eDoc.exists) events[eid] = { id: eid, ...eDoc.data() };
     }
-  </style>
-</head>
-<body>
-  <h1>${title}</h1>
-  <p class="meta">
-    Erstellt am ${printDate} &nbsp;·&nbsp;
-    Zeitraum: ${periodFrom} – ${printDate} &nbsp;·&nbsp;
-    ${stats.length} Mitglied${stats.length !== 1 ? 'er' : ''} &nbsp;·&nbsp;
-    ${appName}
-  </p>
-  <div class="no-print">
-    <button onclick="window.print()"
-      style="padding:7px 18px;background:#01696f;color:#fff;border:none;border-radius:5px;font-size:11pt;cursor:pointer;">
-      🖨️ Drucken / Als PDF speichern
-    </button>
-    <button onclick="window.close()"
-      style="padding:7px 18px;background:#eee;color:#333;border:none;border-radius:5px;font-size:11pt;cursor:pointer;">
-      Schließen
-    </button>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Mitglied</th>
-        <th style="text-align:center;">Termine</th>
-        <th style="text-align:center;">Anwesend</th>
-        <th style="text-align:center;">Teilnahmequote</th>
-        <th style="text-align:center;">Fehlquote</th>
-        <th style="text-align:center;">Entschuldigt-Quote</th>
-        <th style="text-align:center;">Unentsch. gefehlt</th>
-        <th style="text-align:center;">Entsch. gefehlt</th>
-      </tr>
-    </thead>
-    <tbody>${tableRows}</tbody>
-  </table>
-  <div class="footer">
-    <span>${appName} – Teilnahmebericht</span>
-    <span>Generiert: ${printDate}</span>
-  </div>
-</body>
-</html>`);
-  printWin.document.close();
-  setTimeout(() => printWin.print(), 500);
+
+    const rows = attendances
+      .filter(a => events[a.eventId])
+      .sort((a, b) => {
+        const ta = events[a.eventId]?.startTime?.toMillis?.() ?? 0;
+        const tb = events[b.eventId]?.startTime?.toMillis?.() ?? 0;
+        return tb - ta;
+      });
+
+    const statusLabel = {
+      present:              '✅ Anwesend',
+      registered:           '📋 Angemeldet',
+      confirmation_pending: '⏳ Ausstehend',
+      absent_excused:       '🟡 Entsch. gefehlt',
+      absent_unexcused:     '🔴 Unentsch. gefehlt',
+      late_excused:         '🟡 Verspätet (E)',
+      late_unexcused:       '🟡 Verspätet (U)',
+      cancelled:            '↩ Abgemeldet',
+      skipped:              '❌ Ausgefallen',
+    };
+
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+        <button class="btn-secondary" id="report-detail-back" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
+          <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurück
+        </button>
+        <h2 style="margin:0;">Bericht: ${name}</h2>
+        <button class="btn-secondary" id="export-detail-pdf" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">picture_as_pdf</span> PDF
+        </button>
+      </div>
+
+      <div id="detail-report-content">
+        <div style="overflow-x:auto;">
+          <table style="font-size:0.88rem;">
+            <thead>
+              <tr style="background:var(--color-surface-offset);">
+                <th style="text-align:left;padding:8px 12px;">Termin</th>
+                <th style="padding:8px;text-align:center;">Datum</th>
+                <th style="padding:8px;text-align:center;">Status</th>
+                <th style="padding:8px;text-align:left;">Notiz</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(a => {
+                const ev = events[a.eventId];
+                const start = ev?.startTime?.toDate?.();
+                return `
+                <tr style="border-bottom:1px solid var(--color-border);">
+                  <td style="padding:8px 12px;font-weight:500;">${ev?.title || '–'}</td>
+                  <td style="padding:8px;text-align:center;white-space:nowrap;">${start ? _fmtDate(start) : '–'}</td>
+                  <td style="padding:8px;text-align:center;">${statusLabel[a.status] || a.status}</td>
+                  <td style="padding:8px;color:var(--color-text-muted);font-size:0.82rem;">${a.memberNote || a.trainerNoteMember || '–'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('report-detail-back').onclick = () => loadMemberReportDashboard();
+    document.getElementById('export-detail-pdf').onclick  = () => _exportDetailPDF(name, rows, events, statusLabel);
+
+  } catch (err) {
+    console.error(err);
+    container.innerHTML = `<p class="text-error">Fehler: ${err.message}</p>`;
+  }
+}
+
+// ── PDF-Export (Übersicht) ────────────────────────────────────────────────────
+function exportReportPDF(from, to, isCoord) {
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) { showToast('PDF-Bibliothek nicht geladen.', 'error'); return; }
+
+  const rows   = document.querySelectorAll('.member-report-row');
+  const doc    = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const title  = (window.appSettings?.brandingTitle || 'Anwesenheit-NEO') + ' – Teilnahmebericht';
+  const range  = `Zeitraum: ${_fmtDate(from)} – ${_fmtDate(to)}`;
+  const today  = `Erstellt: ${_fmtDate(new Date())}`;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text(title, 14, 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`${range}   ·   ${today}`, 14, 21);
+
+  const headers = ['Mitglied', 'Termine', 'Anw.-%', 'Fehl-%', 'Entsch.-%', 'Anwesend', 'Entsch.', 'Unentsch.', 'Abgem.', 'Offen'];
+  const data    = [];
+
+  rows.forEach(row => {
+    const cells = row.querySelectorAll('td');
+    if (cells.length < 10) return;
+    data.push([
+      cells[0].querySelector('div')?.textContent || cells[0].textContent,
+      cells[1].textContent.trim(),
+      cells[2].textContent.trim(),
+      cells[3].textContent.trim(),
+      cells[4].textContent.trim(),
+      cells[5].textContent.trim(),
+      cells[6].textContent.trim(),
+      cells[7].textContent.trim(),
+      cells[8].textContent.trim(),
+      cells[9].textContent.trim(),
+    ]);
+  });
+
+  if (!data.length) { showToast('Keine Daten zum Exportieren.', 'warning'); return; }
+
+  // Einfache manuelle Tabelle
+  const colWidths = [50, 16, 18, 18, 22, 18, 18, 22, 18, 14];
+  const startX    = 14;
+  let   y         = 28;
+  const rowH      = 7;
+  const headerH   = 8;
+
+  // Header
+  doc.setFillColor(240, 240, 240);
+  doc.rect(startX, y, colWidths.reduce((a,b) => a+b, 0), headerH, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  let x = startX;
+  headers.forEach((h, i) => {
+    doc.text(h, x + 2, y + 5.5);
+    x += colWidths[i];
+  });
+  y += headerH;
+
+  // Daten
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  data.forEach((row, ri) => {
+    if (ri % 2 === 0) {
+      doc.setFillColor(250, 250, 250);
+      doc.rect(startX, y, colWidths.reduce((a,b)=>a+b,0), rowH, 'F');
+    }
+    x = startX;
+    row.forEach((cell, i) => {
+      const txt = String(cell).substring(0, i === 0 ? 30 : 8);
+      doc.text(txt, x + 2, y + 4.8);
+      x += colWidths[i];
+    });
+    // Trennlinie
+    doc.setDrawColor(220, 220, 220);
+    doc.line(startX, y + rowH, startX + colWidths.reduce((a,b)=>a+b,0), y + rowH);
+    y += rowH;
+    if (y > 185) { doc.addPage(); y = 14; }
+  });
+
+  const filename = `Teilnahmebericht_${_fmtDateFile(from)}_${_fmtDateFile(to)}.pdf`;
+  doc.save(filename);
+  showToast('PDF wurde erstellt.', 'success');
+}
+
+// ── PDF-Export (Detail einzelnes Mitglied) ────────────────────────────────────
+function _exportDetailPDF(name, rows, events, statusLabel) {
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) { showToast('PDF-Bibliothek nicht geladen.', 'error'); return; }
+
+  const doc   = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const title = `Einzelbericht: ${name}`;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(title, 14, 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Erstellt: ${_fmtDate(new Date())}`, 14, 22);
+
+  const headers  = ['Termin', 'Datum', 'Status', 'Notiz'];
+  const colW     = [70, 28, 42, 42];
+  const startX   = 14;
+  let   y        = 28;
+
+  // Header
+  doc.setFillColor(240,240,240);
+  doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), 8, 'F');
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(8.5);
+  let x = startX;
+  headers.forEach((h,i) => { doc.text(h, x+2, y+5.5); x += colW[i]; });
+  y += 8;
+
+  doc.setFont('helvetica','normal');
+  doc.setFontSize(8);
+  rows.forEach((a, ri) => {
+    const ev    = events[a.eventId];
+    const start = ev?.startTime?.toDate?.();
+    const cells = [
+      (ev?.title || '–').substring(0, 35),
+      start ? _fmtDate(start) : '–',
+      (statusLabel[a.status] || a.status).replace(/[✅📋⏳🟡🔴↩❌]/g, '').trim(),
+      (a.memberNote || a.trainerNoteMember || '–').substring(0, 30),
+    ];
+    if (ri % 2 === 0) {
+      doc.setFillColor(250,250,250);
+      doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), 7, 'F');
+    }
+    x = startX;
+    cells.forEach((c,i) => { doc.text(String(c), x+2, y+4.8); x += colW[i]; });
+    doc.setDrawColor(220,220,220);
+    doc.line(startX, y+7, startX+colW.reduce((a,b)=>a+b,0), y+7);
+    y += 7;
+    if (y > 270) { doc.addPage(); y = 14; }
+  });
+
+  doc.save(`Bericht_${name.replace(/\s+/g,'_')}_${_fmtDateFile(new Date())}.pdf`);
+  showToast('PDF wurde erstellt.', 'success');
+}
+
+// ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+function _fmtDate(d) {
+  if (!d) return '–';
+  return d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
+}
+function _fmtDateInput(d) {
+  if (!d) return '';
+  const y  = d.getFullYear();
+  const m  = String(d.getMonth()+1).padStart(2,'0');
+  const dy = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${dy}`;
+}
+function _fmtDateFile(d) {
+  if (!d) return '';
+  return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
 }
