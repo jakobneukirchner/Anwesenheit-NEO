@@ -79,25 +79,29 @@ const DASHBOARD_LOADERS = {
   coordinator: () => loadCoordinatorDashboard(),
   teacher:     () => loadTrainerDashboard(),
   member:      () => loadMemberDashboard(),
-  statistics:  () => loadStatisticsDashboard()
+  statistics:  () => loadStatisticsDashboard(),
+  myMembers:   () => loadMemberReportDashboard()
 };
 
 const ROLE_LABELS_SWITCHER = {
-  admin: 'Admin',
+  admin:       'Admin',
   coordinator: 'Koordinator',
-  teacher: 'Trainer',
-  member: 'Mitglieder'
+  teacher:     'Trainer',
+  member:      'Mitglieder',
+  myMembers:   'Meine Mitglieder'
 };
 
 const ROLE_ICONS = {
-  admin: 'admin_panel_settings',
+  admin:       'admin_panel_settings',
   coordinator: 'supervisor_account',
-  teacher: 'sports',
-  member: 'group',
-  statistics: 'bar_chart'
+  teacher:     'sports',
+  member:      'group',
+  statistics:  'bar_chart',
+  myMembers:   'people_alt'
 };
 
-const STATS_ROLES = ['admin', 'coordinator', 'teacher'];
+const STATS_ROLES       = ['admin', 'coordinator', 'teacher'];
+const MY_MEMBERS_ROLES  = ['admin', 'coordinator', 'teacher'];
 
 function routeToDashboard(roles, forceRole) {
   const role = forceRole || getPrimaryRole(roles);
@@ -108,9 +112,11 @@ function routeToDashboard(roles, forceRole) {
 
 function renderDashboardSwitcher(roles) {
   removeDashboardSwitcher();
-  const available = ROLE_ORDER.filter(r => roles.includes(r));
-  const hasStats = STATS_ROLES.some(r => roles.includes(r));
-  if (available.length <= 1 && !hasStats) return;
+  const available     = ROLE_ORDER.filter(r => roles.includes(r));
+  const hasStats      = STATS_ROLES.some(r => roles.includes(r));
+  const hasMyMembers  = MY_MEMBERS_ROLES.some(r => roles.includes(r));
+
+  if (available.length <= 1 && !hasStats && !hasMyMembers) return;
 
   const desktopBar = document.querySelector('#app-actions-desktop');
   if (desktopBar) {
@@ -133,25 +139,34 @@ function renderDashboardSwitcher(roles) {
       return btn;
     };
 
+    // Rollen-Buttons (Admin, Koordinator, Trainer, Mitglied)
     if (available.length > 1) available.forEach(r => wrapper.appendChild(makeBtn(r, ROLE_LABELS_SWITCHER[r] || r)));
+
+    // Trennstrich + Statistiken
     if (hasStats) {
-      if (available.length > 1) {
-        const sep = document.createElement('span');
-        sep.textContent = '|';
-        Object.assign(sep.style, { color: 'rgba(255,255,255,0.35)', fontSize: '0.9rem', padding: '0 2px' });
-        wrapper.appendChild(sep);
-      }
+      if (available.length > 1) wrapper.appendChild(_makeSeparator());
       wrapper.appendChild(makeBtn('statistics', 'Statistiken'));
     }
+
+    // Trennstrich + Meine Mitglieder
+    if (hasMyMembers) {
+      wrapper.appendChild(_makeSeparator());
+      wrapper.appendChild(makeBtn('myMembers', 'Meine Mitglieder'));
+    }
+
     desktopBar.insertBefore(wrapper, desktopBar.firstChild);
   }
 
   const mobileContainer = document.getElementById('mobile-role-switcher');
   if (mobileContainer) {
     mobileContainer.innerHTML = '';
-    const allRoles = [...(available.length > 1 ? available : []), ...(hasStats ? ['statistics'] : [])];
+    const allRoles = [
+      ...(available.length > 1 ? available : []),
+      ...(hasStats      ? ['statistics'] : []),
+      ...(hasMyMembers  ? ['myMembers']  : [])
+    ];
     allRoles.forEach(role => {
-      const label = role === 'statistics' ? 'Statistiken' : (ROLE_LABELS_SWITCHER[role] || role);
+      const label = ROLE_LABELS_SWITCHER[role] || role;
       const btn = document.createElement('button');
       btn.className = 'mobile-role-btn' + (role === window.currentDashboardRole ? ' active' : '');
       btn.dataset.role = role;
@@ -168,8 +183,15 @@ function renderDashboardSwitcher(roles) {
   }
 }
 
+function _makeSeparator() {
+  const sep = document.createElement('span');
+  sep.textContent = '|';
+  Object.assign(sep.style, { color: 'rgba(255,255,255,0.35)', fontSize: '0.9rem', padding: '0 2px' });
+  return sep;
+}
+
 function _applyActive(btn, isActive) {
-  btn.style.opacity = isActive ? '1' : '0.65';
+  btn.style.opacity    = isActive ? '1' : '0.65';
   btn.style.background = isActive ? 'rgba(255,255,255,0.18)' : 'none';
   btn.style.fontWeight = isActive ? '700' : '400';
 }
@@ -233,10 +255,10 @@ function renderLoginPage() {
   // Karte braucht position:relative für das Overlay
   document.getElementById('login-card').style.position = 'relative';
 
-  const form      = document.getElementById('login-form');
-  const errorEl   = document.getElementById('login-error');
-  const overlay   = document.getElementById('login-loading-overlay');
-  const submitBtn = document.getElementById('login-submit-btn');
+  const form       = document.getElementById('login-form');
+  const errorEl    = document.getElementById('login-error');
+  const overlay    = document.getElementById('login-loading-overlay');
+  const submitBtn  = document.getElementById('login-submit-btn');
   const emailInput = document.getElementById('login-email');
 
   function showLoading(on) {
@@ -267,7 +289,6 @@ function renderLoginPage() {
           <span>Bitte gib deine E-Mail-Adresse ein.</span>
         </div>`;
     } else {
-      // Hinweis wegräumen wenn wieder was drin steht
       const box = errorEl.querySelector('.login-error-box');
       if (box && box.querySelector('span:last-child')?.textContent?.includes('E-Mail-Adresse')) {
         errorEl.innerHTML = '';
