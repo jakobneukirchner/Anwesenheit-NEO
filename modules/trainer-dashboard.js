@@ -217,8 +217,7 @@ async function openTrainerEventDetail(event) {
     const isPast          = end ? end <= now : (start ? start <= now : false);
 
     // ── eventRole dieses Nutzers für diesen Termin ermitteln ─────────────────
-    // Prüfe ob Nutzer manuell hinzugefügt wurde und welche Rolle er hat
-    let myEventRole = null; // null = native Trainer
+    let myEventRole = null;
     const myAttSnap = await firestore.collection('eventAttendance')
       .where('eventId', '==', ev.id)
       .where('userId', '==', myUid)
@@ -226,15 +225,13 @@ async function openTrainerEventDetail(event) {
     if (!myAttSnap.empty) {
       const myAtt = myAttSnap.docs[0].data();
       if (myAtt.addedByTrainer && myAtt.eventRole) {
-        myEventRole = myAtt.eventRole; // 'trainer_full' | 'trainer_readonly' | 'trainer_hidden' | 'member'
+        myEventRole = myAtt.eventRole;
       }
     }
 
-    // Rechte-Flags
     const canEditAttendance = myEventRole === null || myEventRole === 'trainer_full';
     const canSeeAttendance  = myEventRole === null || myEventRole === 'trainer_full' || myEventRole === 'trainer_readonly';
 
-    // Falls nach Terminende und nur via eventRole hinzugefügt: Prüfe ob Dashboard noch sichtbar
     const userRoles = window.currentUser?.roles || [];
     const isNativeTrainer = userRoles.includes('teacher') || userRoles.includes('admin') || userRoles.includes('coordinator');
     if (!isNativeTrainer && isPast && (myEventRole === 'trainer_hidden' || myEventRole === 'member')) {
@@ -264,7 +261,6 @@ async function openTrainerEventDetail(event) {
     const myUserDoc  = await firestore.collection('users').doc(myUid).get();
     const myName     = myUserDoc.exists ? (myUserDoc.data().displayName || myUserDoc.data().email || myUid) : myUid;
 
-    // Alle Nutzer laden – unabhängig von Rolle für "Hinzufügen"-Feature
     const allUsersSnap = await firestore.collection('users').get();
     const allTeachers  = [];
     const allUsers     = [];
@@ -326,7 +322,6 @@ async function openTrainerEventDetail(event) {
       }
     }
 
-    // Status-Chip ohne Sanduhr-Emoji
     const statusChipHtml = (status) => {
       const map = {
         present:              ['chip-success', 'Anwesend'],
@@ -343,7 +338,6 @@ async function openTrainerEventDetail(event) {
       return `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
     };
 
-    // Tabellenzeilen – manuell hinzugefügte haben Entfernen-Button
     const memberRows = attendances.map(att => {
       const u = userMap[att.userId] || { name: att.userId, generalNote: '' };
       const isManual = !!att.addedByTrainer;
@@ -483,7 +477,6 @@ async function openTrainerEventDetail(event) {
         <button class="btn-secondary" id="cancel-all-sub-reqs-btn" style="padding:4px 12px;">Alle Anfragen zurückziehen</button>
       </div>` : '';
 
-    // Anwesenheitsrechte-Banner für eingeschränkte Rollen
     const accessBannerHtml = myEventRole && myEventRole !== 'trainer_full'
       ? `<div class="card" style="margin-bottom:16px;border-left:4px solid var(--color-primary);background:color-mix(in oklch,var(--color-primary) 6%,var(--color-surface));">
            <p style="margin:0;display:flex;align-items:center;gap:8px;font-size:0.9rem;">
@@ -763,7 +756,7 @@ async function openTrainerEventDetail(event) {
     document.getElementById('revoke-self-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Abmeldung widerrufen',
-        body: `<p>Möchtest du deine Abmeldung rükgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
+        body: `<p>Möchtest du deine Abmeldung rückgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
         confirmLabel: 'Ja, wieder eintragen',
         onConfirm: async () => {
           try {
