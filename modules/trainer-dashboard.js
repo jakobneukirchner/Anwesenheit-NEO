@@ -20,6 +20,48 @@ async function loadTrainerDashboard() {
     const cutOff     = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
     const pastCutOff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
+    // ── Prüfen ob Trainer-Rolle des Users nur auf manuell zugewiesenen Terminen basiert
+    // und ob diese Termine bereits vorbei sind (dann kein Trainer-Dashboard anzeigen)
+    const userRoles = window.currentUser?.roles || [];
+    const isNativeTrainer = userRoles.includes('teacher') || userRoles.includes('admin') || userRoles.includes('coordinator');
+
+    if (!isNativeTrainer) {
+      // Nutzer hat keine native Trainer-Rolle – nur via eventRole manuell hinzugefügt.
+      // Prüfe ob es noch aktive/künftige Termine mit trainer_full oder trainer_readonly gibt.
+      const manualSnap = await firestore.collection('eventAttendance')
+        .where('userId', '==', user.uid)
+        .where('addedByTrainer', '==', true)
+        .get();
+      const manualEventIds = [];
+      manualSnap.forEach(doc => {
+        const role = doc.data().eventRole || 'member';
+        if (role === 'trainer_full' || role === 'trainer_readonly') {
+          manualEventIds.push({ eventId: doc.data().eventId, role });
+        }
+      });
+      if (!manualEventIds.length) {
+        container.innerHTML = '<p class="text-muted">Kein Trainer-Zugriff verfügbar.</p>';
+        return;
+      }
+      // Prüfe ob mindestens ein Termin noch aktiv (in der Zukunft oder laufend)
+      let hasActiveEvent = false;
+      for (const entry of manualEventIds) {
+        const evDoc = await firestore.collection('events').doc(entry.eventId).get();
+        if (!evDoc.exists) continue;
+        const end = evDoc.data().endTime?.toDate?.() || evDoc.data().startTime?.toDate?.();
+        if (end && end > now) { hasActiveEvent = true; break; }
+      }
+      if (!hasActiveEvent) {
+        container.innerHTML = `
+          <div class="card" style="max-width:480px;margin:48px auto;text-align:center;">
+            <span class="material-icons" style="font-size:40px;color:var(--color-text-faint);margin-bottom:12px;">event_busy</span>
+            <h3 style="margin:0 0 8px;">Kein aktiver ${tLabel}-Zugriff</h3>
+            <p class="text-muted">Du wurdest temporär als ${tLabel} zu einem Termin hinzugefügt, dieser ist aber bereits abgelaufen.</p>
+          </div>`;
+        return;
+      }
+    }
+
     let events = [];
     const seen = new Set();
     const addEvents = (snap) => snap.forEach(doc => {
@@ -171,6 +213,46 @@ async function openTrainerEventDetail(event) {
     const trainerIds      = ev.trainers || [];
     const cancelledIds    = ev.trainerCancellations || [];
     const minPart         = ev.minParticipants ?? settings.defaultMinParticipants ?? 0;
+    const now             = new Date();
+    const isPast          = end ? end <= now : (start ? start <= now : false);
+
+    // ── eventRole dieses Nutzers für diesen Termin ermitteln ─────────────────
+    // Prüfe ob Nutzer manuell hinzugefügt wurde und welche Rolle er hat
+    let myEventRole = null; // null = native Trainer
+    const myAttSnap = await firestore.collection('eventAttendance')
+      .where('eventId', '==', ev.id)
+      .where('userId', '==', myUid)
+      .get();
+    if (!myAttSnap.empty) {
+      const myAtt = myAttSnap.docs[0].data();
+      if (myAtt.addedByTrainer && myAtt.eventRole) {
+        myEventRole = myAtt.eventRole; // 'trainer_full' | 'trainer_readonly' | 'trainer_hidden' | 'member'
+      }
+    }
+
+    // Rechte-Flags
+    const canEditAttendance = myEventRole === null || myEventRole === 'trainer_full';
+    const canSeeAttendance  = myEventRole === null || myEventRole === 'trainer_full' || myEventRole === 'trainer_readonly';
+
+    // Falls nach Terminende und nur via eventRole hinzugefügt: Prüfe ob Dashboard noch sichtbar
+    const userRoles = window.currentUser?.roles || [];
+    const isNativeTrainer = userRoles.includes('teacher') || userRoles.includes('admin') || userRoles.includes('coordinator');
+    if (!isNativeTrainer && isPast && (myEventRole === 'trainer_hidden' || myEventRole === 'member')) {
+      container.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+          <button class="btn-secondary" id="detail-back" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
+            <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurück
+          </button>
+          <h2 style="margin:0;opacity:0.6;">${ev.title || 'Termin'}</h2>
+        </div>
+        <div class="card" style="text-align:center;padding:var(--space-12);">
+          <span class="material-icons" style="font-size:40px;color:var(--color-text-faint);margin-bottom:12px;">lock</span>
+          <h3 style="margin:0 0 8px;">Kein Zugriff mehr</h3>
+          <p class="text-muted">Dein Zugriff auf diesen Termin ist abgelaufen, da der Termin vorbei ist.</p>
+        </div>`;
+      document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
+      return;
+    }
 
     const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
     const trainerNames  = {};
@@ -185,7 +267,7 @@ async function openTrainerEventDetail(event) {
     // Alle Nutzer laden – unabhängig von Rolle für "Hinzufügen"-Feature
     const allUsersSnap = await firestore.collection('users').get();
     const allTeachers  = [];
-    const allUsers     = []; // Alle Nutzer (für manuelles Hinzufügen)
+    const allUsers     = [];
     allUsersSnap.forEach(doc => {
       const d = doc.data();
       const roles = d.roles || [];
@@ -255,6 +337,7 @@ async function openTrainerEventDetail(event) {
         late_excused:         ['chip-warning', 'Verspätet (E)'],
         late_unexcused:       ['chip-warning', 'Verspätet (U)'],
         confirmation_pending: ['chip-warning', 'Ausstehend'],
+        skipped:              ['chip-error',   'Termin ausgefallen'],
       };
       const [cls, label] = map[status] || ['', status];
       return `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
@@ -277,13 +360,15 @@ async function openTrainerEventDetail(event) {
         </td>
         <td id="status-chip-${att.id}">${statusChipHtml(att.status)}</td>
         <td>
+          ${canEditAttendance ? `
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
             <input type="checkbox" class="presence-cb" data-att-id="${att.id}"
               style="width:20px;height:20px;" ${att.status === 'present' ? 'checked' : ''} />
             Anwesend
-          </label>
+          </label>` : '<span class="text-muted" style="font-size:0.82rem;">Kein Zugriff</span>'}
         </td>
         <td>
+          ${canEditAttendance ? `
           <select class="status-select" data-att-id="${att.id}" style="font-size:0.85rem;">
             <option value="present"              ${att.status==='present'              ?'selected':''}>Anwesend</option>
             <option value="registered"           ${att.status==='registered'           ?'selected':''}>Angemeldet (offen)</option>
@@ -293,21 +378,23 @@ async function openTrainerEventDetail(event) {
             <option value="late_excused"         ${att.status==='late_excused'         ?'selected':''}>Verspätet (entschuldigt)</option>
             <option value="late_unexcused"       ${att.status==='late_unexcused'       ?'selected':''}>Verspätet (unentschuldigt)</option>
             <option value="cancelled"            ${att.status==='cancelled'            ?'selected':''}>Abgemeldet</option>
-          </select>
+          </select>` : statusChipHtml(att.status)}
         </td>
         <td>
+          ${canEditAttendance ? `
           <input type="text" class="trainer-note-internal" data-att-id="${att.id}"
             placeholder="Interne Notiz (nur ${tLabel})" value="${att.trainerNoteInternal || ''}"
-            style="min-width:120px;font-size:0.85rem;" />
+            style="min-width:120px;font-size:0.85rem;" />` : `<span class="text-muted" style="font-size:0.82rem;">${att.trainerNoteInternal || '–'}</span>`}
         </td>
         <td>
+          ${canEditAttendance ? `
           <input type="text" class="trainer-note-member" data-att-id="${att.id}"
             placeholder="Notiz an Mitglied" value="${att.trainerNoteMember || ''}"
-            style="min-width:120px;font-size:0.85rem;" />
+            style="min-width:120px;font-size:0.85rem;" />` : `<span class="text-muted" style="font-size:0.82rem;">${att.trainerNoteMember || '–'}</span>`}
         </td>
         <td class="text-muted" style="font-size:0.82rem;max-width:140px;">${att.memberNote || ''}</td>
         <td>
-          ${isManual ? `
+          ${isManual && canEditAttendance ? `
             <button class="btn-danger remove-manual-att-btn" data-att-id="${att.id}"
               title="Manuell hinzugefügte Person entfernen"
               style="padding:4px 10px;font-size:0.82rem;display:inline-flex;align-items:center;gap:4px;">
@@ -396,6 +483,21 @@ async function openTrainerEventDetail(event) {
         <button class="btn-secondary" id="cancel-all-sub-reqs-btn" style="padding:4px 12px;">Alle Anfragen zurückziehen</button>
       </div>` : '';
 
+    // Anwesenheitsrechte-Banner für eingeschränkte Rollen
+    const accessBannerHtml = myEventRole && myEventRole !== 'trainer_full'
+      ? `<div class="card" style="margin-bottom:16px;border-left:4px solid var(--color-primary);background:color-mix(in oklch,var(--color-primary) 6%,var(--color-surface));">
+           <p style="margin:0;display:flex;align-items:center;gap:8px;font-size:0.9rem;">
+             <span class="material-icons" style="font-size:18px;color:var(--color-primary);">info</span>
+             Du hast bei diesem Termin eingeschränkte Rechte:
+             ${ myEventRole === 'trainer_readonly'
+                ? '<strong>Nur lesen</strong> – Anwesenheitsliste sichtbar, aber nicht änderbar.'
+                : myEventRole === 'trainer_hidden'
+                ? '<strong>Kein Anwesenheitszugang</strong> – Anwesenheitsliste nicht sichtbar.'
+                : '<strong>Mitglied</strong> – du nimmst als Teilnehmer teil.' }
+           </p>
+         </div>`
+      : '';
+
     container.innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
         <button class="btn-secondary" id="detail-back" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
@@ -411,6 +513,7 @@ async function openTrainerEventDetail(event) {
           : ''}
       </div>
 
+      ${accessBannerHtml}
       ${incomingSubHtml}
       ${mySubHtml}
 
@@ -453,6 +556,7 @@ async function openTrainerEventDetail(event) {
 
       ${ev.description ? `<div class="card" style="margin-bottom:16px;"><p style="margin:0;">${ev.description}</p></div>` : ''}
 
+      ${canSeeAttendance ? `
       <div class="card" style="margin-bottom:16px;">
         <h4 style="margin:0 0 6px;display:flex;align-items:center;gap:6px;">
           <span class="material-icons" style="color:var(--color-primary);">campaign</span>
@@ -460,17 +564,21 @@ async function openTrainerEventDetail(event) {
         </h4>
         <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${myName}" angezeigt.</p>
         <textarea id="event-broadcast" rows="2" placeholder="z.B. Bitte Sportschuhe mitbringen...">${ev.trainerBroadcast || ''}</textarea>
+        ${canEditAttendance ? `
         <button class="btn-secondary" id="save-broadcast" style="margin-top:0;display:inline-flex;align-items:center;gap:4px;">
           <span class="material-icons" style="font-size:16px;">save</span> Nachricht speichern
         </button>
         <span id="broadcast-saved" class="text-muted" style="font-size:0.85rem;margin-left:10px;display:none;">
           <span class="material-icons" style="font-size:14px;vertical-align:middle;">check</span> Gespeichert
-        </span>
+        </span>` : ''}
       </div>
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-          <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})</h3>
+          <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})
+            ${!canEditAttendance ? '<span class="chip" style="font-size:0.78rem;margin-left:6px;background:var(--color-surface-offset);color:var(--color-text-muted);">Nur lesen</span>' : ''}
+          </h3>
+          ${canEditAttendance ? `
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn-secondary" id="add-member-to-event-btn" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
               <span class="material-icons" style="font-size:16px;">person_add</span> Person hinzufügen
@@ -481,28 +589,27 @@ async function openTrainerEventDetail(event) {
             <button class="btn-primary" id="save-all-attendance" style="display:inline-flex;align-items:center;gap:4px;">
               <span class="material-icons" style="font-size:16px;">save</span> Speichern
             </button>
-          </div>
+          </div>` : ''}
         </div>
         ${attendances.length ? `
           <div style="overflow-x:auto;">
             <table>
               <thead><tr>
-                <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th>
-                <th>Interne Notiz <small class="text-muted">(nur ${tLabel})</small></th>
-                <th>Notiz an Mitglied</th>
+                <th>Name</th><th>Status</th>
+                ${canEditAttendance ? '<th>Schnell-Check</th><th>Detailstatus</th><th>Interne Notiz <small class="text-muted">(nur ' + tLabel + ')</small></th><th>Notiz an Mitglied</th>' : ''}
                 <th>Hinweis v. Mitglied</th>
-                <th></th>
+                ${canEditAttendance ? '<th></th>' : ''}
               </tr></thead>
               <tbody id="attendance-tbody">${memberRows}</tbody>
             </table>
           </div>
         ` : '<p class="text-muted" id="no-attendees-msg">Keine Teilnehmer angemeldet.</p>'}
-      </div>
+      </div>` : ''}
 
       <div class="card" style="margin-top:16px;">
         <h3 style="margin-top:0;">Aktionen</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${!isCancelled && !isSelfCancelled ? `
+          ${!isCancelled && !isSelfCancelled && canEditAttendance ? `
             <button class="btn-danger" id="cancel-event-btn" style="display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">event_busy</span>
               Abmelden / Termin absagen
@@ -525,106 +632,106 @@ async function openTrainerEventDetail(event) {
     document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
 
     // ── Manuell hinzugefügte Personen entfernen ──────────────────────────────
-    container.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.remove-manual-att-btn');
-      if (!btn) return;
-      const attId = btn.dataset.attId;
-      showModal({
-        title: 'Person aus Termin entfernen',
-        body: '<p>Diese manuell hinzugefügte Person wirklich aus dem Termin entfernen?</p>',
-        confirmLabel: 'Entfernen',
-        onConfirm: async () => {
-          try {
-            await firestore.collection('eventAttendance').doc(attId).delete();
-            showToast('Person wurde entfernt.', 'success');
-            openTrainerEventDetail(ev);
-          } catch (err) { showToast('Fehler: ' + err.message, 'error'); }
-        }
+    if (canEditAttendance) {
+      container.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.remove-manual-att-btn');
+        if (!btn) return;
+        const attId = btn.dataset.attId;
+        showModal({
+          title: 'Person aus Termin entfernen',
+          body: '<p>Diese manuell hinzugefügte Person wirklich aus dem Termin entfernen?</p>',
+          confirmLabel: 'Entfernen',
+          onConfirm: async () => {
+            try {
+              await firestore.collection('eventAttendance').doc(attId).delete();
+              showToast('Person wurde entfernt.', 'success');
+              openTrainerEventDetail(ev);
+            } catch (err) { showToast('Fehler: ' + err.message, 'error'); }
+          }
+        });
       });
-    });
 
-    // ── Person zum Termin hinzufügen (alle Nutzer, unabhängig von Rolle) ─────
-    document.getElementById('add-member-to-event-btn')?.addEventListener('click', () => {
-      const available = allUsers.filter(u => !existingAttendeeUids.has(u.uid));
-      if (!available.length) {
-        showToast('Alle Nutzer sind bereits eingetragen.', 'info');
-        return;
-      }
-      showModal({
-        title: 'Person zum Termin hinzufügen',
-        body: `
-          <p class="text-muted" style="margin-bottom:12px;font-size:0.88rem;">
-            Die Person wird auch dann hinzugefügt, wenn sie nicht in der Gruppe ist.
-          </p>
-          <label>Person suchen</label>
-          <input type="text" id="member-search-input" placeholder="Name oder E-Mail..." style="margin-bottom:8px;" />
-          <div id="member-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;">
-            ${available.map(u => `
-              <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);color:var(--color-text);">
-                <input type="radio" name="add-member-pick" value="${u.uid}" style="width:16px;height:16px;" />
-                <span>${u.name}</span>
-                <span class="chip" style="font-size:0.72rem;margin-left:auto;background:var(--color-surface-offset);color:var(--color-text-muted);">${(u.roles||[]).join(', ') || '–'}</span>
-              </label>`).join('')}
-          </div>
-          <label style="margin-top:14px;">Teilnahme-Rolle bei diesem Termin</label>
-          <select id="add-member-event-role" style="font-size:0.9rem;margin-bottom:10px;">
-            <option value="member">Als Mitglied (Teilnehmer)</option>
-            <option value="trainer_full">Als Trainer – mit Anwesenheitsrechten (kann bearbeiten)</option>
-            <option value="trainer_readonly">Als Trainer – nur lesen (kann Anwesenheit sehen)</option>
-            <option value="trainer_hidden">Als Trainer – ohne Anwesenheitszugang (sieht Liste nicht)</option>
-          </select>
-          <label>Anfangsstatus</label>
-          <select id="add-member-status" style="font-size:0.9rem;">
-            <option value="registered">Angemeldet</option>
-            <option value="confirmation_pending">Ausstehend (Bestätigung)</option>
-            <option value="present">Anwesend</option>
-          </select>`,
-        confirmLabel: 'Hinzufügen',
-        onConfirm: async () => {
-          const picked    = document.querySelector('input[name="add-member-pick"]:checked')?.value;
-          const eventRole = document.getElementById('add-member-event-role')?.value || 'member';
-          const status    = document.getElementById('add-member-status')?.value || 'registered';
-          if (!picked) { showToast('Bitte eine Person auswählen.', 'warning'); return false; }
-          try {
-            const existing = await firestore.collection('eventAttendance')
-              .where('eventId', '==', ev.id).where('userId', '==', picked).get();
-            if (!existing.empty) { showToast('Person ist bereits eingetragen.', 'info'); return false; }
-            await firestore.collection('eventAttendance').add({
-              eventId:       ev.id,
-              userId:        picked,
-              status,
-              eventRole,           // 'member' | 'trainer_full' | 'trainer_readonly' | 'trainer_hidden'
-              addedByTrainer: true,
-              addedAt:       firebase.firestore.FieldValue.serverTimestamp(),
-              updatedAt:     firebase.firestore.FieldValue.serverTimestamp()
-            });
-            // Falls Trainer-Rolle: auch im Event-Dokument eintragen
-            if (eventRole.startsWith('trainer')) {
-              await firestore.collection('events').doc(ev.id).update({
-                trainers: firebase.firestore.FieldValue.arrayUnion(picked),
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      // ── Person zum Termin hinzufügen ──────────────────────────────────────
+      document.getElementById('add-member-to-event-btn')?.addEventListener('click', () => {
+        const available = allUsers.filter(u => !existingAttendeeUids.has(u.uid));
+        if (!available.length) {
+          showToast('Alle Nutzer sind bereits eingetragen.', 'info');
+          return;
+        }
+        showModal({
+          title: 'Person zum Termin hinzufügen',
+          body: `
+            <p class="text-muted" style="margin-bottom:12px;font-size:0.88rem;">
+              Die Person wird auch dann hinzugefügt, wenn sie nicht in der Gruppe ist.
+            </p>
+            <label>Person suchen</label>
+            <input type="text" id="member-search-input" placeholder="Name oder E-Mail..." style="margin-bottom:8px;" />
+            <div id="member-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;">
+              ${available.map(u => `
+                <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);color:var(--color-text);">
+                  <input type="radio" name="add-member-pick" value="${u.uid}" style="width:16px;height:16px;" />
+                  <span>${u.name}</span>
+                  <span class="chip" style="font-size:0.72rem;margin-left:auto;background:var(--color-surface-offset);color:var(--color-text-muted);">${(u.roles||[]).join(', ') || '–'}</span>
+                </label>`).join('')}
+            </div>
+            <label style="margin-top:14px;">Teilnahme-Rolle bei diesem Termin</label>
+            <select id="add-member-event-role" style="font-size:0.9rem;margin-bottom:10px;">
+              <option value="member">Als Mitglied (Teilnehmer)</option>
+              <option value="trainer_full">Als Trainer – mit Anwesenheitsrechten (kann bearbeiten)</option>
+              <option value="trainer_readonly">Als Trainer – nur lesen (kann Anwesenheit sehen)</option>
+              <option value="trainer_hidden">Als Trainer – ohne Anwesenheitszugang (sieht Liste nicht)</option>
+            </select>
+            <label>Anfangsstatus</label>
+            <select id="add-member-status" style="font-size:0.9rem;">
+              <option value="registered">Angemeldet</option>
+              <option value="confirmation_pending">Ausstehend (Bestätigung)</option>
+              <option value="present">Anwesend</option>
+            </select>`,
+          confirmLabel: 'Hinzufügen',
+          onConfirm: async () => {
+            const picked    = document.querySelector('input[name="add-member-pick"]:checked')?.value;
+            const eventRole = document.getElementById('add-member-event-role')?.value || 'member';
+            const status    = document.getElementById('add-member-status')?.value || 'registered';
+            if (!picked) { showToast('Bitte eine Person auswählen.', 'warning'); return false; }
+            try {
+              const existing = await firestore.collection('eventAttendance')
+                .where('eventId', '==', ev.id).where('userId', '==', picked).get();
+              if (!existing.empty) { showToast('Person ist bereits eingetragen.', 'info'); return false; }
+              await firestore.collection('eventAttendance').add({
+                eventId:        ev.id,
+                userId:         picked,
+                status,
+                eventRole,
+                addedByTrainer: true,
+                addedAt:        firebase.firestore.FieldValue.serverTimestamp(),
+                updatedAt:      firebase.firestore.FieldValue.serverTimestamp()
               });
-            }
-            showToast('Person wurde zum Termin hinzugefügt.', 'success');
-            openTrainerEventDetail(ev);
-          } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
-        }
-      });
+              if (eventRole.startsWith('trainer')) {
+                await firestore.collection('events').doc(ev.id).update({
+                  trainers: firebase.firestore.FieldValue.arrayUnion(picked),
+                  updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+              }
+              showToast('Person wurde zum Termin hinzugefügt.', 'success');
+              openTrainerEventDetail(ev);
+            } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
+          }
+        });
 
-      // Live-Suche
-      setTimeout(() => {
-        const si = document.getElementById('member-search-input');
-        const ml = document.getElementById('member-list');
-        if (si && ml) {
-          si.addEventListener('input', () => {
-            const q = si.value.toLowerCase();
-            ml.querySelectorAll('label').forEach(lbl => {
-              lbl.style.display = lbl.textContent.toLowerCase().includes(q) ? '' : 'none';
+        setTimeout(() => {
+          const si = document.getElementById('member-search-input');
+          const ml = document.getElementById('member-list');
+          if (si && ml) {
+            si.addEventListener('input', () => {
+              const q = si.value.toLowerCase();
+              ml.querySelectorAll('label').forEach(lbl => {
+                lbl.style.display = lbl.textContent.toLowerCase().includes(q) ? '' : 'none';
+              });
             });
-          });
-        }
-      }, 80);
-    });
+          }
+        }, 80);
+      });
+    }
 
     // ── Info-Notiz-Buttons ───────────────────────────────────────────────────
     container.querySelectorAll('.info-btn').forEach(btn => {
@@ -656,7 +763,7 @@ async function openTrainerEventDetail(event) {
     document.getElementById('revoke-self-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Abmeldung widerrufen',
-        body: `<p>Möchtest du deine Abmeldung rückgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
+        body: `<p>Möchtest du deine Abmeldung rükgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
         confirmLabel: 'Ja, wieder eintragen',
         onConfirm: async () => {
           try {
@@ -712,14 +819,12 @@ async function openTrainerEventDetail(event) {
         const accepted    = parseInt(btn.dataset.accepted) || 0;
         try {
           await firestore.collection('substituteRequests').doc(subId).update({ status: 'declined' });
-
           const siblingSnap = await firestore.collection('substituteRequests')
             .where('eventId', '==', ev.id).where('requesterId', '==', requesterId).get();
           const siblings = [];
           siblingSnap.forEach(d => siblings.push({ id: d.id, ...d.data() }));
           const stillPending = siblings.filter(s => s.status === 'pending').length;
           const nowAccepted  = siblings.filter(s => s.status === 'accepted').length;
-
           if (stillPending === 0 && nowAccepted < needed) {
             await firestore.collection('events').doc(ev.id).update({
               status: 'cancelled',
