@@ -182,17 +182,17 @@ async function openTrainerEventDetail(event) {
     const myUserDoc  = await firestore.collection('users').doc(myUid).get();
     const myName     = myUserDoc.exists ? (myUserDoc.data().displayName || myUserDoc.data().email || myUid) : myUid;
 
-    const allTeachersSnap = await firestore.collection('users').get();
-    const allTeachers = [];
-    const allMembers  = [];
-    allTeachersSnap.forEach(doc => {
+    // Alle Nutzer laden – unabhängig von Rolle für "Hinzufügen"-Feature
+    const allUsersSnap = await firestore.collection('users').get();
+    const allTeachers  = [];
+    const allUsers     = []; // Alle Nutzer (für manuelles Hinzufügen)
+    allUsersSnap.forEach(doc => {
       const d = doc.data();
       const roles = d.roles || [];
+      const entry = { uid: doc.id, name: d.displayName || d.email || doc.id, roles };
+      allUsers.push(entry);
       if (doc.id !== myUid && (roles.includes('teacher') || roles.includes('admin') || roles.includes('coordinator'))) {
-        allTeachers.push({ uid: doc.id, name: d.displayName || d.email || doc.id });
-      }
-      if (roles.includes('member')) {
-        allMembers.push({ uid: doc.id, name: d.displayName || d.email || doc.id });
+        allTeachers.push(entry);
       }
     });
 
@@ -244,6 +244,7 @@ async function openTrainerEventDetail(event) {
       }
     }
 
+    // Status-Chip ohne Sanduhr-Emoji
     const statusChipHtml = (status) => {
       const map = {
         present:              ['chip-success', 'Anwesend'],
@@ -253,16 +254,18 @@ async function openTrainerEventDetail(event) {
         absent_unexcused:     ['chip-error',   'Unentsch. gefehlt'],
         late_excused:         ['chip-warning', 'Verspätet (E)'],
         late_unexcused:       ['chip-warning', 'Verspätet (U)'],
-        confirmation_pending: ['chip-warning', '⏳ Ausstehend'],
+        confirmation_pending: ['chip-warning', 'Ausstehend'],
       };
       const [cls, label] = map[status] || ['', status];
       return `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
     };
 
+    // Tabellenzeilen – manuell hinzugefügte haben Entfernen-Button
     const memberRows = attendances.map(att => {
       const u = userMap[att.userId] || { name: att.userId, generalNote: '' };
+      const isManual = !!att.addedByTrainer;
       return `
-      <tr>
+      <tr data-att-id="${att.id}">
         <td>
           <span style="font-weight:500;">${u.name}</span>
           ${u.generalNote
@@ -270,6 +273,7 @@ async function openTrainerEventDetail(event) {
                 <span class="material-icons" style="font-size:16px;">info</span>
                </button>`
             : ''}
+          ${isManual ? '<span class="chip" style="font-size:0.72rem;margin-left:4px;background:var(--color-surface-offset);color:var(--color-text-muted);">Manuell</span>' : ''}
         </td>
         <td id="status-chip-${att.id}">${statusChipHtml(att.status)}</td>
         <td>
@@ -283,7 +287,7 @@ async function openTrainerEventDetail(event) {
           <select class="status-select" data-att-id="${att.id}" style="font-size:0.85rem;">
             <option value="present"              ${att.status==='present'              ?'selected':''}>Anwesend</option>
             <option value="registered"           ${att.status==='registered'           ?'selected':''}>Angemeldet (offen)</option>
-            <option value="confirmation_pending" ${att.status==='confirmation_pending' ?'selected':''}>⏳ Ausstehend (Bestätigung)</option>
+            <option value="confirmation_pending" ${att.status==='confirmation_pending' ?'selected':''}>Ausstehend (Bestätigung)</option>
             <option value="absent_excused"       ${att.status==='absent_excused'       ?'selected':''}>Entschuldigt gefehlt</option>
             <option value="absent_unexcused"     ${att.status==='absent_unexcused'     ?'selected':''}>Unentschuldigt gefehlt</option>
             <option value="late_excused"         ${att.status==='late_excused'         ?'selected':''}>Verspätet (entschuldigt)</option>
@@ -302,6 +306,14 @@ async function openTrainerEventDetail(event) {
             style="min-width:120px;font-size:0.85rem;" />
         </td>
         <td class="text-muted" style="font-size:0.82rem;max-width:140px;">${att.memberNote || ''}</td>
+        <td>
+          ${isManual ? `
+            <button class="btn-danger remove-manual-att-btn" data-att-id="${att.id}"
+              title="Manuell hinzugefügte Person entfernen"
+              style="padding:4px 10px;font-size:0.82rem;display:inline-flex;align-items:center;gap:4px;">
+              <span class="material-icons" style="font-size:15px;">person_remove</span>
+            </button>` : ''}
+        </td>
       </tr>`;
     }).join('');
 
@@ -366,7 +378,7 @@ async function openTrainerEventDetail(event) {
     const mySubHtml = myActiveSubReqs.length > 0 ? `
       <div class="card" style="margin-bottom:12px;border-left:4px solid var(--color-warning,#e65100);">
         <p style="margin:0 0 4px;font-weight:600;color:var(--color-warning,#e65100);display:flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:18px;">hourglass_empty</span>
+          <span class="material-icons" style="font-size:18px;">schedule</span>
           Vertretungsanfragen offen
         </p>
         <p class="text-muted" style="margin:0 0 4px;font-size:0.88rem;">
@@ -377,7 +389,7 @@ async function openTrainerEventDetail(event) {
             const tName = allTeachers.find(t => t.uid === r.targetId)?.name || r.targetId;
             const statusChip = r.status === 'accepted'
               ? `<span class="chip chip-success" style="font-size:0.75rem;display:inline-flex;align-items:center;gap:3px;"><span class="material-icons" style="font-size:12px;">check</span> Angenommen</span>`
-              : `<span class="chip chip-info" style="font-size:0.75rem;display:inline-flex;align-items:center;gap:3px;"><span class="material-icons" style="font-size:12px;">hourglass_empty</span> Ausstehend</span>`;
+              : `<span class="chip chip-info" style="font-size:0.75rem;display:inline-flex;align-items:center;gap:3px;"><span class="material-icons" style="font-size:12px;">schedule</span> Ausstehend</span>`;
             return `<div style="display:flex;align-items:center;gap:8px;font-size:0.88rem;"><span>${tName}</span>${statusChip}</div>`;
           }).join('')}
         </div>
@@ -461,7 +473,7 @@ async function openTrainerEventDetail(event) {
           <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn-secondary" id="add-member-to-event-btn" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
-              <span class="material-icons" style="font-size:16px;">person_add</span> Mitglied hinzufügen
+              <span class="material-icons" style="font-size:16px;">person_add</span> Person hinzufügen
             </button>
             <button class="btn-secondary" id="mark-all-present" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
               <span class="material-icons" style="font-size:16px;">check</span> Alle anwesend
@@ -479,11 +491,12 @@ async function openTrainerEventDetail(event) {
                 <th>Interne Notiz <small class="text-muted">(nur ${tLabel})</small></th>
                 <th>Notiz an Mitglied</th>
                 <th>Hinweis v. Mitglied</th>
+                <th></th>
               </tr></thead>
-              <tbody>${memberRows}</tbody>
+              <tbody id="attendance-tbody">${memberRows}</tbody>
             </table>
           </div>
-        ` : '<p class="text-muted">Keine Teilnehmer angemeldet.</p>'}
+        ` : '<p class="text-muted" id="no-attendees-msg">Keine Teilnehmer angemeldet.</p>'}
       </div>
 
       <div class="card" style="margin-top:16px;">
@@ -511,70 +524,106 @@ async function openTrainerEventDetail(event) {
 
     document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
 
-    // ── Mitglied hinzufügen ──────────────────────────────────────────────────
+    // ── Manuell hinzugefügte Personen entfernen ──────────────────────────────
+    container.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.remove-manual-att-btn');
+      if (!btn) return;
+      const attId = btn.dataset.attId;
+      showModal({
+        title: 'Person aus Termin entfernen',
+        body: '<p>Diese manuell hinzugefügte Person wirklich aus dem Termin entfernen?</p>',
+        confirmLabel: 'Entfernen',
+        onConfirm: async () => {
+          try {
+            await firestore.collection('eventAttendance').doc(attId).delete();
+            showToast('Person wurde entfernt.', 'success');
+            openTrainerEventDetail(ev);
+          } catch (err) { showToast('Fehler: ' + err.message, 'error'); }
+        }
+      });
+    });
+
+    // ── Person zum Termin hinzufügen (alle Nutzer, unabhängig von Rolle) ─────
     document.getElementById('add-member-to-event-btn')?.addEventListener('click', () => {
-      const availableMembers = allMembers.filter(m => !existingAttendeeUids.has(m.uid));
-      if (!availableMembers.length) {
-        showToast('Alle Mitglieder sind bereits eingetragen.', 'info');
+      const available = allUsers.filter(u => !existingAttendeeUids.has(u.uid));
+      if (!available.length) {
+        showToast('Alle Nutzer sind bereits eingetragen.', 'info');
         return;
       }
       showModal({
-        title: 'Mitglied zum Termin hinzufügen',
+        title: 'Person zum Termin hinzufügen',
         body: `
           <p class="text-muted" style="margin-bottom:12px;font-size:0.88rem;">
-            Das Mitglied wird auch dann hinzugefügt, wenn es nicht in der Gruppe ist.
+            Die Person wird auch dann hinzugefügt, wenn sie nicht in der Gruppe ist.
           </p>
-          <label>Mitglied auswählen</label>
-          <input type="text" id="member-search-input" placeholder="Name suchen..." style="margin-bottom:8px;" />
-          <div id="member-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;">
-            ${availableMembers.map(m => `
+          <label>Person suchen</label>
+          <input type="text" id="member-search-input" placeholder="Name oder E-Mail..." style="margin-bottom:8px;" />
+          <div id="member-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;">
+            ${available.map(u => `
               <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);color:var(--color-text);">
-                <input type="radio" name="add-member-pick" value="${m.uid}" style="width:16px;height:16px;" />
-                ${m.name}
+                <input type="radio" name="add-member-pick" value="${u.uid}" style="width:16px;height:16px;" />
+                <span>${u.name}</span>
+                <span class="chip" style="font-size:0.72rem;margin-left:auto;background:var(--color-surface-offset);color:var(--color-text-muted);">${(u.roles||[]).join(', ') || '–'}</span>
               </label>`).join('')}
           </div>
-          <label style="margin-top:12px;">Anfangsstatus</label>
+          <label style="margin-top:14px;">Teilnahme-Rolle bei diesem Termin</label>
+          <select id="add-member-event-role" style="font-size:0.9rem;margin-bottom:10px;">
+            <option value="member">Als Mitglied (Teilnehmer)</option>
+            <option value="trainer_full">Als Trainer – mit Anwesenheitsrechten (kann bearbeiten)</option>
+            <option value="trainer_readonly">Als Trainer – nur lesen (kann Anwesenheit sehen)</option>
+            <option value="trainer_hidden">Als Trainer – ohne Anwesenheitszugang (sieht Liste nicht)</option>
+          </select>
+          <label>Anfangsstatus</label>
           <select id="add-member-status" style="font-size:0.9rem;">
             <option value="registered">Angemeldet</option>
-            <option value="confirmation_pending">⏳ Ausstehend (Bestätigung)</option>
+            <option value="confirmation_pending">Ausstehend (Bestätigung)</option>
             <option value="present">Anwesend</option>
           </select>`,
         confirmLabel: 'Hinzufügen',
         onConfirm: async () => {
-          const picked = document.querySelector('input[name="add-member-pick"]:checked')?.value;
-          const status = document.getElementById('add-member-status')?.value || 'registered';
-          if (!picked) { showToast('Bitte ein Mitglied auswählen.', 'warning'); return; }
+          const picked    = document.querySelector('input[name="add-member-pick"]:checked')?.value;
+          const eventRole = document.getElementById('add-member-event-role')?.value || 'member';
+          const status    = document.getElementById('add-member-status')?.value || 'registered';
+          if (!picked) { showToast('Bitte eine Person auswählen.', 'warning'); return false; }
           try {
             const existing = await firestore.collection('eventAttendance')
               .where('eventId', '==', ev.id).where('userId', '==', picked).get();
-            if (!existing.empty) { showToast('Mitglied ist bereits eingetragen.', 'info'); return; }
+            if (!existing.empty) { showToast('Person ist bereits eingetragen.', 'info'); return false; }
             await firestore.collection('eventAttendance').add({
-              eventId: ev.id,
-              userId: picked,
+              eventId:       ev.id,
+              userId:        picked,
               status,
+              eventRole,           // 'member' | 'trainer_full' | 'trainer_readonly' | 'trainer_hidden'
               addedByTrainer: true,
-              addedAt: firebase.firestore.FieldValue.serverTimestamp(),
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              addedAt:       firebase.firestore.FieldValue.serverTimestamp(),
+              updatedAt:     firebase.firestore.FieldValue.serverTimestamp()
             });
-            showToast('Mitglied wurde zum Termin hinzugefügt.', 'success');
+            // Falls Trainer-Rolle: auch im Event-Dokument eintragen
+            if (eventRole.startsWith('trainer')) {
+              await firestore.collection('events').doc(ev.id).update({
+                trainers: firebase.firestore.FieldValue.arrayUnion(picked),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+            showToast('Person wurde zum Termin hinzugefügt.', 'success');
             openTrainerEventDetail(ev);
-          } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
+          } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
         }
       });
 
-      // Live-Suche im Modal
+      // Live-Suche
       setTimeout(() => {
-        const searchInput = document.getElementById('member-search-input');
-        const memberList  = document.getElementById('member-list');
-        if (searchInput && memberList) {
-          searchInput.addEventListener('input', () => {
-            const q = searchInput.value.toLowerCase();
-            memberList.querySelectorAll('label').forEach(lbl => {
+        const si = document.getElementById('member-search-input');
+        const ml = document.getElementById('member-list');
+        if (si && ml) {
+          si.addEventListener('input', () => {
+            const q = si.value.toLowerCase();
+            ml.querySelectorAll('label').forEach(lbl => {
               lbl.style.display = lbl.textContent.toLowerCase().includes(q) ? '' : 'none';
             });
           });
         }
-      }, 100);
+      }, 80);
     });
 
     // ── Info-Notiz-Buttons ───────────────────────────────────────────────────
