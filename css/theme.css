@@ -217,6 +217,51 @@ label { display:block; font-size:0.88rem; color:var(--color-text-muted); margin-
 .participant-info .pi-missing { font-weight:600; color:var(--color-warning, #e65100); }
 .participant-info .pi-ok { font-weight:600; color:var(--color-success, #2e7d32); }
 
+/* ── Login: Spinner ── */
+.login-spinner {
+  width:36px; height:36px;
+  border:3px solid var(--color-border);
+  border-top-color:var(--color-primary);
+  border-radius:50%;
+  animation:spin 0.7s linear infinite;
+}
+
+/* ── Login: Fehler-Box ── */
+.login-error-box {
+  display:flex; align-items:center; gap:8px;
+  padding:10px 14px;
+  background:#ffebee;
+  border:1px solid #ef9a9a;
+  border-radius:var(--radius-small);
+  color:var(--color-error);
+  font-size:0.88rem;
+  font-weight:500;
+}
+@media (prefers-color-scheme: dark) {
+  .login-error-box {
+    background:rgba(198,40,40,0.18);
+    border-color:rgba(198,40,40,0.5);
+    color:#ef9a9a;
+  }
+  #login-loading-overlay {
+    background:rgba(30,30,30,0.82) !important;
+  }
+}
+
+/* ── Login: Schüttel-Animation bei Fehler ── */
+@keyframes login-shake {
+  0%,100% { transform:translateX(0); }
+  15%      { transform:translateX(-8px); }
+  30%      { transform:translateX(8px); }
+  45%      { transform:translateX(-6px); }
+  60%      { transform:translateX(6px); }
+  75%      { transform:translateX(-3px); }
+  90%      { transform:translateX(3px); }
+}
+.login-shake {
+  animation:login-shake 0.45s ease;
+}
+
 @media (max-width: 639px) {
   .mobile-only { display:inline-flex !important; }
   .desktop-only { display:none !important; }
@@ -244,4 +289,8 @@ label { display:block; font-size:0.88rem; color:var(--color-text-muted); margin-
 @keyframes slideIn {
   from { transform:translateX(100%); }
   to { transform:translateX(0); }
+}
+
+@keyframes spin {
+  to { transform:rotate(360deg); }
 }

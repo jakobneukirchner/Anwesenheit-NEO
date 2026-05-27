@@ -25,7 +25,6 @@ function _statsBackBtn() {
     teacher:     () => loadTrainerDashboard(),
     member:      () => loadMemberDashboard(),
   };
-  // Gehe zur zuletzt aktiven Nicht-Statistik-Rolle zurück
   const fallbackRole = ['admin','coordinator','teacher','member'].find(r => roles.includes(r)) || 'member';
   return loaders[fallbackRole] || loaders.member;
 }
@@ -34,7 +33,6 @@ async function loadStatisticsDashboard() {
   const container = document.getElementById('app-content');
   container.innerHTML = `<div class="loading-center">Lade Statistiken...</div>`;
 
-  // Sicherstellen dass appSettings geladen ist
   if (!window.appSettings) {
     try {
       const sDoc = await firestore.collection('settings').doc('global').get();
@@ -125,11 +123,9 @@ async function runStatistics() {
       return;
     }
 
-    // Ausgefallene/abgesagte Termine von Zeitberechnungen ausschließen
     const activeEvents    = allEvents.filter(e => e.status !== 'cancelled' && e.status !== 'skipped');
     const activeEventIds  = activeEvents.map(e => e.id);
 
-    // Dauer pro Event (nur aktive)
     const eventDuration = {};
     activeEvents.forEach(ev => {
       const s = ev.startTime?.toDate?.();
@@ -137,7 +133,6 @@ async function runStatistics() {
       eventDuration[ev.id] = (s && e) ? Math.round((e - s) / 60000) : 60;
     });
 
-    // Attendance laden (nur aktive Events)
     const attendances = [];
     if (activeEventIds.length) {
       const chunks = [];
@@ -148,7 +143,6 @@ async function runStatistics() {
       }
     }
 
-    // User laden
     const userIds = [...new Set([
       ...attendances.map(a => a.userId),
       ...activeEvents.flatMap(e => e.trainers || [])
@@ -190,7 +184,7 @@ async function runStatistics() {
     });
     const allMemberStats = Object.values(memberStats);
 
-    // ===== TRAINER-STATISTIKEN =====
+    // ===== LEITER-STATISTIKEN =====
     const trainerStats = {};
     const initTrainer = uid => {
       if (!trainerStats[uid]) trainerStats[uid] = {
@@ -226,7 +220,7 @@ async function runStatistics() {
     // ===== RANGLISTEN-DEFINITIONEN =====
     const memberRankings = [
       { id:'most_present',   title:'Meiste Anwesenheiten',          desc:'Mitglieder mit den meisten anwesenden Terminen',                      sort:(a,b)=>b.present-a.present,              value:s=>`${s.present} Termine`,                           medal:true  },
-      { id:'most_hours',     title:'Höchste Anwesenheitszeit',      desc:'Mitglieder mit der meisten tatsächlichen Trainingszeit',              sort:(a,b)=>b.presentMinutes-a.presentMinutes, value:s=>`${s.presentHours} Std.`,                        medal:true  },
+      { id:'most_hours',     title:'Höchste Anwesenheitszeit',      desc:'Mitglieder mit der meisten tatsächlichen Zeit',                       sort:(a,b)=>b.presentMinutes-a.presentMinutes, value:s=>`${s.presentHours} Std.`,                        medal:true  },
       { id:'best_rate',      title:'Höchste Anwesenheitsquote',     desc:'Anteil anwesend+verspätet an allen Terminen (mind. 3)',               filter:s=>s.totalEvents>=3, sort:(a,b)=>b.attendanceRate-a.attendanceRate,   value:s=>`${s.attendanceRate}% (${s.totalEvents} Termine)`,medal:true  },
       { id:'most_punctual',  title:'Pünktlichste Mitglieder',       desc:'Höchste Pünktlichkeitsrate (mind. 3 Termine)',                       filter:s=>s.totalEvents>=3, sort:(a,b)=>b.punctualityRate-a.punctualityRate, value:s=>`${s.punctualityRate}% pünktlich`,               medal:true  },
       { id:'most_active',    title:'Aktivste Mitglieder',           desc:'Meiste Termine insgesamt eingeschrieben',                            sort:(a,b)=>b.totalEvents-a.totalEvents,       value:s=>`${s.totalEvents} Termine gesamt`,                medal:true  },
@@ -235,13 +229,12 @@ async function runStatistics() {
     ];
 
     const trainerRankings = [
-      { id:'tr_most_trained',  title:'Meiste Trainings (Trainer)',       desc:'Trainer mit den meisten durchgeführten Einheiten',          sort:(a,b)=>b.totalTrained-a.totalTrained,      value:s=>`${s.totalTrained} Trainings`,         medal:true  },
-      { id:'tr_most_hours',    title:'Meiste Trainingsstunden (Trainer)',desc:'Trainer mit der meisten Zeit auf dem Platz/in der Halle',   sort:(a,b)=>b.trainedMinutes-a.trainedMinutes,  value:s=>`${s.trainedHours} Std.`,              medal:true  },
-      { id:'tr_most_reliable', title:'Zuverlässigste Trainer',           desc:'Höchste Zuverlässigkeitsrate (kein Abmelden, mind. 2)',     filter:s=>s.totalAssigned>=2, sort:(a,b)=>b.reliabilityRate-a.reliabilityRate, value:s=>`${s.reliabilityRate}% zuverlässig`, medal:true  },
-      { id:'tr_least_cancel',  title:'Wenigste Absagen (Trainer)',       desc:'Trainer mit den wenigsten eigenen Abmeldungen',             sort:(a,b)=>a.cancelledEvents-b.cancelledEvents||b.totalAssigned-a.totalAssigned, value:s=>`${s.cancelledEvents}x abgemeldet`, medal:false },
+      { id:'tr_most_trained',  title:'Meiste geleitete Termine',         desc:'Leiter mit den meisten durchgeführten Terminen',           sort:(a,b)=>b.totalTrained-a.totalTrained,      value:s=>`${s.totalTrained} Termine`,         medal:true  },
+      { id:'tr_most_hours',    title:'Meiste Leitungsstunden',           desc:'Leiter mit der meisten Zeit vor Ort',                      sort:(a,b)=>b.trainedMinutes-a.trainedMinutes,  value:s=>`${s.trainedHours} Std.`,              medal:true  },
+      { id:'tr_most_reliable', title:'Zuverlässigste Leiter',            desc:'Höchste Zuverlässigkeitsrate (kein Abmelden, mind. 2)',     filter:s=>s.totalAssigned>=2, sort:(a,b)=>b.reliabilityRate-a.reliabilityRate, value:s=>`${s.reliabilityRate}% zuverlässig`, medal:true  },
+      { id:'tr_least_cancel',  title:'Wenigste Absagen',                 desc:'Leiter mit den wenigsten eigenen Abmeldungen',             sort:(a,b)=>a.cancelledEvents-b.cancelledEvents||b.totalAssigned-a.totalAssigned, value:s=>`${s.cancelledEvents}x abgemeldet`, medal:false },
     ];
 
-    // Podest-Darstellung ohne Emojis
     const podestLabel = (i, medal) => {
       if (!medal || i >= 3) return `${i + 1}.`;
       return ['1.', '2.', '3.'][i];
@@ -310,7 +303,7 @@ async function runStatistics() {
       html += `
         <h3 style="margin-top:24px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
           <span class="material-icons" style="color:var(--color-primary);">sports</span>
-          Trainer-Ranglisten
+          Leiter-Ranglisten
         </h3>
         ${trainerRankings.map(r => renderRankCard(r)).join('')}
       `;
@@ -318,7 +311,6 @@ async function runStatistics() {
 
     resultsEl.innerHTML = html;
 
-    // Alle Rankings zusammen für den "Alle als PDF"-Button
     const allRankings     = [...memberRankings, ...trainerRankings];
     const allStatsForRank = (rank) => memberRankings.includes(rank) ? allMemberStats : allTrainerStats;
 
@@ -396,7 +388,6 @@ function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankin
     doc.setTextColor(0, 0, 0);
   };
 
-  // Erste Seite
   drawPageHeader();
   y = 22;
 
@@ -424,7 +415,6 @@ function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankin
 
     checkY(36);
 
-    // Abschnitts-Header
     doc.setFillColor(230, 240, 255);
     doc.rect(margin, y - 5, contentW, 9, 'F');
     doc.setFont('helvetica', 'bold');
@@ -440,7 +430,6 @@ function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankin
     y += 6;
     doc.setTextColor(0, 0, 0);
 
-    // Tabellen-Header
     doc.setFillColor(21, 101, 192);
     doc.rect(margin, y, contentW, 6, 'F');
     doc.setFont('helvetica', 'bold');
@@ -469,7 +458,6 @@ function exportStatisticsPDF({ fromDate, toDate, eventCount, memberCount, rankin
     y += 10;
   });
 
-  // Footers
   const total = doc.internal.getNumberOfPages();
   for (let p = 1; p <= total; p++) { doc.setPage(p); drawFooter(p, total); }
 

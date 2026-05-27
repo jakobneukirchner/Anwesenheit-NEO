@@ -190,7 +190,7 @@ function removeDashboardSwitcher() {
 function renderLoginPage() {
   const container = document.getElementById('app-content');
   container.innerHTML = `
-    <div class="card" style="max-width:400px;margin:48px auto;">
+    <div class="card login-card" id="login-card" style="max-width:400px;margin:48px auto;">
       <h2 style="margin-top:0;">Anmelden</h2>
       <form id="login-form">
         <label>E-Mail-Adresse</label>
@@ -198,9 +198,9 @@ function renderLoginPage() {
         <label>Passwort</label>
         <input type="password" id="login-password" required autocomplete="current-password" />
         <div style="margin-top:14px;">
-          <button type="submit" class="btn-primary" style="width:100%;justify-content:center;">
-            <span class="material-icons">login</span>
-            <span>Anmelden</span>
+          <button type="submit" class="btn-primary" id="login-submit-btn" style="width:100%;justify-content:center;">
+            <span class="material-icons" id="login-btn-icon">login</span>
+            <span id="login-btn-label">Anmelden</span>
           </button>
         </div>
         <div style="text-align:center;margin-top:10px;">
@@ -209,44 +209,86 @@ function renderLoginPage() {
             <span>Passwort vergessen?</span>
           </button>
         </div>
-        <div id="login-error" class="text-error" style="margin-top:8px;"></div>
+        <div id="login-error" style="margin-top:8px;"></div>
       </form>
+
+      <!-- Ladeoverlay innerhalb der Karte -->
+      <div id="login-loading-overlay" style="
+        display:none;
+        position:absolute;inset:0;
+        background:rgba(255,255,255,0.82);
+        border-radius:var(--radius-medium);
+        z-index:10;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        gap:12px;
+      ">
+        <div class="login-spinner"></div>
+        <span style="font-size:0.9rem;color:var(--color-text-muted);">Anmeldung läuft&hellip;</span>
+      </div>
     </div>
   `;
 
-  const form = document.getElementById('login-form');
-  const errorEl = document.getElementById('login-error');
+  // Karte braucht position:relative für das Overlay
+  document.getElementById('login-card').style.position = 'relative';
+
+  const form     = document.getElementById('login-form');
+  const errorEl  = document.getElementById('login-error');
+  const overlay  = document.getElementById('login-loading-overlay');
+  const submitBtn = document.getElementById('login-submit-btn');
+
+  function showLoading(on) {
+    overlay.style.display = on ? 'flex' : 'none';
+    submitBtn.disabled = on;
+  }
+
+  function showError(msg) {
+    const card = document.getElementById('login-card');
+    errorEl.innerHTML = `
+      <div class="login-error-box">
+        <span class="material-icons" style="font-size:18px;flex-shrink:0;">error</span>
+        <span>${msg}</span>
+      </div>`;
+    // Schütteln
+    if (card) {
+      card.classList.remove('login-shake');
+      void card.offsetWidth; // reflow um Animation neu zu starten
+      card.classList.add('login-shake');
+    }
+  }
 
   form.onsubmit = async (e) => {
     e.preventDefault();
-    errorEl.textContent = '';
-    const email = document.getElementById('login-email').value.trim();
+    errorEl.innerHTML = '';
+    showLoading(true);
+    const email    = document.getElementById('login-email').value.trim();
     const password = document.getElementById('login-password').value;
     try {
       await firebaseAuth.signInWithEmailAndPassword(email, password);
+      // onAuthStateChanged übernimmt Navigation; Overlay bleibt sichtbar bis Seite wechselt
     } catch (err) {
       console.error(err);
+      showLoading(false);
       const msgs = {
-        'auth/user-not-found': 'Benutzer nicht gefunden.',
-        'auth/wrong-password': 'Falsches Passwort.',
-        'auth/invalid-email': 'Ungültige E-Mail-Adresse.',
-        'auth/too-many-requests': 'Zu viele Versuche. Bitte warte kurz.',
-        'auth/invalid-credential': 'E-Mail oder Passwort falsch.'
+        'auth/user-not-found':   'Benutzer nicht gefunden.',
+        'auth/wrong-password':   'Falsches Passwort.',
+        'auth/invalid-email':    'Ungültige E-Mail-Adresse.',
+        'auth/too-many-requests':'Zu viele Versuche. Bitte warte kurz.',
+        'auth/invalid-credential':'E-Mail oder Passwort falsch.'
       };
-      errorEl.textContent = msgs[err.code] || 'Anmeldung fehlgeschlagen.';
+      showError(msgs[err.code] || 'Anmeldung fehlgeschlagen.');
     }
   };
 
   document.getElementById('forgot-pw-btn').onclick = async () => {
     const email = document.getElementById('login-email').value.trim();
-    if (!email) { errorEl.textContent = 'Bitte zuerst E-Mail eingeben.'; return; }
+    if (!email) { showError('Bitte zuerst E-Mail eingeben.'); return; }
     try {
       await firebaseAuth.sendPasswordResetEmail(email);
-      errorEl.style.color = 'var(--color-success)';
-      errorEl.textContent = 'Passwort-Reset-E-Mail wurde gesendet.';
+      errorEl.innerHTML = `<div style="color:var(--color-success);font-size:0.85rem;margin-top:4px;display:flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">check_circle</span>Passwort-Reset-E-Mail wurde gesendet.</div>`;
     } catch (err) {
-      errorEl.style.color = '';
-      errorEl.textContent = 'Fehler: ' + (err.message || err.code);
+      showError('Fehler: ' + (err.message || err.code));
     }
   };
 }
