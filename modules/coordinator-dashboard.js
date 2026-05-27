@@ -441,7 +441,10 @@ function renderCalendarView(el, events, groups, parentEl) {
     const de=byDay[day]||[];
     const pills=de.slice(0,3).map(ev=>`<div class="cal-event-pill" data-ev-id="${ev.id}" style="font-size:0.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px;padding:1px 5px;margin-bottom:1px;cursor:pointer;background:${ev.status==='cancelled'?'var(--color-error)':ev.status==='skipped'?'var(--color-warning)':'var(--color-primary)'};color:#fff;">${ev.title||'Termin'}</div>`).join('');
     const more=de.length>3?`<div style="font-size:0.7rem;color:var(--color-text-muted);">+${de.length-3} mehr</div>`:"";
-    html+=`<div style="min-height:90px;border:1px solid var(--color-border);border-radius:6px;padding:4px;background:${isToday?'rgba(21,101,192,0.07)':'var(--color-surface)'};"><div style="font-size:0.82rem;font-weight:${isToday?700:400};color:${isToday?'var(--color-primary)':'var(--color-text)'};margin-bottom:3px;">${day}</div>${pills}${more}</div>`;
+    html+=`<div style="min-height:90px;border:1px solid var(--color-border);border-radius:6px;padding:4px;background:${isToday?'rgba(21,101,192,0.07)':'var(--color-surface)'};">
+      <div style="font-size:0.82rem;font-weight:${isToday?700:400};color:${isToday?'var(--color-primary)':'var(--color-text)'};margin-bottom:3px;">${day}</div>
+      ${pills}${more}
+    </div>`;
   }
   html+=`</div>`;
   el.innerHTML=html;
@@ -457,7 +460,6 @@ async function showEventForm(event, groups, parentEl) {
   const endVal      = event?.endTime?.toDate   ? toDatetimeLocal(event.endTime.toDate())   : '';
   const allTrainers = window._allTrainers || [];
   const selTrainers = new Set(event?.trainers || []);
-  // Dynamische Label-Namen
   const teacherLabel = getRoleLabel('teacher');
 
   const trainerListHtml = allTrainers.length
@@ -467,7 +469,10 @@ async function showEventForm(event, groups, parentEl) {
           <span style="font-weight:500;">${t.displayName||t.email||t.id}</span>
           <span class="text-muted" style="font-size:0.82rem;">${t.email||''}</span>
         </label>`).join('')
-    : `<p class="text-muted" style="font-size:0.88rem;">Keine ${teacherLabel} gefunden. Weise Benutzern zuerst die Rolle „${teacherLabel}“ zu.</p>`;
+    : `<p class="text-muted" style="font-size:0.88rem;">Keine ${teacherLabel} gefunden.</p>`;
+
+  // Aktueller Modus des Events (für select-Vorauswahl)
+  const currentMode = event?.mode || 'opt_in';
 
   showModal({
     title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
@@ -492,14 +497,15 @@ async function showEventForm(event, groups, parentEl) {
       <label>Anmeldefrist (Minuten vor Beginn)</label><input type="number" id="ef-deadline" value="${event?.signupDeadlineMinutes??60}" min="0" />
       <label>Anmeldemodus</label>
       <select id="ef-mode">
-        <option value="opt_in"  ${!event?.mode||event?.mode==='opt_in' ?'selected':''}>Anmeldebasiert</option>
-        <option value="opt_out" ${event?.mode==='opt_out'?'selected':''}>Abmeldebasiert</option>
+        <option value="opt_in"       ${currentMode==='opt_in'      ?'selected':''}>Anmeldebasiert – Mitglieder melden sich aktiv an</option>
+        <option value="opt_out"      ${currentMode==='opt_out'     ?'selected':''}>Abmeldebasiert – Mitglieder sind standardmäßig angemeldet</option>
+        <option value="confirmation" ${currentMode==='confirmation'?'selected':''}>Bestätigung – vorgemerkt, muss aktiv bestätigt werden</option>
       </select>
       <label>Wiederholung</label>
       <select id="ef-recurrence">
         <option value="none"     ${!event?.recurrence||event?.recurrence==='none'    ?'selected':''}>Einmalig</option>
         <option value="weekly"   ${event?.recurrence==='weekly'  ?'selected':''}>Wöchentlich</option>
-        <option value="biweekly" ${event?.recurrence==='biweekly'?'selected':''}>Zweuwöchentlich</option>
+        <option value="biweekly" ${event?.recurrence==='biweekly'?'selected':''}>Zweiwöchentlich</option>
         <option value="monthly"  ${event?.recurrence==='monthly' ?'selected':''}>Monatlich</option>
       </select>
       <label>Wiederholung bis</label><input type="date" id="ef-recurrence-end" value="${event?.recurrenceEnd||''}" />
@@ -552,14 +558,11 @@ async function showEventForm(event, groups, parentEl) {
       searchEl.oninput = () => {
         const q = searchEl.value.toLowerCase();
         listEl.querySelectorAll('.trainer-pick-row').forEach(row => {
-          const name = row.textContent.toLowerCase();
-          row.style.display = name.includes(q) ? '' : 'none';
+          row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
         });
       };
       listEl.querySelectorAll('.trainer-pick-cb').forEach(cb => {
-        cb.onchange = () => {
-          cb.closest('.trainer-pick-row').style.background = cb.checked ? 'rgba(21,101,192,0.08)' : 'transparent';
-        };
+        cb.onchange = () => { cb.closest('.trainer-pick-row').style.background = cb.checked ? 'rgba(21,101,192,0.08)' : 'transparent'; };
       });
     }
 
@@ -615,9 +618,13 @@ async function renderCoordSettingsTab(el) {
         <input type="number" id="cs-signup-deadline" value="${data.defaultSignupDeadlineMinutes??60}" min="0" />
         <label>Standard-Anmeldemodus</label>
         <select id="cs-mode">
-          <option value="opt_in"  ${data.defaultMode!=='opt_out'?'selected':''}>Anmeldebasiert</option>
-          <option value="opt_out" ${data.defaultMode==='opt_out' ?'selected':''}>Abmeldebasiert</option>
+          <option value="opt_in"       ${(!data.defaultMode||data.defaultMode==='opt_in')      ?'selected':''}>Anmeldebasiert – Mitglieder melden sich aktiv an</option>
+          <option value="opt_out"      ${data.defaultMode==='opt_out'      ?'selected':''}>Abmeldebasiert – Mitglieder sind standardmäßig angemeldet</option>
+          <option value="confirmation" ${data.defaultMode==='confirmation' ?'selected':''}>Bestätigung – vorgemerkt, muss aktiv bestätigt werden</option>
         </select>
+        <label>Bestätigungsfenster (Minuten nach Terminende)</label>
+        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Nach dieser Zeit können Mitglieder ihre Teilnahme im Modus "Bestätigung" nicht mehr ändern.</p>
+        <input type="number" id="cs-confirm-window" value="${data.confirmationWindowMinutes??120}" min="1" />
         <label>Termine-Vorschau (Tage in die Zukunft, Standard für alle Nutzer)</label>
         <input type="number" id="cs-lookahead" value="${data.defaultEventLookAhead??30}" min="1" max="365" />
         <label>Teilnehmer-Sichtbarkeit für Mitglieder</label>
@@ -627,7 +634,7 @@ async function renderCoordSettingsTab(el) {
           <option value="none"  ${data.visibilityMode==='none' ?'selected':''}>Nichts anzeigen</option>
         </select>
         <label>Rückzugsfenster für Mitglieder (Minuten nach Anmeldung)</label>
-        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Wie lange ein Mitglied seine Anmeldung zurückziehen kann. Einmalig pro Termin – danach nicht mehr möglich.</p>
+        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Wie lange ein Mitglied seine Anmeldung zurückziehen kann. Einmalig pro Termin.</p>
         <input type="number" id="cs-withdraw-window" value="${data.withdrawWindowMinutes??60}" min="1" />
         <hr class="divider" />
         <h4>Rollen-Labels</h4>
@@ -641,11 +648,17 @@ async function renderCoordSettingsTab(el) {
       const updates = {
         defaultMinParticipants:       parseInt(document.getElementById('cs-min-part')?.value)||0,
         defaultSignupDeadlineMinutes: parseInt(document.getElementById('cs-signup-deadline')?.value)||60,
-        defaultMode:               document.getElementById('cs-mode')?.value||'opt_in',
-        defaultEventLookAhead:     parseInt(document.getElementById('cs-lookahead')?.value)||30,
-        visibilityMode:            document.getElementById('cs-vis')?.value||'count',
-        withdrawWindowMinutes:     parseInt(document.getElementById('cs-withdraw-window')?.value)||60,
-        roleLabels: { admin:document.getElementById('rl-admin')?.value||'Admin', coordinator:document.getElementById('rl-coordinator')?.value||'Koordinator', teacher:document.getElementById('rl-teacher')?.value||'Trainer', member:document.getElementById('rl-member')?.value||'Mitglied' }
+        defaultMode:                  document.getElementById('cs-mode')?.value||'opt_in',
+        confirmationWindowMinutes:    parseInt(document.getElementById('cs-confirm-window')?.value)||120,
+        defaultEventLookAhead:        parseInt(document.getElementById('cs-lookahead')?.value)||30,
+        visibilityMode:               document.getElementById('cs-vis')?.value||'count',
+        withdrawWindowMinutes:        parseInt(document.getElementById('cs-withdraw-window')?.value)||60,
+        roleLabels: {
+          admin:       document.getElementById('rl-admin')?.value||'Admin',
+          coordinator: document.getElementById('rl-coordinator')?.value||'Koordinator',
+          teacher:     document.getElementById('rl-teacher')?.value||'Trainer',
+          member:      document.getElementById('rl-member')?.value||'Mitglied'
+        }
       };
       await firestore.collection('settings').doc('global').set(updates,{merge:true});
       window.roleLabels=updates.roleLabels; window.appSettings={...(window.appSettings||{}),...updates};
