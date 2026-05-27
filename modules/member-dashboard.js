@@ -183,23 +183,32 @@ function buildTrainerInfoHtml(event, isPast) {
 }
 
 function renderMemberEventCard(event, attendance, isPast) {
-  const settings       = window.appSettings || {};
-  const tLabel         = getRoleLabel('teacher');
-  const signupMins     = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
+  const settings   = window.appSettings || {};
+  const tLabel     = getRoleLabel('teacher');
+  const signupMins = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
   const WITHDRAW_WINDOW_MS = ((settings.withdrawWindowMinutes ?? 60) * 60 * 1000);
-  const mode           = event.mode || settings.defaultMode || 'opt_in';
-  const isConfMode     = mode === 'confirmation';
-  const confWindowMs   = ((settings.confirmationWindowMinutes ?? 120) * 60 * 1000);
-  const start          = event.startTime?.toDate ? event.startTime.toDate() : null;
-  const end            = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-  const now            = new Date();
+  const mode       = event.mode || settings.defaultMode || 'opt_in';
+  const isConfMode = mode === 'confirmation';
+
+  // ── Bestätigungsfenster: relativ zu Terminbeginn (startTime)
+  // Wert in Minuten: negativ = X Min VOR Terminbeginn, positiv = X Min NACH Terminbeginn.
+  // Standard: 60 Min nach Terminbeginn (Mitglieder können bis 60 Min nach Start bestätigen).
+  const confWindowMinutes = settings.confirmationWindowMinutes ?? 60;
+  const start       = event.startTime?.toDate ? event.startTime.toDate() : null;
+  const end         = event.endTime?.toDate   ? event.endTime.toDate()   : null;
+  const now         = new Date();
+
+  // Deadline für Bestätigung = startTime + confWindowMinutes (kann negativ sein = vor Start)
+  const confDeadline = start ? new Date(start.getTime() + confWindowMinutes * 60 * 1000) : null;
+  // Fenster abgelaufen wenn confDeadline in der Vergangenheit liegt
+  const confWindowExpired = isConfMode && confDeadline && now > confDeadline;
+
   const deadline       = start ? new Date(start.getTime() - signupMins * 60000) : null;
   const withinDeadline = !deadline || now <= deadline;
   const locked         = isLockedByTrainer(attendance);
   const isCancelled    = event.status === 'cancelled';
   const isSkipped      = event.status === 'skipped';
 
-  // Bestätigungsmodus: Default-Status ist confirmation_pending wenn keine attendance
   const memberStatus = attendance?.status || (
     isConfMode       ? 'confirmation_pending' :
     mode === 'opt_out' ? 'registered' : 'none'
@@ -212,10 +221,6 @@ function renderMemberEventCard(event, attendance, isPast) {
   const canWithdraw = !locked && !isPast && !alreadyWithdrawn
     && attendance?.status === 'registered' && !attendance?.trainerSet
     && firstRegTime && (now - firstRegTime) < WITHDRAW_WINDOW_MS;
-
-  // Bestätigungsfenster: nach X Minuten nach Terminende gesperrt
-  const eventEndTime      = end || start;
-  const confWindowExpired = isConfMode && eventEndTime && ((now - eventEndTime) > confWindowMs);
 
   const card = createElement('div', 'card');
 
@@ -234,7 +239,7 @@ function renderMemberEventCard(event, attendance, isPast) {
         </span>
       </div>
       ${event.cancellationReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>` : ''}
-      ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}"</p>` : ''}
+      ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}“</p>` : ''}
     `;
     return card;
   }
@@ -308,9 +313,9 @@ function renderMemberEventCard(event, attendance, isPast) {
 
   let withdrawHtml = '';
   if (canWithdraw) {
-    const msLeft   = Math.max(0, WITHDRAW_WINDOW_MS - (now - firstRegTime));
-    const minLeft  = Math.floor(msLeft / 60000);
-    const secLeft  = Math.floor((msLeft % 60000) / 1000);
+    const msLeft  = Math.max(0, WITHDRAW_WINDOW_MS - (now - firstRegTime));
+    const minLeft = Math.floor(msLeft / 60000);
+    const secLeft = Math.floor((msLeft % 60000) / 1000);
     withdrawHtml = `
       <div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <span style="font-size:0.85rem;color:var(--color-error,#c62828);display:inline-flex;align-items:center;gap:6px;">
@@ -327,9 +332,11 @@ function renderMemberEventCard(event, attendance, isPast) {
         Anmeldefrist abgelaufen
        </p>` : '';
 
-  // Bestätigungsmodus-Banner
+  // ── Bestätigungsmodus-Banner
+  // Zeige Banner wenn: Modus=confirmation, Termin nicht in Vergangenheit (aus Sicht isPast),
+  // nicht durch Trainer gesperrt, Status ausstehend, Fenster NICHT abgelaufen
   let confirmBannerHtml = '';
-  if (isConfMode && !isPast && !locked && isPending && !confWindowExpired) {
+  if (isConfMode && !locked && isPending && !confWindowExpired) {
     confirmBannerHtml = `
       <div style="background:rgba(245,124,0,0.09);border-left:3px solid var(--color-warning,#e65100);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
         <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#e65100);display:flex;align-items:center;gap:6px;">
@@ -350,9 +357,6 @@ function renderMemberEventCard(event, attendance, isPast) {
     confirmBannerHtml = `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">lock_clock</span> Bestätigungsfenster abgelaufen.</p>`;
   }
 
-  // Zeige Toggle-Button nur wenn:
-  // - im Confirmation-Modus: nur wenn nicht pending (pending hat eigene Buttons) und Fenster nicht abgelaufen
-  // - sonst: normal
   const showToggle = !isPast && withinDeadline && !locked
     && !(isConfMode && isPending)
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
@@ -387,7 +391,6 @@ function renderMemberEventCard(event, attendance, isPast) {
   if (!locked) {
     const errorEl = card.querySelector('[data-role="error"]');
 
-    // Anmeldung zurückziehen
     const withdrawBtn = card.querySelector('[data-action="withdraw"]');
     if (withdrawBtn) withdrawBtn.onclick = () => guardedAction(async () => {
       try {
@@ -414,7 +417,6 @@ function renderMemberEventCard(event, attendance, isPast) {
       }
     }
 
-    // Teilnahme bestätigen (Bestätigungsmodus)
     const confirmBtn = card.querySelector('[data-action="confirm-attendance"]');
     if (confirmBtn) confirmBtn.onclick = () => guardedAction(async () => {
       try {
@@ -429,14 +431,12 @@ function renderMemberEventCard(event, attendance, isPast) {
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     });
 
-    // Toggle (An-/Abmelden)
     const toggleBtn = card.querySelector('[data-action="toggle"]');
     if (toggleBtn) toggleBtn.onclick = () => guardedAction(async () => {
       try { await memberToggleAttendance(event, attendance, mode, deadline); }
       catch (e) { errorEl.textContent = 'Aktion fehlgeschlagen: ' + e.message; }
     });
 
-    // Verspätung melden
     const lateBtn = card.querySelector('[data-action="late"]');
     if (lateBtn) lateBtn.onclick = () => guardedAction(async () => {
       showModal({
@@ -475,7 +475,7 @@ function renderMemberEventCard(event, attendance, isPast) {
 function translateMemberStatus(status, mode) {
   switch (status) {
     case 'registered':           return mode === 'opt_in' ? 'Angemeldet' : 'Vorgemerkt';
-    case 'confirmation_pending': return 'Ausstehend';
+    case 'confirmation_pending': return 'Ausst. Bestätigung';
     case 'none':                 return mode === 'opt_in' ? 'Nicht angemeldet' : 'Vorgemerkt';
     case 'cancelled':            return 'Abgemeldet';
     case 'present':              return 'Anwesend';

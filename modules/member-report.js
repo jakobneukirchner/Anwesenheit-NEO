@@ -7,7 +7,6 @@ async function loadMemberReportDashboard() {
   const myUid     = window.currentUser.firebaseUser.uid;
   const myRoles   = window.currentUser.roles || [];
   const isCoord   = myRoles.includes('coordinator') || myRoles.includes('admin');
-  const tLabel    = getRoleLabel('teacher');
 
   container.innerHTML = `<div class="loading-center">Lade Mitglieder-Berichte...</div>`;
 
@@ -19,18 +18,13 @@ async function loadMemberReportDashboard() {
     // ── Alle Nutzer laden ───────────────────────────────────────────────────
     const usersSnap = await firestore.collection('users').get();
     const allUsers  = [];
-    usersSnap.forEach(doc => {
-      const d = doc.data();
-      allUsers.push({ uid: doc.id, ...d });
-    });
+    usersSnap.forEach(doc => allUsers.push({ uid: doc.id, ...doc.data() }));
 
     // ── Eigene Gruppen ermitteln (für Betreuer-Filter) ──────────────────────
     let relevantMembers = [];
     if (isCoord) {
-      // Koordinator/Admin: alle Mitglieder
       relevantMembers = allUsers.filter(u => (u.roles || []).includes('member'));
     } else {
-      // Betreuer: Mitglieder aus eigenen Gruppen
       const myUserDoc = await firestore.collection('users').doc(myUid).get();
       const myGroups  = myUserDoc.exists ? (myUserDoc.data().groups || []) : [];
       if (!myGroups.length) {
@@ -42,12 +36,10 @@ async function loadMemberReportDashboard() {
           </div>`;
         return;
       }
-      // Mitglieder aller eigenen Gruppen sammeln
       const memberSet = new Set();
       allUsers.forEach(u => {
         if (!(u.roles || []).includes('member')) return;
-        const userGroups = u.groups || [];
-        if (userGroups.some(g => myGroups.includes(g))) memberSet.add(u.uid);
+        if ((u.groups || []).some(g => myGroups.includes(g))) memberSet.add(u.uid);
       });
       relevantMembers = allUsers.filter(u => memberSet.has(u.uid));
     }
@@ -62,16 +54,15 @@ async function loadMemberReportDashboard() {
       return;
     }
 
-    // ── Zeitraum-Filter ─────────────────────────────────────────────────────
-    const now          = new Date();
-    const defaultFrom  = new Date(now.getFullYear(), now.getMonth() - 2, 1); // 3 Monate zurück
-    const defaultTo    = now;
+    const now         = new Date();
+    const defaultFrom = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const defaultTo   = now;
 
     // ── UI aufbauen ─────────────────────────────────────────────────────────
     container.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
         <div>
-          <h2 style="margin:0 0 4px;">Meine ${isCoord ? 'Mitglieder' : 'Mitglieder'}</h2>
+          <h2 style="margin:0 0 4px;">Meine Mitglieder</h2>
           <p class="text-muted" style="margin:0;font-size:0.85rem;">
             ${relevantMembers.length} Mitglied${relevantMembers.length !== 1 ? 'er' : ''}
             ${isCoord ? '(alle)' : '(deine Gruppen)'}
@@ -84,7 +75,6 @@ async function loadMemberReportDashboard() {
         </div>
       </div>
 
-      <!-- Zeitraum-Filter -->
       <div class="card" style="margin-bottom:16px;">
         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
           <div style="flex:1;min-width:140px;">
@@ -101,28 +91,30 @@ async function loadMemberReportDashboard() {
         </div>
       </div>
 
-      <!-- Suchfeld -->
       <div style="margin-bottom:12px;position:relative;">
         <span class="material-icons" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--color-text-faint);font-size:18px;">search</span>
         <input type="text" id="member-report-search" placeholder="Mitglied suchen..." style="padding-left:36px;" />
       </div>
 
-      <!-- Tabelle -->
       <div id="report-table-wrap">
         <div class="loading-center">Lade Statistiken...</div>
       </div>
     `;
 
-    // Filter anwenden
+    // Statistiken werden hier zwischen-gespeichert damit der PDF-Export darauf zugreifen kann
+    let _lastStats = [];
+    let _lastFrom  = defaultFrom;
+    let _lastTo    = defaultTo;
+
     const applyAndRender = async () => {
       const fromVal = document.getElementById('filter-from')?.value;
       const toVal   = document.getElementById('filter-to')?.value;
-      const from    = fromVal ? new Date(fromVal) : defaultFrom;
-      const to      = toVal   ? new Date(toVal + 'T23:59:59') : defaultTo;
-      const wrap    = document.getElementById('report-table-wrap');
+      _lastFrom = fromVal ? new Date(fromVal) : defaultFrom;
+      _lastTo   = toVal   ? new Date(toVal + 'T23:59:59') : defaultTo;
+      const wrap = document.getElementById('report-table-wrap');
       if (wrap) wrap.innerHTML = `<div class="loading-center">Lade Statistiken...</div>`;
-      const stats = await _computeMemberStats(relevantMembers, from, to);
-      if (wrap) renderReportTable(wrap, stats, from, to, isCoord, tLabel);
+      _lastStats = await _computeMemberStats(relevantMembers, _lastFrom, _lastTo);
+      if (wrap) renderReportTable(wrap, _lastStats, _lastFrom, _lastTo);
     };
 
     document.getElementById('apply-filter-btn')?.addEventListener('click', applyAndRender);
@@ -133,14 +125,9 @@ async function loadMemberReportDashboard() {
       });
     });
     document.getElementById('export-pdf-btn')?.addEventListener('click', () => {
-      const fromVal = document.getElementById('filter-from')?.value;
-      const toVal   = document.getElementById('filter-to')?.value;
-      const from    = fromVal ? new Date(fromVal) : defaultFrom;
-      const to      = toVal   ? new Date(toVal + 'T23:59:59') : defaultTo;
-      exportReportPDF(from, to, isCoord);
+      exportReportPDF(_lastStats, _lastFrom, _lastTo, isCoord);
     });
 
-    // Initial rendern
     await applyAndRender();
 
   } catch (err) {
@@ -152,17 +139,12 @@ async function loadMemberReportDashboard() {
 // ── Statistiken berechnen ────────────────────────────────────────────────────
 async function _computeMemberStats(members, from, to) {
   const stats = [];
-
   for (const member of members) {
-    // Alle Anwesenheits-Einträge dieses Mitglieds laden
     const attSnap = await firestore.collection('eventAttendance')
-      .where('userId', '==', member.uid)
-      .get();
-
+      .where('userId', '==', member.uid).get();
     const attendances = [];
     attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
-    // Zugehörige Events laden und nach Zeitraum filtern
     const eventIds = [...new Set(attendances.map(a => a.eventId).filter(Boolean))];
     const eventMap = {};
     for (const eid of eventIds) {
@@ -175,59 +157,44 @@ async function _computeMemberStats(members, from, to) {
       }
     }
 
-    // Nur Einträge im Zeitraum
-    const relevant = attendances.filter(a => eventMap[a.eventId]);
+    const relevant       = attendances.filter(a => eventMap[a.eventId]);
+    const total          = relevant.length;
+    const present        = relevant.filter(a => a.status === 'present').length;
+    const lateExcused    = relevant.filter(a => a.status === 'late_excused').length;
+    const lateUnexcused  = relevant.filter(a => a.status === 'late_unexcused').length;
+    const absentExcused  = relevant.filter(a => a.status === 'absent_excused').length;
+    const absentUnexcused= relevant.filter(a => a.status === 'absent_unexcused').length;
+    const registered     = relevant.filter(a => a.status === 'registered').length;
+    const confirmPending = relevant.filter(a => a.status === 'confirmation_pending').length;
+    const cancelled      = relevant.filter(a => a.status === 'cancelled').length;
 
-    const total             = relevant.length;
-    const present           = relevant.filter(a => a.status === 'present').length;
-    const lateExcused       = relevant.filter(a => a.status === 'late_excused').length;
-    const lateUnexcused     = relevant.filter(a => a.status === 'late_unexcused').length;
-    const absentExcused     = relevant.filter(a => a.status === 'absent_excused').length;
-    const absentUnexcused   = relevant.filter(a => a.status === 'absent_unexcused').length;
-    const registered        = relevant.filter(a => a.status === 'registered').length;
-    const confirmPending    = relevant.filter(a => a.status === 'confirmation_pending').length;
-    const cancelled         = relevant.filter(a => a.status === 'cancelled').length;
+    const attended       = present + lateExcused + lateUnexcused;
+    const absent         = absentExcused + absentUnexcused;
+    const excusedTotal   = absentExcused + lateExcused;
 
-    const attended          = present + lateExcused + lateUnexcused; // zählt als anwesend
-    const absent            = absentExcused + absentUnexcused;
-    const excusedTotal      = absentExcused + lateExcused;
-    const unexcusedTotal    = absentUnexcused + lateUnexcused;
-
-    const attendanceRate    = total > 0 ? Math.round((attended / total) * 100) : null;
-    const absenceRate       = total > 0 ? Math.round((absent   / total) * 100) : null;
-    const excusedRate       = absent > 0 ? Math.round((excusedTotal / absent) * 100) : null;
+    const attendanceRate = total  > 0 ? Math.round((attended     / total)  * 100) : null;
+    const absenceRate    = total  > 0 ? Math.round((absent       / total)  * 100) : null;
+    const excusedRate    = absent > 0 ? Math.round((excusedTotal / absent) * 100) : null;
 
     stats.push({
       uid: member.uid,
       name: member.displayName || member.email || member.uid,
       email: member.email || '',
       groups: member.groups || [],
-      total,
-      present,
-      attended,
-      absent,
-      absentExcused,
-      absentUnexcused,
-      lateExcused,
-      lateUnexcused,
-      registered,
-      confirmPending,
-      cancelled,
+      total, present, attended, absent,
+      absentExcused, absentUnexcused,
+      lateExcused, lateUnexcused,
+      registered, confirmPending, cancelled,
       excusedTotal,
-      unexcusedTotal,
-      attendanceRate,
-      absenceRate,
-      excusedRate,
+      attendanceRate, absenceRate, excusedRate,
     });
   }
-
-  // Sortierung: alphabetisch nach Name
   stats.sort((a, b) => a.name.localeCompare(b.name, 'de'));
   return stats;
 }
 
 // ── Tabelle rendern ──────────────────────────────────────────────────────────
-function renderReportTable(wrap, stats, from, to, isCoord, tLabel) {
+function renderReportTable(wrap, stats, from, to) {
   if (!stats.length) {
     wrap.innerHTML = '<p class="text-muted">Keine Daten für den gewählten Zeitraum.</p>';
     return;
@@ -253,19 +220,15 @@ function renderReportTable(wrap, stats, from, to, isCoord, tLabel) {
 
   wrap.innerHTML = `
     <div id="report-print-area">
-      <div id="report-print-header" style="display:none;margin-bottom:20px;">
-        <h2 style="margin:0 0 4px;">Teilnahmebericht</h2>
-        <p style="margin:0;font-size:0.9rem;color:#666;">Zeitraum: ${dateRange} · Erstellt: ${_fmtDate(new Date())}</p>
-      </div>
       <div style="overflow-x:auto;">
         <table id="report-table" style="font-size:0.88rem;">
           <thead>
             <tr style="background:var(--color-surface-offset);">
               <th style="text-align:left;padding:10px 12px;font-weight:600;">Mitglied</th>
-              <th style="padding:10px 8px;text-align:center;" title="Termine gesamt">Termine</th>
-              <th style="padding:10px 8px;text-align:center;" title="Anwesenheitsquote">Anw.-Quote</th>
-              <th style="padding:10px 8px;text-align:center;" title="Fehlquote">Fehlquote</th>
-              <th style="padding:10px 8px;text-align:center;" title="Entschuldigt von Fehlzeiten">Entsch.-Quote</th>
+              <th style="padding:10px 8px;text-align:center;">Termine</th>
+              <th style="padding:10px 8px;text-align:center;">Anw.-Quote</th>
+              <th style="padding:10px 8px;text-align:center;">Fehlquote</th>
+              <th style="padding:10px 8px;text-align:center;">Entsch.-Quote</th>
               <th style="padding:10px 8px;text-align:center;">Anwesend</th>
               <th style="padding:10px 8px;text-align:center;">Entsch. gefehlt</th>
               <th style="padding:10px 8px;text-align:center;">Unentsch. gefehlt</th>
@@ -290,9 +253,7 @@ function renderReportTable(wrap, stats, from, to, isCoord, tLabel) {
                   <span style="font-weight:700;color:${absColor(s.absenceRate)};">${pct(s.absenceRate)}</span>
                 </td>
                 <td style="padding:10px 8px;text-align:center;">
-                  <span style="color:${s.excusedRate !== null ? 'var(--color-text)' : 'var(--color-text-faint)'};">${
-                    s.excusedRate !== null ? pct(s.excusedRate) + ' entsch.' : '–'
-                  }</span>
+                  <span>${s.excusedRate !== null ? pct(s.excusedRate) : '–'}</span>
                 </td>
                 <td style="padding:10px 8px;text-align:center;color:var(--color-success);font-weight:600;">${num(s.attended)}</td>
                 <td style="padding:10px 8px;text-align:center;color:var(--color-warning);">${num(s.absentExcused)}</td>
@@ -306,7 +267,6 @@ function renderReportTable(wrap, stats, from, to, isCoord, tLabel) {
     </div>
   `;
 
-  // Hover-Effekt für Tabellenzeilen
   document.querySelectorAll('.member-report-row').forEach(row => {
     row.addEventListener('mouseenter', () => row.style.background = 'var(--color-surface-offset)');
     row.addEventListener('mouseleave', () => row.style.background = '');
@@ -343,15 +303,15 @@ async function openMemberReportDetail(uid) {
       });
 
     const statusLabel = {
-      present:              '✅ Anwesend',
-      registered:           '📋 Angemeldet',
-      confirmation_pending: '⏳ Ausstehend',
-      absent_excused:       '🟡 Entsch. gefehlt',
-      absent_unexcused:     '🔴 Unentsch. gefehlt',
-      late_excused:         '🟡 Verspätet (E)',
-      late_unexcused:       '🟡 Verspätet (U)',
-      cancelled:            '↩ Abgemeldet',
-      skipped:              '❌ Ausgefallen',
+      present:              'Anwesend',
+      registered:           'Angemeldet',
+      confirmation_pending: 'Ausst. Bestätigung',
+      absent_excused:       'Entsch. gefehlt',
+      absent_unexcused:     'Unentsch. gefehlt',
+      late_excused:         'Verspätet (E)',
+      late_unexcused:       'Verspätet (U)',
+      cancelled:            'Abgemeldet',
+      skipped:              'Ausgefallen',
     };
 
     container.innerHTML = `
@@ -378,7 +338,7 @@ async function openMemberReportDetail(uid) {
             </thead>
             <tbody>
               ${rows.map(a => {
-                const ev = events[a.eventId];
+                const ev    = events[a.eventId];
                 const start = ev?.startTime?.toDate?.();
                 return `
                 <tr style="border-bottom:1px solid var(--color-border);">
@@ -404,16 +364,19 @@ async function openMemberReportDetail(uid) {
 }
 
 // ── PDF-Export (Übersicht) ────────────────────────────────────────────────────
-function exportReportPDF(from, to, isCoord) {
+// Nutzt die berechneten stats-Objekte direkt – kein DOM-Scraping mehr
+function exportReportPDF(stats, from, to, isCoord) {
   const { jsPDF } = window.jspdf || {};
   if (!jsPDF) { showToast('PDF-Bibliothek nicht geladen.', 'error'); return; }
+  if (!stats || !stats.length) { showToast('Keine Daten zum Exportieren.', 'warning'); return; }
 
-  const rows   = document.querySelectorAll('.member-report-row');
-  const doc    = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const title  = (window.appSettings?.brandingTitle || 'Anwesenheit-NEO') + ' – Teilnahmebericht';
-  const range  = `Zeitraum: ${_fmtDate(from)} – ${_fmtDate(to)}`;
-  const today  = `Erstellt: ${_fmtDate(new Date())}`;
+  const doc   = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const appName = window.appSettings?.brandingTitle || 'Anwesenheit-NEO';
+  const title   = `${appName} – Teilnahmebericht`;
+  const range   = `Zeitraum: ${_fmtDate(from)} – ${_fmtDate(to)}`;
+  const today   = `Erstellt: ${_fmtDate(new Date())}`;
 
+  // Titel & Meta
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
   doc.text(title, 14, 14);
@@ -421,66 +384,71 @@ function exportReportPDF(from, to, isCoord) {
   doc.setFontSize(9);
   doc.text(`${range}   ·   ${today}`, 14, 21);
 
-  const headers = ['Mitglied', 'Termine', 'Anw.-%', 'Fehl-%', 'Entsch.-%', 'Anwesend', 'Entsch.', 'Unentsch.', 'Abgem.', 'Offen'];
-  const data    = [];
+  // Spalten: Name, Termine, Anw.%, Fehl%, Entsch.%, Anwesend, Entsch.gef, Unentsch.gef, Abgem., Offen
+  const headers  = ['Mitglied', 'Termine', 'Anw.-%', 'Fehl-%', 'Entsch.-%', 'Anwesend', 'Entsch.', 'Unentsch.', 'Abgem.', 'Offen'];
+  const colW     = [52, 16, 18, 16, 20, 18, 16, 20, 16, 14]; // Summe = 206 mm (A4 landscape 287mm - 2*14 = 259mm, etwas Luft)
+  const startX   = 14;
+  let   y        = 28;
+  const headerH  = 8;
+  const rowH     = 7;
 
-  rows.forEach(row => {
-    const cells = row.querySelectorAll('td');
-    if (cells.length < 10) return;
-    data.push([
-      cells[0].querySelector('div')?.textContent || cells[0].textContent,
-      cells[1].textContent.trim(),
-      cells[2].textContent.trim(),
-      cells[3].textContent.trim(),
-      cells[4].textContent.trim(),
-      cells[5].textContent.trim(),
-      cells[6].textContent.trim(),
-      cells[7].textContent.trim(),
-      cells[8].textContent.trim(),
-      cells[9].textContent.trim(),
-    ]);
-  });
+  const pct = (v) => v !== null && v !== undefined ? `${v}%` : '-';
+  const num = (v) => v !== null && v !== undefined ? String(v) : '0';
 
-  if (!data.length) { showToast('Keine Daten zum Exportieren.', 'warning'); return; }
-
-  // Einfache manuelle Tabelle
-  const colWidths = [50, 16, 18, 18, 22, 18, 18, 22, 18, 14];
-  const startX    = 14;
-  let   y         = 28;
-  const rowH      = 7;
-  const headerH   = 8;
-
-  // Header
-  doc.setFillColor(240, 240, 240);
-  doc.rect(startX, y, colWidths.reduce((a,b) => a+b, 0), headerH, 'F');
+  // Tabellenkopf
+  doc.setFillColor(230, 230, 230);
+  doc.rect(startX, y, colW.reduce((a,b) => a+b, 0), headerH, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
   let x = startX;
-  headers.forEach((h, i) => {
-    doc.text(h, x + 2, y + 5.5);
-    x += colWidths[i];
-  });
+  headers.forEach((h, i) => { doc.text(h, x + 2, y + 5.5); x += colW[i]; });
   y += headerH;
 
-  // Daten
+  // Datenzeilen direkt aus stats
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  data.forEach((row, ri) => {
+
+  stats.forEach((s, ri) => {
     if (ri % 2 === 0) {
       doc.setFillColor(250, 250, 250);
-      doc.rect(startX, y, colWidths.reduce((a,b)=>a+b,0), rowH, 'F');
+      doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), rowH, 'F');
     }
+
+    const cells = [
+      s.name.substring(0, 28),
+      num(s.total),
+      pct(s.attendanceRate),
+      pct(s.absenceRate),
+      pct(s.excusedRate),
+      num(s.attended),
+      num(s.absentExcused),
+      num(s.absentUnexcused),
+      num(s.cancelled),
+      num(s.registered + s.confirmPending),
+    ];
+
     x = startX;
-    row.forEach((cell, i) => {
-      const txt = String(cell).substring(0, i === 0 ? 30 : 8);
-      doc.text(txt, x + 2, y + 4.8);
-      x += colWidths[i];
+    cells.forEach((cell, i) => {
+      doc.text(String(cell), x + 2, y + 4.8);
+      x += colW[i];
     });
-    // Trennlinie
-    doc.setDrawColor(220, 220, 220);
-    doc.line(startX, y + rowH, startX + colWidths.reduce((a,b)=>a+b,0), y + rowH);
+
+    doc.setDrawColor(215, 215, 215);
+    doc.line(startX, y + rowH, startX + colW.reduce((a,b)=>a+b,0), y + rowH);
     y += rowH;
-    if (y > 185) { doc.addPage(); y = 14; }
+
+    if (y > 188) {
+      doc.addPage();
+      y = 14;
+      // Kopfzeile auf neuer Seite wiederholen
+      doc.setFillColor(230, 230, 230);
+      doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), headerH, 'F');
+      doc.setFont('helvetica', 'bold');
+      x = startX;
+      headers.forEach((h, i) => { doc.text(h, x + 2, y + 5.5); x += colW[i]; });
+      doc.setFont('helvetica', 'normal');
+      y += headerH;
+    }
   });
 
   const filename = `Teilnahmebericht_${_fmtDateFile(from)}_${_fmtDateFile(to)}.pdf`;
@@ -503,58 +471,54 @@ function _exportDetailPDF(name, rows, events, statusLabel) {
   doc.setFontSize(9);
   doc.text(`Erstellt: ${_fmtDate(new Date())}`, 14, 22);
 
-  const headers  = ['Termin', 'Datum', 'Status', 'Notiz'];
-  const colW     = [70, 28, 42, 42];
-  const startX   = 14;
-  let   y        = 28;
+  const headers = ['Termin', 'Datum', 'Status', 'Notiz'];
+  const colW    = [72, 28, 40, 40];
+  const startX  = 14;
+  let   y       = 28;
 
-  // Header
-  doc.setFillColor(240,240,240);
+  doc.setFillColor(230, 230, 230);
   doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), 8, 'F');
-  doc.setFont('helvetica','bold');
+  doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   let x = startX;
-  headers.forEach((h,i) => { doc.text(h, x+2, y+5.5); x += colW[i]; });
+  headers.forEach((h, i) => { doc.text(h, x + 2, y + 5.5); x += colW[i]; });
   y += 8;
 
-  doc.setFont('helvetica','normal');
+  doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   rows.forEach((a, ri) => {
     const ev    = events[a.eventId];
     const start = ev?.startTime?.toDate?.();
     const cells = [
-      (ev?.title || '–').substring(0, 35),
+      (ev?.title || '–').substring(0, 38),
       start ? _fmtDate(start) : '–',
-      (statusLabel[a.status] || a.status).replace(/[✅📋⏳🟡🔴↩❌]/g, '').trim(),
-      (a.memberNote || a.trainerNoteMember || '–').substring(0, 30),
+      (statusLabel[a.status] || a.status).substring(0, 22),
+      (a.memberNote || a.trainerNoteMember || '–').substring(0, 28),
     ];
     if (ri % 2 === 0) {
-      doc.setFillColor(250,250,250);
+      doc.setFillColor(250, 250, 250);
       doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), 7, 'F');
     }
     x = startX;
-    cells.forEach((c,i) => { doc.text(String(c), x+2, y+4.8); x += colW[i]; });
-    doc.setDrawColor(220,220,220);
-    doc.line(startX, y+7, startX+colW.reduce((a,b)=>a+b,0), y+7);
+    cells.forEach((c, i) => { doc.text(String(c), x + 2, y + 4.8); x += colW[i]; });
+    doc.setDrawColor(215, 215, 215);
+    doc.line(startX, y + 7, startX + colW.reduce((a,b)=>a+b,0), y + 7);
     y += 7;
     if (y > 270) { doc.addPage(); y = 14; }
   });
 
-  doc.save(`Bericht_${name.replace(/\s+/g,'_')}_${_fmtDateFile(new Date())}.pdf`);
+  doc.save(`Bericht_${name.replace(/\s+/g, '_')}_${_fmtDateFile(new Date())}.pdf`);
   showToast('PDF wurde erstellt.', 'success');
 }
 
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 function _fmtDate(d) {
   if (!d) return '–';
-  return d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
+  return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 function _fmtDateInput(d) {
   if (!d) return '';
-  const y  = d.getFullYear();
-  const m  = String(d.getMonth()+1).padStart(2,'0');
-  const dy = String(d.getDate()).padStart(2,'0');
-  return `${y}-${m}-${dy}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 function _fmtDateFile(d) {
   if (!d) return '';
