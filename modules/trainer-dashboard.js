@@ -49,7 +49,7 @@ async function loadTrainerDashboard() {
       const snap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
       let count = 0;
       snap.forEach(doc => {
-        if (['registered','present','late_excused','late_unexcused'].includes(doc.data().status)) count++;
+        if (['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(doc.data().status)) count++;
       });
       ev._participantCount = count;
       ev._minParticipants  = minPart;
@@ -179,17 +179,20 @@ async function openTrainerEventDetail(event) {
       trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
     }));
 
-    // Name des eingeloggten Trainers für Broadcast-Header
     const myUserDoc  = await firestore.collection('users').doc(myUid).get();
     const myName     = myUserDoc.exists ? (myUserDoc.data().displayName || myUserDoc.data().email || myUid) : myUid;
 
     const allTeachersSnap = await firestore.collection('users').get();
     const allTeachers = [];
+    const allMembers  = [];
     allTeachersSnap.forEach(doc => {
       const d = doc.data();
       const roles = d.roles || [];
       if (doc.id !== myUid && (roles.includes('teacher') || roles.includes('admin') || roles.includes('coordinator'))) {
         allTeachers.push({ uid: doc.id, name: d.displayName || d.email || doc.id });
+      }
+      if (roles.includes('member')) {
+        allMembers.push({ uid: doc.id, name: d.displayName || d.email || doc.id });
       }
     });
 
@@ -224,8 +227,12 @@ async function openTrainerEventDetail(event) {
     const attendances = [];
     attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
-    const registeredCount = attendances.filter(a => ['registered','present','late_excused','late_unexcused'].includes(a.status)).length;
-    const missingCount    = minPart ? Math.max(0, minPart - registeredCount) : 0;
+    const registeredCount = attendances.filter(a =>
+      ['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(a.status)
+    ).length;
+    const missingCount = minPart ? Math.max(0, minPart - registeredCount) : 0;
+
+    const existingAttendeeUids = new Set(attendances.map(a => a.userId));
 
     const userMap = {};
     for (const att of attendances) {
@@ -239,13 +246,14 @@ async function openTrainerEventDetail(event) {
 
     const statusChipHtml = (status) => {
       const map = {
-        present:          ['chip-success', 'Anwesend'],
-        registered:       ['chip-info',    'Angemeldet'],
-        cancelled:        ['chip-error',   'Abgemeldet'],
-        absent_excused:   ['chip-warning', 'Entsch. gefehlt'],
-        absent_unexcused: ['chip-error',   'Unentsch. gefehlt'],
-        late_excused:     ['chip-warning', 'Verspätet (E)'],
-        late_unexcused:   ['chip-warning', 'Verspätet (U)'],
+        present:              ['chip-success', 'Anwesend'],
+        registered:           ['chip-info',    'Angemeldet'],
+        cancelled:            ['chip-error',   'Abgemeldet'],
+        absent_excused:       ['chip-warning', 'Entsch. gefehlt'],
+        absent_unexcused:     ['chip-error',   'Unentsch. gefehlt'],
+        late_excused:         ['chip-warning', 'Verspätet (E)'],
+        late_unexcused:       ['chip-warning', 'Verspätet (U)'],
+        confirmation_pending: ['chip-warning', '⏳ Ausstehend'],
       };
       const [cls, label] = map[status] || ['', status];
       return `<span class="chip ${cls}" style="font-size:0.8rem;">${label}</span>`;
@@ -273,13 +281,14 @@ async function openTrainerEventDetail(event) {
         </td>
         <td>
           <select class="status-select" data-att-id="${att.id}" style="font-size:0.85rem;">
-            <option value="present"          ${att.status==='present'          ?'selected':''}>Anwesend</option>
-            <option value="registered"       ${att.status==='registered'       ?'selected':''}>Angemeldet (offen)</option>
-            <option value="absent_excused"   ${att.status==='absent_excused'   ?'selected':''}>Entschuldigt gefehlt</option>
-            <option value="absent_unexcused" ${att.status==='absent_unexcused' ?'selected':''}>Unentschuldigt gefehlt</option>
-            <option value="late_excused"     ${att.status==='late_excused'     ?'selected':''}>Verspätet (entschuldigt)</option>
-            <option value="late_unexcused"   ${att.status==='late_unexcused'   ?'selected':''}>Verspätet (unentschuldigt)</option>
-            <option value="cancelled"        ${att.status==='cancelled'        ?'selected':''}>Abgemeldet</option>
+            <option value="present"              ${att.status==='present'              ?'selected':''}>Anwesend</option>
+            <option value="registered"           ${att.status==='registered'           ?'selected':''}>Angemeldet (offen)</option>
+            <option value="confirmation_pending" ${att.status==='confirmation_pending' ?'selected':''}>⏳ Ausstehend (Bestätigung)</option>
+            <option value="absent_excused"       ${att.status==='absent_excused'       ?'selected':''}>Entschuldigt gefehlt</option>
+            <option value="absent_unexcused"     ${att.status==='absent_unexcused'     ?'selected':''}>Unentschuldigt gefehlt</option>
+            <option value="late_excused"         ${att.status==='late_excused'         ?'selected':''}>Verspätet (entschuldigt)</option>
+            <option value="late_unexcused"       ${att.status==='late_unexcused'       ?'selected':''}>Verspätet (unentschuldigt)</option>
+            <option value="cancelled"            ${att.status==='cancelled'            ?'selected':''}>Abgemeldet</option>
           </select>
         </td>
         <td>
@@ -402,7 +411,7 @@ async function openTrainerEventDetail(event) {
       ${isCancelled ? `
         <div class="card" style="margin-bottom:16px;border-left:4px solid var(--color-error,#c62828);">
           <p class="text-error" style="margin:0 0 4px;font-weight:600;display:flex;align-items:center;gap:6px;">
-            <span class="material-icons">cancel</span> Training abgesagt
+            <span class="material-icons">cancel</span> Termin abgesagt
           </p>
           <p class="text-muted" style="margin:0;">Begründung: ${ev.cancellationReason || '–'}</p>
           <button class="btn-secondary" id="revoke-cancel-btn" style="margin-top:12px;">Absage widerrufen</button>
@@ -437,7 +446,7 @@ async function openTrainerEventDetail(event) {
           <span class="material-icons" style="color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </h4>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${myName}“ angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${myName}" angezeigt.</p>
         <textarea id="event-broadcast" rows="2" placeholder="z.B. Bitte Sportschuhe mitbringen...">${ev.trainerBroadcast || ''}</textarea>
         <button class="btn-secondary" id="save-broadcast" style="margin-top:0;display:inline-flex;align-items:center;gap:4px;">
           <span class="material-icons" style="font-size:16px;">save</span> Nachricht speichern
@@ -451,6 +460,9 @@ async function openTrainerEventDetail(event) {
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
           <h3 style="margin:0;">Anwesenheitsliste (${attendances.length})</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn-secondary" id="add-member-to-event-btn" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
+              <span class="material-icons" style="font-size:16px;">person_add</span> Mitglied hinzufügen
+            </button>
             <button class="btn-secondary" id="mark-all-present" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
               <span class="material-icons" style="font-size:16px;">check</span> Alle anwesend
             </button>
@@ -480,7 +492,7 @@ async function openTrainerEventDetail(event) {
           ${!isCancelled && !isSelfCancelled ? `
             <button class="btn-danger" id="cancel-event-btn" style="display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">event_busy</span>
-              Abmelden / Training absagen
+              Abmelden / Termin absagen
             </button>
             <button class="btn-secondary" id="trainer-late-btn" style="display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">schedule</span>
@@ -499,6 +511,73 @@ async function openTrainerEventDetail(event) {
 
     document.getElementById('detail-back').onclick = () => loadTrainerDashboard();
 
+    // ── Mitglied hinzufügen ──────────────────────────────────────────────────
+    document.getElementById('add-member-to-event-btn')?.addEventListener('click', () => {
+      const availableMembers = allMembers.filter(m => !existingAttendeeUids.has(m.uid));
+      if (!availableMembers.length) {
+        showToast('Alle Mitglieder sind bereits eingetragen.', 'info');
+        return;
+      }
+      showModal({
+        title: 'Mitglied zum Termin hinzufügen',
+        body: `
+          <p class="text-muted" style="margin-bottom:12px;font-size:0.88rem;">
+            Das Mitglied wird auch dann hinzugefügt, wenn es nicht in der Gruppe ist.
+          </p>
+          <label>Mitglied auswählen</label>
+          <input type="text" id="member-search-input" placeholder="Name suchen..." style="margin-bottom:8px;" />
+          <div id="member-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--color-border);border-radius:6px;">
+            ${availableMembers.map(m => `
+              <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--color-border);color:var(--color-text);">
+                <input type="radio" name="add-member-pick" value="${m.uid}" style="width:16px;height:16px;" />
+                ${m.name}
+              </label>`).join('')}
+          </div>
+          <label style="margin-top:12px;">Anfangsstatus</label>
+          <select id="add-member-status" style="font-size:0.9rem;">
+            <option value="registered">Angemeldet</option>
+            <option value="confirmation_pending">⏳ Ausstehend (Bestätigung)</option>
+            <option value="present">Anwesend</option>
+          </select>`,
+        confirmLabel: 'Hinzufügen',
+        onConfirm: async () => {
+          const picked = document.querySelector('input[name="add-member-pick"]:checked')?.value;
+          const status = document.getElementById('add-member-status')?.value || 'registered';
+          if (!picked) { showToast('Bitte ein Mitglied auswählen.', 'warning'); return; }
+          try {
+            const existing = await firestore.collection('eventAttendance')
+              .where('eventId', '==', ev.id).where('userId', '==', picked).get();
+            if (!existing.empty) { showToast('Mitglied ist bereits eingetragen.', 'info'); return; }
+            await firestore.collection('eventAttendance').add({
+              eventId: ev.id,
+              userId: picked,
+              status,
+              addedByTrainer: true,
+              addedAt: firebase.firestore.FieldValue.serverTimestamp(),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            showToast('Mitglied wurde zum Termin hinzugefügt.', 'success');
+            openTrainerEventDetail(ev);
+          } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
+        }
+      });
+
+      // Live-Suche im Modal
+      setTimeout(() => {
+        const searchInput = document.getElementById('member-search-input');
+        const memberList  = document.getElementById('member-list');
+        if (searchInput && memberList) {
+          searchInput.addEventListener('input', () => {
+            const q = searchInput.value.toLowerCase();
+            memberList.querySelectorAll('label').forEach(lbl => {
+              lbl.style.display = lbl.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
+          });
+        }
+      }, 100);
+    });
+
+    // ── Info-Notiz-Buttons ───────────────────────────────────────────────────
     container.querySelectorAll('.info-btn').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
@@ -509,7 +588,7 @@ async function openTrainerEventDetail(event) {
     document.getElementById('revoke-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Absage widerrufen',
-        body: '<p>Soll das Training wieder als aktiv markiert werden?</p>',
+        body: '<p>Soll der Termin wieder als aktiv markiert werden?</p>',
         confirmLabel: 'Ja, widerrufen',
         onConfirm: async () => {
           try {
@@ -518,7 +597,7 @@ async function openTrainerEventDetail(event) {
               cancellationReason: firebase.firestore.FieldValue.delete(),
               updatedAt:          firebase.firestore.FieldValue.serverTimestamp()
             });
-            showToast('Absage widerrufen. Training ist wieder aktiv.', 'success');
+            showToast('Absage widerrufen. Termin ist wieder aktiv.', 'success');
             loadTrainerDashboard();
           } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
         }
@@ -528,7 +607,7 @@ async function openTrainerEventDetail(event) {
     document.getElementById('revoke-self-cancel-btn')?.addEventListener('click', () => {
       showModal({
         title: 'Abmeldung widerrufen',
-        body: `<p>Möchtest du deine Abmeldung rükgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
+        body: `<p>Möchtest du deine Abmeldung rückgängig machen und dich wieder als ${tLabel} eintragen?</p>`,
         confirmLabel: 'Ja, wieder eintragen',
         onConfirm: async () => {
           try {
@@ -598,7 +677,7 @@ async function openTrainerEventDetail(event) {
               cancellationReason: 'Keine Vertretung gefunden – automatisch abgesagt.',
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            showToast('Abgelehnt. Keine weiteren Anfragen offen – Training automatisch abgesagt.', 'warning');
+            showToast('Abgelehnt. Keine weiteren Anfragen offen – Termin automatisch abgesagt.', 'warning');
           } else {
             showToast('Vertretungsanfrage abgelehnt.', 'info');
           }
@@ -646,7 +725,7 @@ async function openTrainerEventDetail(event) {
 
     document.getElementById('cancel-event-btn')?.addEventListener('click', () => {
       showModal({
-        title: 'Abmelden oder Training absagen',
+        title: 'Abmelden oder Termin absagen',
         body: `
           <p>Was möchtest du tun?</p>
           <div style="display:flex;flex-direction:column;gap:8px;">
@@ -654,7 +733,7 @@ async function openTrainerEventDetail(event) {
               <input type="radio" name="cancel-mode" value="self" checked /> Nur mich abmelden (Vertretung suchen)
             </label>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--color-text);">
-              <input type="radio" name="cancel-mode" value="event" /> Ganzes Training absagen
+              <input type="radio" name="cancel-mode" value="event" /> Ganzen Termin absagen
             </label>
           </div>
           <label style="margin-top:12px;">Begründung</label>
@@ -678,7 +757,7 @@ async function openTrainerEventDetail(event) {
               status: 'cancelled', cancellationReason: reason,
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            showToast('Training abgesagt.', 'success');
+            showToast('Termin abgesagt.', 'success');
             loadTrainerDashboard();
           } else {
             await firestore.collection('events').doc(ev.id).update({
