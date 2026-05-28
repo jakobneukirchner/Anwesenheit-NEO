@@ -15,12 +15,10 @@ async function loadMemberReportDashboard() {
     const settings    = settingsDoc.exists ? settingsDoc.data() : {};
     window.appSettings = settings;
 
-    // ── Alle Nutzer laden ───────────────────────────────────────────────────
     const usersSnap = await firestore.collection('users').get();
     const allUsers  = [];
     usersSnap.forEach(doc => allUsers.push({ uid: doc.id, ...doc.data() }));
 
-    // ── Eigene Gruppen ermitteln (für Betreuer-Filter) ──────────────────────
     let relevantMembers = [];
     if (isCoord) {
       relevantMembers = allUsers.filter(u => (u.roles || []).includes('member'));
@@ -58,7 +56,6 @@ async function loadMemberReportDashboard() {
     const defaultFrom = new Date(now.getFullYear(), now.getMonth() - 2, 1);
     const defaultTo   = now;
 
-    // ── UI aufbauen ─────────────────────────────────────────────────────────
     container.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
         <div>
@@ -101,7 +98,6 @@ async function loadMemberReportDashboard() {
       </div>
     `;
 
-    // Statistiken werden hier zwischen-gespeichert damit der PDF-Export darauf zugreifen kann
     let _lastStats = [];
     let _lastFrom  = defaultFrom;
     let _lastTo    = defaultTo;
@@ -157,20 +153,20 @@ async function _computeMemberStats(members, from, to) {
       }
     }
 
-    const relevant       = attendances.filter(a => eventMap[a.eventId]);
-    const total          = relevant.length;
-    const present        = relevant.filter(a => a.status === 'present').length;
-    const lateExcused    = relevant.filter(a => a.status === 'late_excused').length;
-    const lateUnexcused  = relevant.filter(a => a.status === 'late_unexcused').length;
-    const absentExcused  = relevant.filter(a => a.status === 'absent_excused').length;
-    const absentUnexcused= relevant.filter(a => a.status === 'absent_unexcused').length;
-    const registered     = relevant.filter(a => a.status === 'registered').length;
-    const confirmPending = relevant.filter(a => a.status === 'confirmation_pending').length;
-    const cancelled      = relevant.filter(a => a.status === 'cancelled').length;
+    const relevant        = attendances.filter(a => eventMap[a.eventId]);
+    const total           = relevant.length;
+    const present         = relevant.filter(a => a.status === 'present').length;
+    const lateExcused     = relevant.filter(a => a.status === 'late_excused').length;
+    const lateUnexcused   = relevant.filter(a => a.status === 'late_unexcused').length;
+    const absentExcused   = relevant.filter(a => a.status === 'absent_excused').length;
+    const absentUnexcused = relevant.filter(a => a.status === 'absent_unexcused').length;
+    const registered      = relevant.filter(a => a.status === 'registered').length;
+    const confirmPending  = relevant.filter(a => a.status === 'confirmation_pending').length;
+    const cancelled       = relevant.filter(a => a.status === 'cancelled').length;
 
-    const attended       = present + lateExcused + lateUnexcused;
-    const absent         = absentExcused + absentUnexcused;
-    const excusedTotal   = absentExcused + lateExcused;
+    const attended     = present + lateExcused + lateUnexcused;
+    const absent       = absentExcused + absentUnexcused;
+    const excusedTotal = absentExcused + lateExcused;
 
     const attendanceRate = total  > 0 ? Math.round((attended     / total)  * 100) : null;
     const absenceRate    = total  > 0 ? Math.round((absent       / total)  * 100) : null;
@@ -215,8 +211,6 @@ function renderReportTable(wrap, stats, from, to) {
     if (rate <= 25) return 'var(--color-warning)';
     return 'var(--color-error)';
   };
-
-  const dateRange = `${_fmtDate(from)} – ${_fmtDate(to)}`;
 
   wrap.innerHTML = `
     <div id="report-print-area">
@@ -294,6 +288,30 @@ async function openMemberReportDetail(uid) {
       if (eDoc.exists) events[eid] = { id: eid, ...eDoc.data() };
     }
 
+    // Quoten berechnen (nur abgeschlossene Termine, nicht ausgefallen/abgesagt)
+    const relAtt = attendances.filter(a => {
+      const ev = events[a.eventId];
+      if (!ev) return false;
+      if (ev.status === 'cancelled' || ev.status === 'skipped') return false;
+      return true;
+    });
+    const total           = relAtt.length;
+    const present         = relAtt.filter(a => a.status === 'present').length;
+    const lateExcused     = relAtt.filter(a => a.status === 'late_excused').length;
+    const lateUnexcused   = relAtt.filter(a => a.status === 'late_unexcused').length;
+    const absentExcused   = relAtt.filter(a => a.status === 'absent_excused').length;
+    const absentUnexcused = relAtt.filter(a => a.status === 'absent_unexcused').length;
+    const attended        = present + lateExcused + lateUnexcused;
+    const absent          = absentExcused + absentUnexcused;
+    const excusedTotal    = absentExcused + lateExcused;
+    const attendanceRate  = total  > 0 ? Math.round((attended     / total)  * 100) : null;
+    const absenceRate     = total  > 0 ? Math.round((absent       / total)  * 100) : null;
+    const excusedRate     = absent > 0 ? Math.round((excusedTotal / absent) * 100) : null;
+
+    const pct = (v) => v !== null && v !== undefined ? `${v}%` : '–';
+    const rateColor = (r) => r === null ? 'var(--color-text-muted)' : r >= 80 ? 'var(--color-success)' : r >= 60 ? 'var(--color-warning)' : 'var(--color-error)';
+    const absColor  = (r) => r === null ? 'var(--color-text-muted)' : r <= 10  ? 'var(--color-success)' : r <= 25  ? 'var(--color-warning)' : 'var(--color-error)';
+
     const rows = attendances
       .filter(a => events[a.eventId])
       .sort((a, b) => {
@@ -305,11 +323,11 @@ async function openMemberReportDetail(uid) {
     const statusLabel = {
       present:              'Anwesend',
       registered:           'Angemeldet',
-      confirmation_pending: 'Ausst. Bestätigung',
+      confirmation_pending: 'Ausst. Bestaetigung',
       absent_excused:       'Entsch. gefehlt',
       absent_unexcused:     'Unentsch. gefehlt',
-      late_excused:         'Verspätet (E)',
-      late_unexcused:       'Verspätet (U)',
+      late_excused:         'Verspaetet (E)',
+      late_unexcused:       'Verspaetet (U)',
       cancelled:            'Abgemeldet',
       skipped:              'Ausgefallen',
     };
@@ -317,12 +335,45 @@ async function openMemberReportDetail(uid) {
     container.innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
         <button class="btn-secondary" id="report-detail-back" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
-          <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurück
+          <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurueck
         </button>
         <h2 style="margin:0;">Bericht: ${name}</h2>
         <button class="btn-secondary" id="export-detail-pdf" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:16px;">picture_as_pdf</span> PDF
         </button>
+      </div>
+
+      <!-- Quoten-Karten -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Termine gesamt</div>
+          <div style="font-size:1.6rem;font-weight:700;">${total}</div>
+        </div>
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Anwesenheitsquote</div>
+          <div style="font-size:1.6rem;font-weight:700;color:${rateColor(attendanceRate)};">${pct(attendanceRate)}</div>
+        </div>
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Fehlquote</div>
+          <div style="font-size:1.6rem;font-weight:700;color:${absColor(absenceRate)};">${pct(absenceRate)}</div>
+        </div>
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Entschuldigte Quote</div>
+          <div style="font-size:1.6rem;font-weight:700;color:var(--color-text);">${excusedRate !== null ? pct(excusedRate) : '–'}</div>
+          <div style="font-size:0.74rem;color:var(--color-text-faint);">der Fehlzeiten</div>
+        </div>
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Anwesend</div>
+          <div style="font-size:1.6rem;font-weight:700;color:var(--color-success);">${attended}</div>
+        </div>
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Entsch. gefehlt</div>
+          <div style="font-size:1.6rem;font-weight:700;color:var(--color-warning);">${absentExcused}</div>
+        </div>
+        <div class="card" style="text-align:center;padding:16px 12px;">
+          <div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:4px;">Unentsch. gefehlt</div>
+          <div style="font-size:1.6rem;font-weight:700;color:var(--color-error);">${absentUnexcused}</div>
+        </div>
       </div>
 
       <div id="detail-report-content">
@@ -355,7 +406,8 @@ async function openMemberReportDetail(uid) {
     `;
 
     document.getElementById('report-detail-back').onclick = () => loadMemberReportDashboard();
-    document.getElementById('export-detail-pdf').onclick  = () => _exportDetailPDF(name, rows, events, statusLabel);
+    document.getElementById('export-detail-pdf').onclick  = () =>
+      _exportDetailPDF(name, rows, events, statusLabel, { total, attended, absent, absentExcused, absentUnexcused, excusedTotal, attendanceRate, absenceRate, excusedRate });
 
   } catch (err) {
     console.error(err);
@@ -364,19 +416,17 @@ async function openMemberReportDetail(uid) {
 }
 
 // ── PDF-Export (Übersicht) ────────────────────────────────────────────────────
-// Nutzt die berechneten stats-Objekte direkt – kein DOM-Scraping mehr
 function exportReportPDF(stats, from, to, isCoord) {
   const { jsPDF } = window.jspdf || {};
   if (!jsPDF) { showToast('PDF-Bibliothek nicht geladen.', 'error'); return; }
   if (!stats || !stats.length) { showToast('Keine Daten zum Exportieren.', 'warning'); return; }
 
-  const doc   = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const appName = window.appSettings?.brandingTitle || 'Anwesenheit-NEO';
-  const title   = `${appName} – Teilnahmebericht`;
-  const range   = `Zeitraum: ${_fmtDate(from)} – ${_fmtDate(to)}`;
-  const today   = `Erstellt: ${_fmtDate(new Date())}`;
+  const doc      = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const appName  = window.appSettings?.brandingTitle || 'Anwesenheit-NEO';
+  const title    = `${appName} – Teilnahmebericht`;
+  const range    = `Zeitraum: ${_fmtDate(from)} – ${_fmtDate(to)}`;
+  const today    = `Erstellt: ${_fmtDate(new Date())}`;
 
-  // Titel & Meta
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
   doc.text(title, 14, 14);
@@ -384,18 +434,16 @@ function exportReportPDF(stats, from, to, isCoord) {
   doc.setFontSize(9);
   doc.text(`${range}   ·   ${today}`, 14, 21);
 
-  // Spalten: Name, Termine, Anw.%, Fehl%, Entsch.%, Anwesend, Entsch.gef, Unentsch.gef, Abgem., Offen
-  const headers  = ['Mitglied', 'Termine', 'Anw.-%', 'Fehl-%', 'Entsch.-%', 'Anwesend', 'Entsch.', 'Unentsch.', 'Abgem.', 'Offen'];
-  const colW     = [52, 16, 18, 16, 20, 18, 16, 20, 16, 14]; // Summe = 206 mm (A4 landscape 287mm - 2*14 = 259mm, etwas Luft)
-  const startX   = 14;
-  let   y        = 28;
-  const headerH  = 8;
-  const rowH     = 7;
+  const headers = ['Mitglied', 'Termine', 'Anw.-%', 'Fehl-%', 'Entsch.-%', 'Anwesend', 'Entsch.', 'Unentsch.', 'Abgem.', 'Offen'];
+  const colW    = [52, 16, 18, 16, 20, 18, 16, 20, 16, 14];
+  const startX  = 14;
+  let   y       = 28;
+  const headerH = 8;
+  const rowH    = 7;
 
   const pct = (v) => v !== null && v !== undefined ? `${v}%` : '-';
   const num = (v) => v !== null && v !== undefined ? String(v) : '0';
 
-  // Tabellenkopf
   doc.setFillColor(230, 230, 230);
   doc.rect(startX, y, colW.reduce((a,b) => a+b, 0), headerH, 'F');
   doc.setFont('helvetica', 'bold');
@@ -404,7 +452,6 @@ function exportReportPDF(stats, from, to, isCoord) {
   headers.forEach((h, i) => { doc.text(h, x + 2, y + 5.5); x += colW[i]; });
   y += headerH;
 
-  // Datenzeilen direkt aus stats
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
 
@@ -413,34 +460,18 @@ function exportReportPDF(stats, from, to, isCoord) {
       doc.setFillColor(250, 250, 250);
       doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), rowH, 'F');
     }
-
     const cells = [
-      s.name.substring(0, 28),
-      num(s.total),
-      pct(s.attendanceRate),
-      pct(s.absenceRate),
-      pct(s.excusedRate),
-      num(s.attended),
-      num(s.absentExcused),
-      num(s.absentUnexcused),
-      num(s.cancelled),
-      num(s.registered + s.confirmPending),
+      s.name.substring(0, 28), num(s.total), pct(s.attendanceRate), pct(s.absenceRate),
+      pct(s.excusedRate), num(s.attended), num(s.absentExcused), num(s.absentUnexcused),
+      num(s.cancelled), num(s.registered + s.confirmPending),
     ];
-
     x = startX;
-    cells.forEach((cell, i) => {
-      doc.text(String(cell), x + 2, y + 4.8);
-      x += colW[i];
-    });
-
+    cells.forEach((cell, i) => { doc.text(String(cell), x + 2, y + 4.8); x += colW[i]; });
     doc.setDrawColor(215, 215, 215);
     doc.line(startX, y + rowH, startX + colW.reduce((a,b)=>a+b,0), y + rowH);
     y += rowH;
-
     if (y > 188) {
-      doc.addPage();
-      y = 14;
-      // Kopfzeile auf neuer Seite wiederholen
+      doc.addPage(); y = 14;
       doc.setFillColor(230, 230, 230);
       doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), headerH, 'F');
       doc.setFont('helvetica', 'bold');
@@ -457,7 +488,7 @@ function exportReportPDF(stats, from, to, isCoord) {
 }
 
 // ── PDF-Export (Detail einzelnes Mitglied) ────────────────────────────────────
-function _exportDetailPDF(name, rows, events, statusLabel) {
+function _exportDetailPDF(name, rows, events, statusLabel, stats) {
   const { jsPDF } = window.jspdf || {};
   if (!jsPDF) { showToast('PDF-Bibliothek nicht geladen.', 'error'); return; }
 
@@ -471,10 +502,28 @@ function _exportDetailPDF(name, rows, events, statusLabel) {
   doc.setFontSize(9);
   doc.text(`Erstellt: ${_fmtDate(new Date())}`, 14, 22);
 
+  // Quoten-Zusammenfassung im PDF
+  const pct = (v) => v !== null && v !== undefined ? `${v}%` : '-';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('Zusammenfassung', 14, 30);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  const summaryLines = [
+    `Termine gesamt: ${stats.total}`,
+    `Anwesenheitsquote: ${pct(stats.attendanceRate)}   Fehlquote: ${pct(stats.absenceRate)}   Entschuldigte Quote (der Fehlzeiten): ${pct(stats.excusedRate)}`,
+    `Anwesend: ${stats.attended}   Entschuldigt gefehlt: ${stats.absentExcused}   Unentschuldigt gefehlt: ${stats.absentUnexcused}`,
+  ];
+  summaryLines.forEach((line, i) => doc.text(line, 14, 36 + i * 5));
+
+  doc.setDrawColor(200, 200, 200);
+  doc.line(14, 53, 196, 53);
+
+  // Tabellenkopf
   const headers = ['Termin', 'Datum', 'Status', 'Notiz'];
   const colW    = [72, 28, 40, 40];
   const startX  = 14;
-  let   y       = 28;
+  let   y       = 57;
 
   doc.setFillColor(230, 230, 230);
   doc.rect(startX, y, colW.reduce((a,b)=>a+b,0), 8, 'F');
