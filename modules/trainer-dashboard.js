@@ -37,14 +37,9 @@ async function loadTrainerDashboard() {
       return t && t >= pastStart && t <= futureEnd;
     }).sort((a, b) => (a.startTime?.toMillis?.() || 0) - (b.startTime?.toMillis?.() || 0));
 
-    const upcoming = filtered.filter(e => {
-      const t = e.startTime?.toDate?.();
-      return t && t > now;
-    });
-    const past = filtered.filter(e => {
-      const t = e.startTime?.toDate?.();
-      return t && t <= now;
-    }).sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
+    const upcoming = filtered.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
+    const past = filtered.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; })
+      .sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
 
     const untilText = formatDateGerman(futureEnd);
 
@@ -55,7 +50,6 @@ async function loadTrainerDashboard() {
           <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
         </div>
 
-        <!-- KOMMENDE TERMINE -->
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
           <span class="material-icons" style="font-size:20px;color:var(--color-primary);">event</span>
           <span style="font-weight:700;font-size:1.05rem;">Kommende Termine</span>
@@ -63,7 +57,6 @@ async function loadTrainerDashboard() {
         </div>
         <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;margin-bottom:28px;"></div>
 
-        <!-- TRENNER -->
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;margin-top:8px;">
           <div style="flex:1;height:1px;background:var(--color-border);"></div>
           <div style="display:flex;align-items:center;gap:7px;color:var(--color-text-muted);font-size:0.88rem;font-weight:600;white-space:nowrap;">
@@ -73,7 +66,6 @@ async function loadTrainerDashboard() {
           <div style="flex:1;height:1px;background:var(--color-border);"></div>
         </div>
 
-        <!-- VERGANGENE TERMINE -->
         <div id="trainer-overview-past" style="display:flex;flex-direction:column;gap:12px;"></div>
       </div>
     `;
@@ -110,7 +102,6 @@ async function renderTrainerOverviewCard(event, isPast) {
   const total = rows.length;
   const present = rows.filter(r => ['present','late_excused','late_unexcused'].includes(r.status)).length;
   const missing = Math.max(0, (event.minParticipants || 0) - registered);
-
   const needsBadge = !isPast && missing > 0;
   const activeLabel = event.status === 'cancelled' ? 'Abgesagt' : event.status === 'skipped' ? 'Ausgefallen' : 'Aktiv';
   const activeClass = event.status === 'cancelled' ? 'chip-error' : event.status === 'skipped' ? 'chip-warning' : 'chip-success';
@@ -132,19 +123,13 @@ async function renderTrainerOverviewCard(event, isPast) {
     </div>
   `;
 
-  card.querySelector('[data-open-detail]').onclick = () => {
-    openTrainerDetailPage(event.id, isPast);
-  };
-
+  card.querySelector('[data-open-detail]').onclick = () => openTrainerDetailPage(event.id);
   return card;
 }
 
-function openTrainerDetailPage(eventId, isPast) {
+function openTrainerDetailPage(eventId) {
   const container = document.getElementById('app-content');
-
-  // Überschreibe den gesamten app-content mit der Detailseite
   container.innerHTML = `<div id="trainer-detail-page"><div class="loading-center">Lade Termin…</div></div>`;
-
   renderTrainerDetailView(eventId, document.getElementById('trainer-detail-page'), {
     backFn: () => loadTrainerDashboard()
   });
@@ -159,7 +144,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const event = { id: eventDoc.id, ...eventDoc.data() };
     const start = event.startTime?.toDate?.();
     const end = event.endTime?.toDate?.();
-    const isPast = !!(start && start <= new Date());
 
     const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
     const attendances = [];
@@ -178,15 +162,30 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const needed = Math.max(0, (event.minParticipants || 0) - registered);
     const minReached = needed === 0;
 
-    // Ort oder Beschreibung als Fallback
-    const locationOrDescription = (event.location && event.location.trim())
-      ? event.location.trim()
-      : (event.description && event.description.trim())
-        ? event.description.trim()
-        : null;
+    const description = event.description?.trim() || '';
+    const location = event.location?.trim() || '';
+
+    // Beschreibung-Block (immer wenn vorhanden)
+    const descriptionBlock = description ? `
+      <div class="card" style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;">
+          <span class="material-icons" style="font-size:18px;color:var(--color-primary);">description</span>
+          Beschreibung
+        </div>
+        <div style="color:var(--color-text);white-space:pre-line;">${escapeHtml(description)}</div>
+      </div>` : '';
+
+    // Ort-Block (immer wenn vorhanden, unter Beschreibung)
+    const locationBlock = location ? `
+      <div class="card" style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;">
+          <span class="material-icons" style="font-size:18px;color:var(--color-primary);">place</span>
+          Ort
+        </div>
+        <div style="color:var(--color-text);">${escapeHtml(location)}</div>
+      </div>` : '';
 
     container.innerHTML = `
-      <!-- Zurück-Zeile -->
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;">
         <button class="btn-secondary" id="trainer-back-btn" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:16px;">arrow_back</span>Zurück
@@ -199,7 +198,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </div>
       </div>
 
-      <!-- Stat-Cards -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
         ${renderTrainerStatCard('Datum & Zeit', `${start ? formatDateGerman(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}`)}
         ${renderTrainerStatCard('Angemeldet', `${registered} / ${event.minParticipants || registered}`)}
@@ -208,7 +206,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         ${renderTrainerNeedCard(needed, minReached)}
       </div>
 
-      <!-- Betreuer -->
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-weight:700;">
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">groups</span>
@@ -227,17 +224,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </div>
       </div>
 
-      <!-- Ort / Beschreibung -->
-      ${locationOrDescription ? `
-      <div class="card" style="margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;">
-          <span class="material-icons" style="font-size:18px;color:var(--color-primary);">${(event.location && event.location.trim()) ? 'place' : 'description'}</span>
-          ${(event.location && event.location.trim()) ? 'Ort' : 'Beschreibung'}
-        </div>
-        <div style="color:var(--color-text);white-space:pre-line;">${escapeHtml(locationOrDescription)}</div>
-      </div>` : ''}
+      ${descriptionBlock}
+      ${locationBlock}
 
-      <!-- Broadcast -->
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-weight:700;">
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
@@ -248,7 +237,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
 
-      <!-- Anwesenheitsliste -->
       <div class="card" style="margin-bottom:12px;overflow-x:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
           <div style="font-weight:700;display:flex;align-items:center;gap:8px;">
@@ -270,21 +258,14 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <table style="width:100%;min-width:1050px;">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Schnell-Check</th>
-              <th>Detailstatus</th>
-              <th>Interne Notiz</th>
-              <th>Notiz an Mitglied</th>
-              <th>Hinweis v. Mitglied</th>
-              <th></th>
+              <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th>
+              <th>Interne Notiz</th><th>Notiz an Mitglied</th><th>Hinweis v. Mitglied</th><th></th>
             </tr>
           </thead>
           <tbody id="trainer-attendance-body"></tbody>
         </table>
       </div>
 
-      <!-- Aktionen -->
       <div class="card">
         <div style="font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">settings</span>Aktionen
@@ -312,9 +293,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           trainerBroadcast: msg || firebase.firestore.FieldValue.delete()
         });
         showToast('Nachricht gespeichert.', 'success');
-      } catch (e) {
-        showToast('Fehler: ' + e.message, 'error');
-      }
+      } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
     };
 
     document.getElementById('trainer-add-person').onclick = () => _showAddMemberModal(event, null, async () => {
@@ -322,32 +301,24 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     });
 
     document.getElementById('trainer-mark-all-present').onclick = () => {
-      container.querySelectorAll('.trainer-present-check').forEach(cb => {
-        if (!cb.disabled) cb.checked = true;
-      });
+      container.querySelectorAll('.trainer-present-check').forEach(cb => { if (!cb.disabled) cb.checked = true; });
     };
 
     document.getElementById('trainer-save-attendance').onclick = async () => {
       try {
         const updates = [];
         container.querySelectorAll('[data-att-id]').forEach(row => {
-          const attId = row.dataset.attId;
-          updates.push(
-            firestore.collection('eventAttendance').doc(attId).update({
-              status: row.querySelector('.trainer-status-select').value,
-              trainerNoteInternal: row.querySelector('.trainer-internal-note').value.trim(),
-              trainerNoteMember: row.querySelector('.trainer-member-note').value.trim(),
-              trainerSet: true,
-              trainerSetAt: new Date()
-            })
-          );
+          updates.push(firestore.collection('eventAttendance').doc(row.dataset.attId).update({
+            status: row.querySelector('.trainer-status-select').value,
+            trainerNoteInternal: row.querySelector('.trainer-internal-note').value.trim(),
+            trainerNoteMember: row.querySelector('.trainer-member-note').value.trim(),
+            trainerSet: true, trainerSetAt: new Date()
+          }));
         });
         await Promise.all(updates);
         showToast('Anwesenheit gespeichert.', 'success');
         await renderTrainerDetailView(event.id, container, options);
-      } catch (e) {
-        showToast('Fehler: ' + e.message, 'error');
-      }
+      } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
     };
 
     document.getElementById('trainer-cancel-self-btn').onclick = () => _cancelTrainerSelf(event, window.currentUser?.firebaseUser?.uid);
@@ -360,14 +331,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       tr.dataset.attId = att.id;
 
       const selectOptions = [
-        ['registered', 'Angemeldet (offen)'],
-        ['confirmation_pending', 'Ausstehend (Bestätigung)'],
-        ['present', 'Anwesend'],
-        ['absent_excused', 'Abgemeldet'],
-        ['absent_unexcused', 'Unentschuldigt gefehlt'],
-        ['late_excused', 'Verspätet (entsch.)'],
-        ['late_unexcused', 'Verspätet (unentsch.)'],
-        ['cancelled', 'Termin abgesagt']
+        ['registered','Angemeldet (offen)'],['confirmation_pending','Ausstehend (Bestätigung)'],
+        ['present','Anwesend'],['absent_excused','Abgemeldet'],['absent_unexcused','Unentschuldigt gefehlt'],
+        ['late_excused','Verspätet (entsch.)'],['late_unexcused','Verspätet (unentsch.)'],['cancelled','Termin abgesagt']
       ];
 
       tr.innerHTML = `
@@ -377,48 +343,34 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </td>
         <td>${renderTrainerStatusChip(att.status)}</td>
         <td><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}/> Anwesend</label></td>
-        <td>
-          <select class="trainer-status-select" style="min-width:180px;">
-            ${selectOptions.map(([value, label]) => `<option value="${value}" ${att.status === value ? 'selected' : ''}>${label}</option>`).join('')}
-          </select>
-        </td>
-        <td><input class="trainer-internal-note" type="text" value="${escapeHtml(att.trainerNoteInternal || '')}" placeholder="Interne Notiz (nur Betreuer)" style="width:100%;min-width:180px;" /></td>
-        <td><input class="trainer-member-note" type="text" value="${escapeHtml(att.trainerNoteMember || '')}" placeholder="Notiz an Mitglied" style="width:100%;min-width:160px;" /></td>
-        <td><input type="text" value="${escapeHtml(att.memberNote || '')}" disabled style="width:100%;min-width:150px;background:var(--color-surface-offset);" /></td>
-        <td>
-          <button class="btn-danger trainer-remove-person" style="padding:6px 8px;display:inline-flex;align-items:center;gap:4px;" title="Entfernen">
-            <span class="material-icons" style="font-size:16px;">person_remove</span>
-          </button>
-        </td>
+        <td><select class="trainer-status-select" style="min-width:180px;">${selectOptions.map(([v,l]) => `<option value="${v}" ${att.status===v?'selected':''}>${l}</option>`).join('')}</select></td>
+        <td><input class="trainer-internal-note" type="text" value="${escapeHtml(att.trainerNoteInternal||'')}" placeholder="Interne Notiz" style="width:100%;min-width:180px;"/></td>
+        <td><input class="trainer-member-note" type="text" value="${escapeHtml(att.trainerNoteMember||'')}" placeholder="Notiz an Mitglied" style="width:100%;min-width:160px;"/></td>
+        <td><input type="text" value="${escapeHtml(att.memberNote||'')}" disabled style="width:100%;min-width:150px;background:var(--color-surface-offset);"/></td>
+        <td><button class="btn-danger trainer-remove-person" style="padding:6px 8px;display:inline-flex;align-items:center;gap:4px;" title="Entfernen"><span class="material-icons" style="font-size:16px;">person_remove</span></button></td>
       `;
 
       const selectEl = tr.querySelector('.trainer-status-select');
       const presentCheck = tr.querySelector('.trainer-present-check');
-      presentCheck.onchange = () => {
-        if (presentCheck.checked) selectEl.value = 'present';
-      };
+      presentCheck.onchange = () => { if (presentCheck.checked) selectEl.value = 'present'; };
       selectEl.onchange = () => {
         presentCheck.checked = ['present','late_excused','late_unexcused'].includes(selectEl.value);
         tr.children[1].innerHTML = renderTrainerStatusChip(selectEl.value);
       };
-      tr.querySelector('.trainer-remove-person').onclick = async () => {
+      tr.querySelector('.trainer-remove-person').onclick = () => {
         showModal({
           title: 'Person entfernen',
-          body: `<p>Soll <strong>${user.displayName || user.email || att.userId}</strong> aus diesem Termin entfernt werden?</p>`,
+          body: `<p>Soll <strong>${user.displayName || user.email || att.userId}</strong> entfernt werden?</p>`,
           confirmLabel: 'Entfernen',
           onConfirm: async () => {
             try {
               await firestore.collection('eventAttendance').doc(att.id).delete();
               showToast('Person entfernt.', 'success');
               await renderTrainerDetailView(event.id, container, options);
-            } catch (e) {
-              showToast('Fehler: ' + e.message, 'error');
-              return false;
-            }
+            } catch (e) { showToast('Fehler: ' + e.message, 'error'); return false; }
           }
         });
       };
-
       tbody.appendChild(tr);
     }
   } catch (e) {
@@ -428,11 +380,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
 }
 
 function renderTrainerStatCard(label, value, valueColor = 'var(--color-text)') {
-  return `
-    <div class="card" style="margin:0;">
-      <div class="text-muted" style="font-size:0.82rem;margin-bottom:10px;">${label}</div>
-      <div style="font-size:1.65rem;font-weight:700;color:${valueColor};line-height:1.1;">${value}</div>
-    </div>`;
+  return `<div class="card" style="margin:0;"><div class="text-muted" style="font-size:0.82rem;margin-bottom:10px;">${label}</div><div style="font-size:1.65rem;font-weight:700;color:${valueColor};line-height:1.1;">${value}</div></div>`;
 }
 
 function renderTrainerNeedCard(needed, reached) {
@@ -449,14 +397,10 @@ function renderTrainerNeedCard(needed, reached) {
 
 function renderTrainerStatusChip(status) {
   const map = {
-    registered:           ['Angemeldet',            'chip-primary'],
-    confirmation_pending: ['Ausstehend',             'chip-warning'],
-    present:              ['Anwesend',               'chip-success'],
-    absent_excused:       ['Abgemeldet',             'chip-error'],
-    absent_unexcused:     ['Unentschuldigt',         'chip-error'],
-    late_excused:         ['Verspätet (entsch.)',    'chip-warning'],
-    late_unexcused:       ['Verspätet (unentsch.)', 'chip-warning'],
-    cancelled:            ['Termin abgesagt',        'chip-error']
+    registered:['Angemeldet','chip-primary'], confirmation_pending:['Ausstehend','chip-warning'],
+    present:['Anwesend','chip-success'], absent_excused:['Abgemeldet','chip-error'],
+    absent_unexcused:['Unentschuldigt','chip-error'], late_excused:['Verspätet (entsch.)','chip-warning'],
+    late_unexcused:['Verspätet (unentsch.)','chip-warning'], cancelled:['Termin abgesagt','chip-error']
   };
   const [label, cls] = map[status] || [status, ''];
   return `<span class="chip ${cls}">${label}</span>`;
@@ -472,59 +416,37 @@ async function _showAddMemberModal(event, _unused, onDone) {
   uSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
 
   const available = allUsers.filter(u => (u.roles || []).includes('member') && !registeredUids.has(u.id));
-  if (!available.length) {
-    showToast('Alle Mitglieder sind bereits angemeldet.', 'info');
-    return;
-  }
+  if (!available.length) { showToast('Alle Mitglieder sind bereits angemeldet.', 'info'); return; }
 
   showModal({
     title: 'Person hinzufügen',
     body: `
       <p class="text-muted" style="margin-top:0;font-size:0.88rem;">Mitglieder können auch außerhalb der Gruppe hinzugefügt werden.</p>
-      <input type="search" id="trainer-add-member-search" placeholder="Mitglied suchen…" style="width:100%;margin-bottom:10px;" />
+      <input type="search" id="trainer-add-member-search" placeholder="Mitglied suchen…" style="width:100%;margin-bottom:10px;"/>
       <div id="trainer-add-member-list" style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
         ${available.map(u => `
           <label style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:6px;background:var(--color-surface-offset);cursor:pointer;">
-            <input type="checkbox" name="trainer-add-member" value="${u.id}" />
-            <div>
-              <div style="font-weight:600;">${u.displayName || '(kein Name)'}</div>
-              <div class="text-muted" style="font-size:0.8rem;">${u.email || ''}</div>
-            </div>
+            <input type="checkbox" name="trainer-add-member" value="${u.id}"/>
+            <div><div style="font-weight:600;">${u.displayName || '(kein Name)'}</div><div class="text-muted" style="font-size:0.8rem;">${u.email || ''}</div></div>
           </label>`).join('')}
-      </div>
-    `,
+      </div>`,
     confirmLabel: 'Hinzufügen',
     onConfirm: async () => {
       const selected = [...document.querySelectorAll('input[name="trainer-add-member"]:checked')].map(i => i.value);
-      if (!selected.length) {
-        showToast('Bitte mindestens eine Person wählen.', 'error');
-        return false;
-      }
+      if (!selected.length) { showToast('Bitte mindestens eine Person wählen.', 'error'); return false; }
       try {
         const defaultMode = event.mode || window.appSettings?.defaultMode || 'opt_in';
         const initialStatus = defaultMode === 'confirmation' ? 'confirmation_pending' : 'registered';
         const batch = firestore.batch();
         selected.forEach(uid => {
           const ref = firestore.collection('eventAttendance').doc();
-          batch.set(ref, {
-            eventId: event.id,
-            userId: uid,
-            status: initialStatus,
-            addedByTrainer: true,
-            addedAt: new Date(),
-            firstRegisteredAt: new Date()
-          });
-          batch.update(firestore.collection('events').doc(event.id), {
-            directMembers: firebase.firestore.FieldValue.arrayUnion(uid)
-          });
+          batch.set(ref, { eventId: event.id, userId: uid, status: initialStatus, addedByTrainer: true, addedAt: new Date(), firstRegisteredAt: new Date() });
+          batch.update(firestore.collection('events').doc(event.id), { directMembers: firebase.firestore.FieldValue.arrayUnion(uid) });
         });
         await batch.commit();
         showToast('Person(en) hinzugefügt.', 'success');
         onDone && onDone();
-      } catch (e) {
-        showToast('Fehler: ' + e.message, 'error');
-        return false;
-      }
+      } catch (e) { showToast('Fehler: ' + e.message, 'error'); return false; }
     }
   });
 
@@ -534,9 +456,7 @@ async function _showAddMemberModal(event, _unused, onDone) {
     if (!search || !list) return;
     search.oninput = () => {
       const q = search.value.toLowerCase();
-      list.querySelectorAll('label').forEach(label => {
-        label.style.display = label.textContent.toLowerCase().includes(q) ? '' : 'none';
-      });
+      list.querySelectorAll('label').forEach(l => { l.style.display = l.textContent.toLowerCase().includes(q) ? '' : 'none'; });
     };
     search.focus();
   }, 60);
@@ -545,19 +465,14 @@ async function _showAddMemberModal(event, _unused, onDone) {
 async function _cancelTrainerSelf(event, trainerUid) {
   showModal({
     title: `Als ${getRoleLabel('teacher')} abmelden`,
-    body: `<p>Möchtest du dich für den Termin <strong>${event.title || 'Termin'}</strong> als ${getRoleLabel('teacher')} abmelden?</p>`,
+    body: `<p>Möchtest du dich für <strong>${event.title || 'Termin'}</strong> abmelden?</p>`,
     confirmLabel: 'Abmelden',
     onConfirm: async () => {
       try {
-        await firestore.collection('events').doc(event.id).update({
-          trainerCancellations: firebase.firestore.FieldValue.arrayUnion(trainerUid)
-        });
+        await firestore.collection('events').doc(event.id).update({ trainerCancellations: firebase.firestore.FieldValue.arrayUnion(trainerUid) });
         showToast('Du wurdest abgemeldet.', 'success');
         loadTrainerDashboard();
-      } catch (e) {
-        showToast('Fehler: ' + e.message, 'error');
-        return false;
-      }
+      } catch (e) { showToast('Fehler: ' + e.message, 'error'); return false; }
     }
   });
 }
@@ -568,14 +483,7 @@ function formatDateGerman(date) {
 function formatDateGermanShort(date) {
   return new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
 }
-function totalOr(v) {
-  return v || 0;
-}
+function totalOr(v) { return v || 0; }
 function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
