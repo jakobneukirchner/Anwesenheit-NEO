@@ -471,7 +471,6 @@ async function showEventForm(event, groups, parentEl) {
         </label>`).join('')
     : `<p class="text-muted" style="font-size:0.88rem;">Keine ${teacherLabel} gefunden.</p>`;
 
-  // Aktueller Modus des Events (für select-Vorauswahl)
   const currentMode = event?.mode || 'opt_in';
 
   showModal({
@@ -622,9 +621,14 @@ async function renderCoordSettingsTab(el) {
           <option value="opt_out"      ${data.defaultMode==='opt_out'      ?'selected':''}>Abmeldebasiert – Mitglieder sind standardmäßig angemeldet</option>
           <option value="confirmation" ${data.defaultMode==='confirmation' ?'selected':''}>Bestätigung – vorgemerkt, muss aktiv bestätigt werden</option>
         </select>
-        <label>Bestätigungsfenster (Minuten nach Terminende)</label>
-        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Nach dieser Zeit können Mitglieder ihre Teilnahme im Modus "Bestätigung" nicht mehr ändern.</p>
-        <input type="number" id="cs-confirm-window" value="${data.confirmationWindowMinutes??120}" min="1" />
+        <label>Bestätigungsfenster (Minuten relativ zu Terminbeginn)</label>
+        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">
+          Deadline = Terminbeginn + dieser Wert.<br>
+          <strong>Negativ</strong> (z.B. −30): Fenster schließt 30 Min <em>vor</em> Terminbeginn.<br>
+          <strong>0</strong>: Fenster schließt genau zum Terminbeginn.<br>
+          <strong>Positiv</strong> (z.B. 60): Fenster schließt 60 Min <em>nach</em> Terminbeginn.
+        </p>
+        <input type="number" id="cs-confirm-window" value="${data.confirmationWindowMinutes??60}" />
         <label>Termine-Vorschau (Tage in die Zukunft, Standard für alle Nutzer)</label>
         <input type="number" id="cs-lookahead" value="${data.defaultEventLookAhead??30}" min="1" max="365" />
         <label>Teilnehmer-Sichtbarkeit für Mitglieder</label>
@@ -649,7 +653,7 @@ async function renderCoordSettingsTab(el) {
         defaultMinParticipants:       parseInt(document.getElementById('cs-min-part')?.value)||0,
         defaultSignupDeadlineMinutes: parseInt(document.getElementById('cs-signup-deadline')?.value)||60,
         defaultMode:                  document.getElementById('cs-mode')?.value||'opt_in',
-        confirmationWindowMinutes:    parseInt(document.getElementById('cs-confirm-window')?.value)||120,
+        confirmationWindowMinutes:    parseInt(document.getElementById('cs-confirm-window')?.value) ?? 60,
         defaultEventLookAhead:        parseInt(document.getElementById('cs-lookahead')?.value)||30,
         visibilityMode:               document.getElementById('cs-vis')?.value||'count',
         withdrawWindowMinutes:        parseInt(document.getElementById('cs-withdraw-window')?.value)||60,
