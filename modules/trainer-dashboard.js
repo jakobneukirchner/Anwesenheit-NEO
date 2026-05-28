@@ -12,15 +12,12 @@ async function loadTrainerDashboard() {
 
     const now = new Date();
 
-    // Kein .orderBy() – vermeidet Composite-Index-Fehler → clientseitig sortieren
     const evSnap = await firestore.collection('events')
       .where('trainers', 'array-contains', user.uid)
       .get();
 
     const events = [];
     evSnap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
-
-    // Clientseitig nach startTime sortieren
     events.sort((a, b) => (a.startTime?.toMillis?.() ?? 0) - (b.startTime?.toMillis?.() ?? 0));
 
     // Laufende Termine (startTime <= now) erscheinen unter "Vergangen"
@@ -66,7 +63,6 @@ function renderTrainerEventCard(event, isPast, settings) {
   const card  = createElement('div', 'card');
   const start = event.startTime?.toDate ? event.startTime.toDate() : null;
   const end   = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-  const tLabel = getRoleLabel('teacher');
 
   card.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
@@ -103,7 +99,6 @@ async function loadTrainerEventDetail(eventId, isPast) {
     const event       = { id: evDoc.id, ...evDoc.data() };
     const start       = event.startTime?.toDate ? event.startTime.toDate() : null;
     const end         = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-    const tLabel      = getRoleLabel('teacher');
     const mLabel      = getRoleLabel('member');
     const eventMode   = event.mode || settings.defaultMode || 'opt_in';
 
@@ -125,7 +120,6 @@ async function loadTrainerEventDetail(eventId, isPast) {
     const attendances = {};
     attSnap.forEach(doc => { attendances[doc.data().userId] = { id: doc.id, ...doc.data() }; });
 
-    // Alle relevanten User-IDs
     Object.keys(attendances).forEach(uid => memberIds.add(uid));
     const memberIdArr = [...memberIds];
 
@@ -139,7 +133,7 @@ async function loadTrainerEventDetail(eventId, isPast) {
       container.innerHTML = `
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
           <button class="btn-secondary" id="trainer-back" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurueck
+            <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurück
           </button>
           <div style="flex:1;">
             <h2 style="margin:0 0 2px;">${event.title || 'Termin'}</h2>
@@ -154,9 +148,9 @@ async function loadTrainerEventDetail(eventId, isPast) {
             <h3 style="margin:0;">Anwesenheit</h3>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button class="btn-secondary" id="trainer-add-member" style="display:inline-flex;align-items:center;gap:4px;">
-                <span class="material-icons" style="font-size:16px;">person_add</span> ${mLabel} hinzufuegen
+                <span class="material-icons" style="font-size:16px;">person_add</span> ${mLabel} hinzufügen
               </button>
-              <button class="btn-secondary" id="trainer-cancel-btn" style="display:inline-flex;align-items:center;gap:4px;">
+              <button class="btn-secondary" id="trainer-cancel-btn" style="display:inline-flex;align-items:center;gap:4px;color:var(--color-error);">
                 <span class="material-icons" style="font-size:16px;">block</span> Termin absagen
               </button>
             </div>
@@ -210,10 +204,11 @@ async function loadTrainerEventDetail(eventId, isPast) {
   }
 }
 
-// ── Mitglied zu Termin hinzufuegen (auch ausserhalb der Gruppe) ───────────────
+// ── Mitglied zu Termin hinzufügen (auch außerhalb der Gruppe) ────────────────────
 function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded) {
-  const mLabel   = getRoleLabel('member');
-  const members  = allUsers.filter(u => (u.roles || []).includes('member'));
+  const mLabel  = getRoleLabel('member');
+  // Alle Nutzer zeigen, nicht nur Members – auch Betreuer/Koordinatoren können hinzugefügt werden
+  const members = allUsers.filter(u => (u.roles || []).some(r => ['member','teacher','coordinator','admin'].includes(r)));
 
   const overlay = document.createElement('div');
   Object.assign(overlay.style, {
@@ -223,11 +218,14 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
   overlay.innerHTML = `
     <div style="background:var(--color-surface);border-radius:12px;width:min(520px,95vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.3);overflow:hidden;">
       <div style="padding:18px 22px 14px;border-bottom:1px solid var(--color-border);display:flex;justify-content:space-between;align-items:center;">
-        <h3 style="margin:0;">${mLabel} zu Termin hinzufuegen</h3>
+        <div>
+          <h3 style="margin:0 0 2px;">Person zu Termin hinzufügen</h3>
+          <p class="text-muted" style="margin:0;font-size:0.82rem;">Auch außerhalb der Gruppe möglich</p>
+        </div>
         <button id="amt-close" style="background:none;border:none;font-size:1.4rem;color:var(--color-text-muted);cursor:pointer;">&times;</button>
       </div>
       <div style="padding:10px 22px;border-bottom:1px solid var(--color-border);">
-        <input type="search" id="amt-search" placeholder="${mLabel} suchen..." style="margin-bottom:0;" />
+        <input type="search" id="amt-search" placeholder="Person suchen..." style="margin-bottom:0;" />
       </div>
       <div id="amt-list" style="flex:1;overflow-y:auto;padding:8px 22px;"></div>
       <div style="padding:14px 22px;border-top:1px solid var(--color-border);text-align:right;">
@@ -250,7 +248,7 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
       !q || (u.displayName || u.email || '').toLowerCase().includes(q.toLowerCase())
     );
     if (!filtered.length) {
-      listEl.innerHTML = '<p class="text-muted" style="padding:12px 0;">Keine Mitglieder gefunden.</p>';
+      listEl.innerHTML = '<p class="text-muted" style="padding:12px 0;">Keine Personen gefunden.</p>';
       return;
     }
     filtered.forEach(u => {
@@ -260,10 +258,12 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
       row.innerHTML = `
         <div>
           <div style="font-weight:500;">${u.displayName || u.email || u.id}</div>
-          <div style="font-size:0.8rem;color:var(--color-text-muted);">${u.email || ''}</div>
+          <div style="font-size:0.8rem;color:var(--color-text-muted);">${u.email || ''} &nbsp;
+            ${(u.roles||[]).map(r=>`<span class="chip" style="font-size:0.72rem;padding:1px 6px;">${getRoleLabel(r)}</span>`).join(' ')}
+          </div>
         </div>
         <button class="${isAlready ? 'btn-secondary' : 'btn-primary'}" style="padding:4px 14px;font-size:0.85rem;white-space:nowrap;" ${isAlready ? 'disabled' : ''}>
-          ${isAlready ? 'Bereits dabei' : 'Hinzufuegen'}
+          ${isAlready ? 'Bereits dabei' : 'Hinzufügen'}
         </button>
       `;
       if (!isAlready) {
@@ -282,7 +282,7 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true });
             currentMemberIds.add(u.id);
-            showToast(`${u.displayName || u.email} hinzugefuegt.`, 'success');
+            showToast(`${u.displayName || u.email} hinzugefügt.`, 'success');
             close();
             if (onAdded) onAdded();
           } catch (err) { showToast('Fehler: ' + err.message, 'error'); }
@@ -296,20 +296,19 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
   searchEl.oninput = () => renderList(searchEl.value);
 }
 
-// ── Anwesenheits-Zeile ────────────────────────────────────────────────────────
+// ── Anwesenheits-Zeile ────────────────────────────────────────────────────────────────────────────
 function renderAttendanceRow(event, member, att, isPast, eventMode, settings, onChanged) {
-  const mLabel = getRoleLabel('member');
   const row    = document.createElement('div');
   row.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 0;border-bottom:1px solid var(--color-border);';
 
   const statusOptions = [
     { value: 'registered',           label: 'Angemeldet' },
-    { value: 'confirmation_pending', label: 'Ausstehend' },
+    { value: 'confirmation_pending', label: 'Ausst. Bestätigung' },
     { value: 'present',              label: 'Anwesend' },
     { value: 'absent_excused',       label: 'Entsch. gefehlt' },
     { value: 'absent_unexcused',     label: 'Unentsch. gefehlt' },
-    { value: 'late_excused',         label: 'Verspaetet (E)' },
-    { value: 'late_unexcused',       label: 'Verspaetet (U)' },
+    { value: 'late_excused',         label: 'Verspätet (E)' },
+    { value: 'late_unexcused',       label: 'Verspätet (U)' },
     { value: 'cancelled',            label: 'Abgemeldet' },
   ];
 
@@ -330,7 +329,7 @@ function renderAttendanceRow(event, member, att, isPast, eventMode, settings, on
   }[currentStatus] || 'var(--color-text-muted)';
 
   const confirmPendingNote = currentStatus === 'confirmation_pending'
-    ? `<span style="font-size:0.78rem;color:var(--color-warning);margin-left:4px;">– Bestaetigung steht aus</span>` : '';
+    ? `<span style="font-size:0.78rem;color:var(--color-warning);margin-left:4px;"><span class="material-icons" style="font-size:12px;vertical-align:middle;">pending</span> Ausstehend</span>` : '';
 
   row.innerHTML = `
     <div style="flex:1;min-width:140px;">
@@ -345,7 +344,7 @@ function renderAttendanceRow(event, member, att, isPast, eventMode, settings, on
     </select>
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
       <button class="btn-secondary" data-action="save-status" style="padding:4px 12px;">Speichern</button>
-      <button class="btn-secondary" data-action="note" style="padding:4px 12px;">Notiz</button>
+      <button class="btn-secondary" data-action="note"        style="padding:4px 12px;">Notiz</button>
       <button class="btn-danger"    data-action="remove-termin" style="padding:4px 12px;">Termin absagen</button>
     </div>
   `;
@@ -363,11 +362,11 @@ function renderAttendanceRow(event, member, att, isPast, eventMode, settings, on
 
   row.querySelector('[data-action="note"]').onclick = () => {
     showModal({
-      title: `Notiz fuer ${member.displayName || member.email}`,
+      title: `Notiz für ${member.displayName || member.email}`,
       body: `
-        <label>Notiz fuer Mitglied (sichtbar fuer das Mitglied)</label>
+        <label>Notiz für ${getRoleLabel('member')} (sichtbar für das Mitglied)</label>
         <textarea id="tn-member-note" rows="3">${att?.trainerNoteMember || ''}</textarea>
-        <label style="margin-top:8px;">Interne Notiz (nur fuer Betreuer)</label>
+        <label style="margin-top:8px;">Interne Notiz (nur für Betreuer)</label>
         <textarea id="tn-internal-note" rows="2">${att?.trainerNoteInternal || ''}</textarea>
       `,
       confirmLabel: 'Speichern',
@@ -409,9 +408,9 @@ function trainerCancelEvent(event, onDone) {
   showModal({
     title: 'Termin absagen',
     body: `
-      <p>Soll der Termin <strong>${event.title || 'Termin'}</strong> fuer alle abgesagt werden?</p>
-      <label>Begruendung (optional)</label>
-      <input type="text" id="cancel-reason" placeholder="z.B. kein ${getRoleLabel('teacher')} verfuegbar" />
+      <p>Soll der Termin <strong>${event.title || 'Termin'}</strong> für alle abgesagt werden?</p>
+      <label>Begründung (optional)</label>
+      <input type="text" id="cancel-reason" placeholder="z.B. kein ${getRoleLabel('teacher')} verfügbar" />
     `,
     confirmLabel: 'Termin absagen',
     onConfirm: async () => {
