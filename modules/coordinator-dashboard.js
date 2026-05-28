@@ -207,45 +207,93 @@ async function renderGroupsTab(el) {
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
         <h3 style="margin:0;">Gruppen (${groups.length})</h3>
-        <button class="btn-primary" id="add-group-btn">+ Gruppe anlegen</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <div style="position:relative;">
+            <span class="material-icons" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:16px;color:var(--color-text-muted);pointer-events:none;">search</span>
+            <input type="text" id="group-search" placeholder="Gruppe suchen…" style="padding:6px 10px 6px 30px;border:1px solid var(--color-border);border-radius:6px;font-size:0.88rem;background:var(--color-surface);color:var(--color-text);width:200px;" />
+          </div>
+          <button class="btn-primary" id="add-group-btn">+ Gruppe anlegen</button>
+        </div>
       </div>
-      ${groups.map(g => {
-        const members = (g.members || []).map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
-        return `
-          <div class="card" style="margin-bottom:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
-              <div>
-                <strong>${g.name}</strong>
-                ${g.description ? `<p class="text-muted" style="margin:4px 0 0;font-size:0.88rem;">${g.description}</p>` : ''}
-              </div>
-              <div style="display:flex;gap:6px;flex-shrink:0;">
-                <button class="btn-secondary" data-gid="${g.id}" data-action="edit" style="padding:4px 10px;">Bearbeiten</button>
-                <button class="btn-danger"    data-gid="${g.id}" data-action="del"  style="padding:4px 10px;">Löschen</button>
-              </div>
-            </div>
-            <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">
-              ${members.length
-                ? members.map(u => `<span class="chip">${u.displayName || u.email}</span>`).join('')
-                : '<span class="text-muted" style="font-size:0.85rem;">Keine Mitglieder</span>'}
-            </div>
-          </div>`;
-      }).join('')}`;
+      <div id="groups-list">
+        ${renderGroupCards(groups, allUsers)}
+      </div>`;
+
+    // Live-Suche über Gruppen
+    el.querySelector('#group-search').addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      const filtered = groups.filter(g =>
+        (g.name||'').toLowerCase().includes(q) ||
+        (g.description||'').toLowerCase().includes(q)
+      );
+      el.querySelector('#groups-list').innerHTML = renderGroupCards(filtered, allUsers);
+      attachGroupCardEvents(filtered, groups, allUsers, el);
+    });
 
     el.querySelector('#add-group-btn').onclick = () => showGroupForm(null, allUsers, el);
-    el.querySelectorAll('[data-action="edit"]').forEach(btn => {
-      btn.onclick = () => showGroupForm(groups.find(g => g.id === btn.dataset.gid), allUsers, el);
-    });
-    el.querySelectorAll('[data-action="del"]').forEach(btn => {
-      btn.onclick = () => confirmDeleteGroup(groups.find(g => g.id === btn.dataset.gid), el);
-    });
+    attachGroupCardEvents(groups, groups, allUsers, el);
   } catch (e) {
     console.error(e);
     el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>';
   }
 }
 
+function renderGroupCards(groups, allUsers) {
+  if (!groups.length) return '<p class="text-muted" style="margin-top:16px;">Keine Gruppen gefunden.</p>';
+  return groups.map(g => {
+    const members = (g.members || []).map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
+    const trainers = allUsers.filter(u => (u.roles||[]).includes('teacher') && (g.trainers||[]).includes(u.id));
+    return `
+      <div class="card" style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+          <div>
+            <strong>${g.name}</strong>
+            ${g.description ? `<p class="text-muted" style="margin:4px 0 0;font-size:0.88rem;">${g.description}</p>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button class="btn-secondary" data-gid="${g.id}" data-action="edit" style="padding:4px 10px;">Bearbeiten</button>
+            <button class="btn-danger"    data-gid="${g.id}" data-action="del"  style="padding:4px 10px;">Löschen</button>
+          </div>
+        </div>
+        ${trainers.length ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="font-size:0.78rem;color:var(--color-text-muted);">${getRoleLabel('teacher')}:</span>${trainers.map(t=>`<span class="chip" style="background:var(--color-primary-highlight);">${t.displayName||t.email}</span>`).join('')}</div>` : ''}
+        <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span style="font-size:0.78rem;color:var(--color-text-muted);">Mitglieder:</span>
+          ${members.length
+            ? members.map(u => `<span class="chip">${u.displayName || u.email}</span>`).join('')
+            : '<span class="text-muted" style="font-size:0.85rem;">Keine</span>'}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function attachGroupCardEvents(filteredGroups, allGroups, allUsers, el) {
+  el.querySelectorAll('[data-action="edit"]').forEach(btn => {
+    btn.onclick = () => showGroupForm(allGroups.find(g => g.id === btn.dataset.gid), allUsers, el);
+  });
+  el.querySelectorAll('[data-action="del"]').forEach(btn => {
+    btn.onclick = () => confirmDeleteGroup(allGroups.find(g => g.id === btn.dataset.gid), el);
+  });
+}
+
 async function showGroupForm(group, allUsers, parentEl) {
   const isNew = !group;
+  const members  = allUsers.filter(u => (u.roles||[]).includes('member') || !(u.roles||[]).some(r=>['teacher','coordinator','admin'].includes(r)));
+  const trainers = allUsers.filter(u => (u.roles||[]).includes('teacher'));
+
+  // Hilfsfunktion: durchsuchbare Checkbox-Liste HTML
+  const searchableList = (searchId, listId, items, name, selected) => `
+    <div style="position:relative;margin-bottom:6px;">
+      <span class="material-icons" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--color-text-muted);pointer-events:none;">search</span>
+      <input type="text" id="${searchId}" placeholder="Suchen…" style="width:100%;padding:5px 8px 5px 28px;border:1px solid var(--color-border);border-radius:5px;font-size:0.83rem;background:var(--color-surface);color:var(--color-text);" />
+    </div>
+    <div id="${listId}" style="display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto;padding:2px 0;">
+      ${items.map(u => `
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;padding:2px 0;">
+          <input type="checkbox" name="${name}" value="${u.id}" ${(selected||[]).includes(u.id)?'checked':''} />
+          ${u.displayName||u.email}
+        </label>`).join('')}
+    </div>`;
+
   showModal({
     title: isNew ? 'Neue Gruppe anlegen' : 'Gruppe bearbeiten',
     body: `
@@ -253,27 +301,23 @@ async function showGroupForm(group, allUsers, parentEl) {
       <input type="text" id="gf-name" value="${group?.name||''}" />
       <label>Beschreibung</label>
       <input type="text" id="gf-desc" value="${group?.description||''}" />
-      <label style="margin-top:8px;">Mitglieder</label>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;max-height:200px;overflow-y:auto;">
-        ${allUsers.map(u => `
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-            <input type="checkbox" name="gf-member" value="${u.id}"
-              ${(group?.members||[]).includes(u.id)?'checked':''} />
-            ${u.displayName || u.email}
-          </label>`).join('')}
-      </div>
+      <label style="margin-top:10px;">${getRoleLabel('teacher')} (${trainers.length})</label>
+      ${searchableList('gf-trainer-search','gf-trainer-list', trainers, 'gf-trainer', group?.trainers||[])}
+      <label style="margin-top:10px;">Mitglieder (${allUsers.length})</label>
+      ${searchableList('gf-member-search','gf-member-list', allUsers, 'gf-member', group?.members||[])}
     `,
     confirmLabel: isNew ? 'Anlegen' : 'Speichern',
     onConfirm: async () => {
-      const name    = document.getElementById('gf-name').value.trim();
-      const desc    = document.getElementById('gf-desc').value.trim();
-      const members = [...document.querySelectorAll('input[name="gf-member"]:checked')].map(i => i.value);
+      const name     = document.getElementById('gf-name').value.trim();
+      const desc     = document.getElementById('gf-desc').value.trim();
+      const members  = [...document.querySelectorAll('input[name="gf-member"]:checked')].map(i => i.value);
+      const trainersSel = [...document.querySelectorAll('input[name="gf-trainer"]:checked')].map(i => i.value);
       if (!name) { showToast('Bitte Gruppenname eingeben.', 'error'); return false; }
       try {
         if (isNew) {
-          await firestore.collection('groups').add({ name, description: desc, members });
+          await firestore.collection('groups').add({ name, description: desc, members, trainers: trainersSel });
         } else {
-          await firestore.collection('groups').doc(group.id).update({ name, description: desc, members });
+          await firestore.collection('groups').doc(group.id).update({ name, description: desc, members, trainers: trainersSel });
         }
         showToast(isNew ? 'Gruppe angelegt.' : 'Gruppe gespeichert.', 'success');
         renderGroupsTab(parentEl);
@@ -282,6 +326,28 @@ async function showGroupForm(group, allUsers, parentEl) {
         return false;
       }
     }
+  });
+
+  // Live-Suche nach Modalöffnung einhängen
+  requestAnimationFrame(() => {
+    const wireSearch = (inputId, listId, items, name, selected) => {
+      const input = document.getElementById(inputId);
+      const list  = document.getElementById(listId);
+      if (!input || !list) return;
+      input.addEventListener('input', function() {
+        const q = this.value.toLowerCase();
+        const filtered = items.filter(u => (u.displayName||u.email||'').toLowerCase().includes(q));
+        // Bereits gecheckte beibehalten
+        const checked = new Set([...document.querySelectorAll(`input[name="${name}"]:checked`)].map(i=>i.value));
+        list.innerHTML = filtered.map(u => `
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;padding:2px 0;">
+            <input type="checkbox" name="${name}" value="${u.id}" ${checked.has(u.id)?'checked':''} />
+            ${u.displayName||u.email}
+          </label>`).join('');
+      });
+    };
+    wireSearch('gf-trainer-search','gf-trainer-list', trainers, 'gf-trainer', group?.trainers||[]);
+    wireSearch('gf-member-search', 'gf-member-list',  allUsers, 'gf-member',  group?.members||[]);
   });
 }
 
@@ -363,33 +429,40 @@ async function renderScheduleTab(el) {
 }
 
 /* ── Wiederholungs-Scope-Dialog ─────────────────────────────────────────────── */
-function askRecurrenceScope() {
+// scope: 'single' | 'following' | 'all' | null (abbrechen)
+function askRecurrenceScope(eventDate) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     Object.assign(overlay.style, {
       position:'fixed', inset:'0', background:'rgba(0,0,0,0.45)',
       display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999
     });
+    const dateStr = eventDate ? ` (${formatDateTime(eventDate)})` : '';
     overlay.innerHTML = `
-      <div class="card" style="max-width:380px;width:92%;margin:0;">
+      <div class="card" style="max-width:420px;width:92%;margin:0;">
         <h3 style="margin-top:0;">Terminwiederholung bearbeiten</h3>
-        <p style="color:var(--color-text-muted);font-size:0.92rem;">Sollen die Änderungen nur für diesen einzelnen Termin oder für alle zukünftigen Termine dieser Reihe übernommen werden?</p>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;">
-          <button class="btn-secondary" id="scope-single" style="justify-content:flex-start;gap:8px;">
-            <span class="material-icons" style="font-size:18px;">event</span>
-            <div style="text-align:left;"><strong>Nur diesen Termin</strong><div style="font-size:0.82rem;color:var(--color-text-muted);">Andere Termine der Reihe bleiben unverändert</div></div>
+        <p style="color:var(--color-text-muted);font-size:0.92rem;margin-bottom:12px;">Für welche Termine sollen die Änderungen übernommen werden?</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <button class="btn-secondary" id="scope-single" style="justify-content:flex-start;gap:10px;padding:10px 14px;text-align:left;">
+            <span class="material-icons" style="font-size:20px;color:var(--color-primary);flex-shrink:0;">event</span>
+            <div><strong>Nur diesen Termin</strong>${dateStr}<div style="font-size:0.82rem;color:var(--color-text-muted);margin-top:2px;">Alle anderen Termine bleiben unverändert</div></div>
           </button>
-          <button class="btn-secondary" id="scope-all" style="justify-content:flex-start;gap:8px;">
-            <span class="material-icons" style="font-size:18px;">event_repeat</span>
-            <div style="text-align:left;"><strong>Alle Termine der Reihe</strong><div style="font-size:0.82rem;color:var(--color-text-muted);">Ändert alle Termine mit gleicher recurrenceId</div></div>
+          <button class="btn-secondary" id="scope-following" style="justify-content:flex-start;gap:10px;padding:10px 14px;text-align:left;">
+            <span class="material-icons" style="font-size:20px;color:var(--color-primary);flex-shrink:0;">event_repeat</span>
+            <div><strong>Diesen und alle folgenden Termine</strong><div style="font-size:0.82rem;color:var(--color-text-muted);margin-top:2px;">Ändert diesen Termin und alle späteren in der Reihe</div></div>
+          </button>
+          <button class="btn-secondary" id="scope-all" style="justify-content:flex-start;gap:10px;padding:10px 14px;text-align:left;">
+            <span class="material-icons" style="font-size:20px;color:var(--color-primary);flex-shrink:0;">calendar_month</span>
+            <div><strong>Alle Termine der Reihe</strong><div style="font-size:0.82rem;color:var(--color-text-muted);margin-top:2px;">Ändert jeden Termin mit gleicher recurrenceId</div></div>
           </button>
           <button class="btn-text" id="scope-cancel" style="margin-top:4px;">Abbrechen</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.querySelector('#scope-single').onclick = () => { overlay.remove(); resolve('single'); };
-    overlay.querySelector('#scope-all').onclick    = () => { overlay.remove(); resolve('all'); };
-    overlay.querySelector('#scope-cancel').onclick = () => { overlay.remove(); resolve(null); };
+    overlay.querySelector('#scope-single').onclick   = () => { overlay.remove(); resolve('single'); };
+    overlay.querySelector('#scope-following').onclick = () => { overlay.remove(); resolve('following'); };
+    overlay.querySelector('#scope-all').onclick       = () => { overlay.remove(); resolve('all'); };
+    overlay.querySelector('#scope-cancel').onclick    = () => { overlay.remove(); resolve(null); };
   });
 }
 
@@ -505,9 +578,25 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     return tb - ta;
   });
 
+  // Gruppen für Filter-Dropdown
+  const groupOptions = groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+
   el.innerHTML = `
-    <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+      <div style="position:relative;">
+        <span class="material-icons" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:16px;color:var(--color-text-muted);pointer-events:none;">search</span>
+        <input type="text" id="ev-search" placeholder="Titel suchen…" style="padding:6px 10px 6px 30px;border:1px solid var(--color-border);border-radius:6px;font-size:0.88rem;background:var(--color-surface);color:var(--color-text);width:200px;" />
+      </div>
+      <select id="ev-filter-group" style="padding:6px 10px;border:1px solid var(--color-border);border-radius:6px;font-size:0.88rem;background:var(--color-surface);color:var(--color-text);">
+        <option value="">Alle Gruppen</option>
+        ${groupOptions}
+      </select>
+      <select id="ev-filter-status" style="padding:6px 10px;border:1px solid var(--color-border);border-radius:6px;font-size:0.88rem;background:var(--color-surface);color:var(--color-text);">
+        <option value="">Alle Status</option>
+        <option value="active">Aktiv</option>
+        <option value="skipped">Ausgefallen</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);margin-left:auto;">
         <input type="checkbox" id="sel-all" /> Alle auswählen
       </label>
     </div>
@@ -528,42 +617,69 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
       </table>
     </div>`;
 
-  const tbody = el.querySelector('#events-tbody');
-  sorted.forEach(ev => {
-    const startDate = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
-    const isSkipped = ev.status === 'skipped';
-    const row = document.createElement('tr');
-    if (isSkipped) row.style.opacity = '0.6';
-    row.innerHTML = `
-      <td><input type="checkbox" class="ev-check" data-id="${ev.id}" /></td>
-      <td>
-        <div style="display:flex;align-items:center;gap:6px;">
-          ${isSkipped ? '<span class="material-icons" style="font-size:14px;color:var(--color-error);" title="Ausgefallen">event_busy</span>' : ''}
-          <span style="${isSkipped?'text-decoration:line-through;':''}">${ev.title||'(kein Titel)'}</span>
-          ${ev.recurrenceId ? '<span class="chip" style="font-size:0.72rem;padding:1px 5px;">Reihe</span>' : ''}
-        </div>
-        ${isSkipped && ev.skipReason ? `<div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:2px;">Grund: ${ev.skipReason}</div>` : ''}
-      </td>
-      <td style="white-space:nowrap;">${formatDateTime(startDate)}</td>
-      <td>${groupMap[ev.groupId] || '–'}</td>
-      <td><span class="chip" style="font-size:0.78rem;">${translateMode(ev.mode||'open')}</span></td>
-      <td>${isSkipped ? '<span style="color:var(--color-error);font-size:0.82rem;">Ausgefallen</span>' : '<span style="color:var(--color-success);font-size:0.82rem;">Aktiv</span>'}</td>
-      <td style="white-space:nowrap;">
-        <button class="btn-secondary" data-action="edit" style="padding:4px 10px;font-size:0.82rem;">Bearbeiten</button>
-        <button class="btn-danger"    data-action="del"  style="padding:4px 10px;font-size:0.82rem;margin-left:4px;">Löschen</button>
-      </td>`;
+  const tbody    = el.querySelector('#events-tbody');
+  const searchEl = el.querySelector('#ev-search');
+  const groupFil = el.querySelector('#ev-filter-group');
+  const statFil  = el.querySelector('#ev-filter-status');
 
-    row.querySelector('[data-action="edit"]').onclick = () => showEventForm(ev, groups, parentEl);
-    row.querySelector('[data-action="del"]').onclick  = () => {
-      const s = new Set([ev.id]);
-      confirmDeleteEvents(s, events, parentEl);
-    };
-    row.querySelector('.ev-check').onchange = function() {
-      this.checked ? selected.add(ev.id) : selected.delete(ev.id);
-      updateBulk();
-    };
-    tbody.appendChild(row);
-  });
+  const renderRows = () => {
+    const q       = searchEl.value.toLowerCase();
+    const gFilter = groupFil.value;
+    const sFilter = statFil.value;
+    tbody.innerHTML = '';
+    selected.clear();
+    updateBulk();
+
+    const visible = sorted.filter(ev => {
+      const matchTitle  = !q       || (ev.title||'').toLowerCase().includes(q);
+      const matchGroup  = !gFilter || ev.groupId === gFilter;
+      const isSkipped   = ev.status === 'skipped';
+      const matchStatus = !sFilter || (sFilter==='skipped' ? isSkipped : !isSkipped);
+      return matchTitle && matchGroup && matchStatus;
+    });
+
+    if (!visible.length) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--color-text-muted);">Keine Termine gefunden.</td></tr>`;
+      return;
+    }
+
+    visible.forEach(ev => {
+      const startDate = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+      const isSkipped = ev.status === 'skipped';
+      const row = document.createElement('tr');
+      if (isSkipped) row.style.opacity = '0.6';
+      row.innerHTML = `
+        <td><input type="checkbox" class="ev-check" data-id="${ev.id}" /></td>
+        <td>
+          <div style="display:flex;align-items:center;gap:6px;">
+            ${isSkipped ? '<span class="material-icons" style="font-size:14px;color:var(--color-error);" title="Ausgefallen">event_busy</span>' : ''}
+            <span style="${isSkipped?'text-decoration:line-through;':''}">${ev.title||'(kein Titel)'}</span>
+            ${ev.recurrenceId ? '<span class="chip" style="font-size:0.72rem;padding:1px 5px;">Reihe</span>' : ''}
+          </div>
+          ${isSkipped && ev.skipReason ? `<div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:2px;">Grund: ${ev.skipReason}</div>` : ''}
+        </td>
+        <td style="white-space:nowrap;">${formatDateTime(startDate)}</td>
+        <td>${groupMap[ev.groupId] || '–'}</td>
+        <td><span class="chip" style="font-size:0.78rem;">${translateMode(ev.mode||'open')}</span></td>
+        <td>${isSkipped ? '<span style="color:var(--color-error);font-size:0.82rem;">Ausgefallen</span>' : '<span style="color:var(--color-success);font-size:0.82rem;">Aktiv</span>'}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn-secondary" data-action="edit" style="padding:4px 10px;font-size:0.82rem;">Bearbeiten</button>
+          <button class="btn-danger"    data-action="del"  style="padding:4px 10px;font-size:0.82rem;margin-left:4px;">Löschen</button>
+        </td>`;
+
+      row.querySelector('[data-action="edit"]').onclick = () => showEventForm(ev, groups, parentEl);
+      row.querySelector('[data-action="del"]').onclick  = () => confirmDeleteEvents(new Set([ev.id]), events, parentEl);
+      row.querySelector('.ev-check').onchange = function() {
+        this.checked ? selected.add(ev.id) : selected.delete(ev.id);
+        updateBulk();
+      };
+      tbody.appendChild(row);
+    });
+  };
+
+  searchEl.addEventListener('input', renderRows);
+  groupFil.addEventListener('change', renderRows);
+  statFil.addEventListener('change', renderRows);
 
   el.querySelector('#sel-all').onchange = function() {
     el.querySelectorAll('.ev-check').forEach(cb => {
@@ -572,6 +688,8 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     });
     updateBulk();
   };
+
+  renderRows();
 }
 
 function translateMode(mode) {
@@ -641,6 +759,42 @@ function renderCalendarView(el, events, groups, parentEl) {
   render();
 }
 
+/* ── Hilfsfunktion: durchsuchbare Checkbox-Liste (für Termin-Formular) ────────── */
+function buildSearchableCheckboxList(containerId, searchId, items, name, selected, placeholder) {
+  return `
+    <div style="position:relative;margin-bottom:6px;">
+      <span class="material-icons" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--color-text-muted);pointer-events:none;">search</span>
+      <input type="text" id="${searchId}" placeholder="${placeholder||'Suchen…'}" style="width:100%;padding:5px 8px 5px 28px;border:1px solid var(--color-border);border-radius:5px;font-size:0.83rem;background:var(--color-surface);color:var(--color-text);" />
+    </div>
+    <div id="${containerId}" style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow-y:auto;padding:2px 0;">
+      ${items.map(u => `
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;padding:2px 0;">
+          <input type="checkbox" name="${name}" value="${u.id}" ${(selected||[]).includes(u.id)?'checked':''} />
+          ${u.displayName||u.email}
+          ${u._role ? `<span style="font-size:0.75rem;color:var(--color-text-muted);">(${u._role})</span>` : ''}
+        </label>`).join('')}
+    </div>`;
+}
+
+function wireCheckboxSearch(searchId, containerId, items, name) {
+  requestAnimationFrame(() => {
+    const input = document.getElementById(searchId);
+    const list  = document.getElementById(containerId);
+    if (!input || !list) return;
+    input.addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      const checked = new Set([...document.querySelectorAll(`input[name="${name}"]:checked`)].map(i=>i.value));
+      const filtered = items.filter(u => (u.displayName||u.email||'').toLowerCase().includes(q));
+      list.innerHTML = filtered.map(u => `
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;padding:2px 0;">
+          <input type="checkbox" name="${name}" value="${u.id}" ${checked.has(u.id)?'checked':''} />
+          ${u.displayName||u.email}
+          ${u._role ? `<span style="font-size:0.75rem;color:var(--color-text-muted);">(${u._role})</span>` : ''}
+        </label>`).join('');
+    });
+  });
+}
+
 /* ── Termin-Formular ──────────────────────────────────────────────────────────── */
 async function showEventForm(event, groups, parentEl) {
   const isNew = !event;
@@ -660,15 +814,17 @@ async function showEventForm(event, groups, parentEl) {
     uSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
   } catch(e) { console.warn('Could not load users for form', e); }
 
+  const allUsersWithRole = allUsers.map(u => ({
+    ...u,
+    _role: (u.roles||[]).map(r=>getRoleLabel(r)).join(', ') || '–'
+  }));
+
   const currentTrainers = event?.trainers || event?.trainer || [];
   const currentMembers  = event?.members  || [];
 
-  // Globalen Fallback-Wert für das Rückzugsfenster anzeigen
   const globalCancelWindow = window.appSettings?.cancellationWindowMinutes ?? 60;
-  // Termin-spezifischer Wert: leer wenn nicht gesetzt (→ Fallback greift)
-  const eventCancelWindow = (typeof event?.cancellationWindowMinutes === 'number')
-    ? event.cancellationWindowMinutes
-    : '';
+  const eventCancelWindow  = (typeof event?.cancellationWindowMinutes === 'number')
+    ? event.cancellationWindowMinutes : '';
 
   showModal({
     title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
@@ -702,10 +858,8 @@ async function showEventForm(event, groups, parentEl) {
         </summary>
         <div style="margin-top:8px;">
           <p class="text-muted" style="margin:0 0 8px;font-size:0.83rem;">
-            Wie lange nach Terminbeginn können Mitglieder sich noch abmelden / absagen.<br>
-            <strong>Positiver Wert:</strong> X Minuten nach Terminbeginn (z.B. 60 = bis 1 Std. nach Start).<br>
-            <strong>Negativer Wert:</strong> X Minuten vor Terminbeginn (z.B. -30 = bis 30 Min. vor Start).<br>
-            <em>Leer lassen = globaler Standard aus Einstellungen (aktuell: ${globalCancelWindow} Min.)</em>
+            Positiver Wert = X Min. nach Start &nbsp;|&nbsp; Negativer Wert = X Min. vor Start<br>
+            <em>Leer = globaler Standard (${globalCancelWindow} Min.)</em>
           </p>
           <div style="display:flex;align-items:center;gap:8px;">
             <input type="number" id="ef-cancel-window" value="${eventCancelWindow}" placeholder="${globalCancelWindow} (global)" style="max-width:120px;" />
@@ -714,24 +868,16 @@ async function showEventForm(event, groups, parentEl) {
         </div>
       </details>
 
-      <label style="margin-top:10px;">Betreuer</label>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;max-height:120px;overflow-y:auto;">
-        ${allTrainers.map(t=>`
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:0.88rem;">
-            <input type="checkbox" name="ef-trainer" value="${t.id}" ${currentTrainers.includes(t.id)?'checked':''} />
-            ${t.displayName||t.email}
-          </label>`).join('')}
-      </div>
-      <details style="margin-top:10px;">
-        <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);">Zusätzliche Teilnehmer (außerhalb Gruppe)</summary>
-        <div style="margin-top:8px;max-height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;">
-          ${allUsers.map(u=>`
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem;">
-              <input type="checkbox" name="ef-extra-member" value="${u.id}" ${currentMembers.includes(u.id)?'checked':''} />
-              ${u.displayName||u.email} <span style="font-size:0.75rem;color:var(--color-text-muted);">(${(u.roles||[]).map(r=>getRoleLabel(r)).join(', ')||'–'})</span>
-            </label>`).join('')}
+      <label style="margin-top:12px;">${getRoleLabel('teacher')} (${allTrainers.length})</label>
+      ${buildSearchableCheckboxList('ef-trainer-list','ef-trainer-search', allTrainers, 'ef-trainer', currentTrainers, 'Betreuer suchen…')}
+
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);">Zusätzliche Teilnehmer – außerhalb Gruppe (${allUsers.length})</summary>
+        <div style="margin-top:8px;">
+          ${buildSearchableCheckboxList('ef-extra-list','ef-extra-search', allUsersWithRole, 'ef-extra-member', currentMembers, 'Person suchen…')}
         </div>
       </details>
+
       ${isNew ? `
       <details style="margin-top:10px;" id="recur-details">
         <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);">Wiederholung</summary>
@@ -759,12 +905,12 @@ async function showEventForm(event, groups, parentEl) {
       const trainers = [...document.querySelectorAll('input[name="ef-trainer"]:checked')].map(i=>i.value);
       const extraMembers = [...document.querySelectorAll('input[name="ef-extra-member"]:checked')].map(i=>i.value);
 
-      // Rückzugsfenster: leer = Feld löschen (globaler Fallback greift), sonst Zahl speichern
       const cancelWindowRaw = document.getElementById('ef-cancel-window').value.trim();
       const cancelWindowVal = cancelWindowRaw !== '' ? parseInt(cancelWindowRaw, 10) : null;
 
-      if (!title)    { showToast('Bitte Titel eingeben.',  'error'); return false; }
+      if (!title)    { showToast('Bitte Titel eingeben.',     'error'); return false; }
       if (!startStr) { showToast('Bitte Startzeit eingeben.', 'error'); return false; }
+      if (!endStr)   { showToast('Kein Ende gesetzt – Termin wird ohne Endzeit gespeichert.', 'info'); }
 
       const startTime = new Date(startStr);
       const endTime   = endStr ? new Date(endStr) : null;
@@ -773,7 +919,6 @@ async function showEventForm(event, groups, parentEl) {
       if (endTime)   payload.endTime   = endTime;
       if (location)  payload.location  = location;
       if (desc)      payload.description = desc;
-      // Rückzugsfenster: explizit auf null setzen (→ Firestore löscht Feld) oder Zahl
       if (cancelWindowVal !== null && !isNaN(cancelWindowVal)) {
         payload.cancellationWindowMinutes = cancelWindowVal;
       } else {
@@ -785,7 +930,6 @@ async function showEventForm(event, groups, parentEl) {
           const recurVal = document.getElementById('ef-recur')?.value;
           const untilVal = document.getElementById('ef-until')?.value;
 
-          // Bei neuen Terminen: FieldValue.delete() ist in add/set nicht erlaubt → weglassen
           const payloadNew = { ...payload };
           if (cancelWindowVal === null || isNaN(cancelWindowVal)) {
             delete payloadNew.cancellationWindowMinutes;
@@ -810,10 +954,14 @@ async function showEventForm(event, groups, parentEl) {
             showToast('Termin angelegt.', 'success');
           }
         } else {
+          // Bearbeitung: bei Reihe → Scope-Dialog
           if (event.recurrenceId) {
-            const scope = await askRecurrenceScope();
+            const eventDate = event.startTime?.toDate ? event.startTime.toDate() : new Date(event.startTime);
+            const scope = await askRecurrenceScope(eventDate);
             if (!scope) return false;
+
             if (scope === 'all') {
+              // Alle Termine der Reihe ändern
               const seriesSnap = await firestore.collection('events')
                 .where('recurrenceId', '==', event.recurrenceId).get();
               const b = firestore.batch();
@@ -825,8 +973,35 @@ async function showEventForm(event, groups, parentEl) {
                 cancellationWindowMinutes: payload.cancellationWindowMinutes
               }));
               await b.commit();
-              showToast(`Alle Termine der Reihe aktualisiert.`, 'success');
+              showToast('Alle Termine der Reihe aktualisiert.', 'success');
+
+            } else if (scope === 'following') {
+              // Diesen + alle folgenden Termine der Reihe ändern
+              const eventTs = event.startTime?.toDate ? event.startTime.toDate() : new Date(event.startTime);
+              const seriesSnap = await firestore.collection('events')
+                .where('recurrenceId', '==', event.recurrenceId).get();
+              const b = firestore.batch();
+              let count = 0;
+              seriesSnap.forEach(doc => {
+                const docTs = doc.data().startTime?.toDate
+                  ? doc.data().startTime.toDate()
+                  : new Date(doc.data().startTime);
+                if (docTs >= eventTs) {
+                  b.update(doc.ref, {
+                    title, groupId: groupId||null, mode,
+                    location: location||firebase.firestore.FieldValue.delete(),
+                    description: desc||firebase.firestore.FieldValue.delete(),
+                    trainers, members: extraMembers,
+                    cancellationWindowMinutes: payload.cancellationWindowMinutes
+                  });
+                  count++;
+                }
+              });
+              await b.commit();
+              showToast(`${count} Termin${count!==1?'e':''} (dieser und folgende) aktualisiert.`, 'success');
+
             } else {
+              // Nur diesen Termin
               await firestore.collection('events').doc(event.id).update(payload);
               showToast('Termin aktualisiert.', 'success');
             }
@@ -843,6 +1018,10 @@ async function showEventForm(event, groups, parentEl) {
       }
     }
   });
+
+  // Live-Suche in Betreuer- und Teilnehmerliste verdrahten
+  wireCheckboxSearch('ef-trainer-search', 'ef-trainer-list', allTrainers, 'ef-trainer');
+  wireCheckboxSearch('ef-extra-search',   'ef-extra-list',   allUsersWithRole, 'ef-extra-member');
 }
 
 function generateRecurringDates(startDate, endDate, recurrence, until) {
@@ -875,9 +1054,7 @@ async function renderCoordSettingsTab(el) {
         </select>
 
         <label style="margin-top:14px;">Vorausschau für Mitglieder</label>
-        <p class="text-muted" style="margin-top:0;font-size:0.83rem;">
-          Wie viele Tage in die Zukunft können Mitglieder Termine sehen und sich anmelden?
-        </p>
+        <p class="text-muted" style="margin-top:0;font-size:0.83rem;">Wie viele Tage können Mitglieder in die Zukunft sehen?</p>
         <div style="display:flex;align-items:center;gap:8px;">
           <input type="number" id="cs-look-ahead" value="${d.defaultEventLookAhead??30}" style="max-width:100px;" min="1" max="365" />
           <span style="font-size:0.88rem;color:var(--color-text-muted);">Tage</span>
@@ -886,24 +1063,21 @@ async function renderCoordSettingsTab(el) {
         <label style="margin-top:14px;">Bestätigungsfenster</label>
         <p class="text-muted" style="margin-top:0;font-size:0.83rem;">
           Wie lange nach Terminbeginn können Mitglieder beim Modus „Bestätigung" noch bestätigen oder absagen.<br>
-          <strong>Positiver Wert:</strong> X Min. nach Start &nbsp;|&nbsp;
-          <strong>Negativer Wert:</strong> X Min. vor Start
+          <strong>Positiv:</strong> X Min. nach Start &nbsp;|&nbsp; <strong>Negativ:</strong> X Min. vor Start
         </p>
         <div style="display:flex;align-items:center;gap:8px;">
           <input type="number" id="cs-confirm-window" value="${d.confirmationWindowMinutes??60}" style="max-width:100px;" />
-          <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten (relativ zu Terminbeginn)</span>
+          <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten</span>
         </div>
 
         <label style="margin-top:14px;">Rückzugsfenster (global)</label>
         <p class="text-muted" style="margin-top:0;font-size:0.83rem;">
-          Globaler Fallback: Wie lange nach Terminbeginn können Mitglieder sich standardmäßig abmelden / absagen.<br>
           Kann pro Termin individuell überschrieben werden.<br>
-          <strong>Positiver Wert:</strong> X Min. nach Start &nbsp;|&nbsp;
-          <strong>Negativer Wert:</strong> X Min. vor Start
+          <strong>Positiv:</strong> X Min. nach Start &nbsp;|&nbsp; <strong>Negativ:</strong> X Min. vor Start
         </p>
         <div style="display:flex;align-items:center;gap:8px;">
           <input type="number" id="cs-cancel-window" value="${d.cancellationWindowMinutes??60}" style="max-width:100px;" />
-          <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten (relativ zu Terminbeginn)</span>
+          <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten</span>
         </div>
 
         <button class="btn-primary" id="cs-save-mode" style="margin-top:16px;display:inline-flex;align-items:center;gap:6px;">
@@ -928,10 +1102,10 @@ async function renderCoordSettingsTab(el) {
 
     el.querySelector('#cs-save-mode').onclick = async () => {
       const updates = {
-        defaultMode:                 document.getElementById('cs-default-mode').value,
-        confirmationWindowMinutes:   parseInt(document.getElementById('cs-confirm-window').value)  || 60,
-        cancellationWindowMinutes:   parseInt(document.getElementById('cs-cancel-window').value)   || 60,
-        defaultEventLookAhead:       parseInt(document.getElementById('cs-look-ahead').value)       || 30
+        defaultMode:               document.getElementById('cs-default-mode').value,
+        confirmationWindowMinutes: parseInt(document.getElementById('cs-confirm-window').value) || 60,
+        cancellationWindowMinutes: parseInt(document.getElementById('cs-cancel-window').value)  || 60,
+        defaultEventLookAhead:     parseInt(document.getElementById('cs-look-ahead').value)     || 30
       };
       await firestore.collection('settings').doc('global').set(updates, { merge: true });
       window.appSettings = { ...(window.appSettings || {}), ...updates };
@@ -949,7 +1123,7 @@ async function renderCoordSettingsTab(el) {
       await firestore.collection('settings').doc('global').set(updates, { merge: true });
       window.roleLabels  = updates.roleLabels;
       window.appSettings = { ...(window.appSettings || {}), ...updates };
-      showToast('Einstellungen gespeichert.', 'success');
+      showToast('Rollenbezeichnungen gespeichert.', 'success');
     };
   } catch(e) { el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>'; }
 }
