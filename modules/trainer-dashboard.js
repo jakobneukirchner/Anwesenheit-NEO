@@ -1,213 +1,47 @@
 // modules/trainer-dashboard.js
+// Trainer-Dashboard: Keine Terminanzeige.
+// Trainer verwalten Termine ausschliesslich ueber die Betreuer-Ansicht in den Terminen selbst.
+// Dieses Dashboard dient nur als Einstiegspunkt fuer die Meine-Mitglieder-Ansicht.
 
 async function loadTrainerDashboard() {
   const container = document.getElementById('app-content');
-  const user      = window.currentUser.firebaseUser;
-  container.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
+  const tLabel    = getRoleLabel('teacher');
+  const mLabel    = getRoleLabel('member');
 
-  try {
-    const settingsDoc = await firestore.collection('settings').doc('global').get();
-    const settings    = settingsDoc.exists ? settingsDoc.data() : {};
-    window.appSettings = settings;
-
-    const now = new Date();
-
-    const evSnap = await firestore.collection('events')
-      .where('trainers', 'array-contains', user.uid)
-      .get();
-
-    const events = [];
-    evSnap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
-    events.sort((a, b) => (a.startTime?.toMillis?.() ?? 0) - (b.startTime?.toMillis?.() ?? 0));
-
-    // Laufende Termine (startTime <= now) erscheinen unter "Vergangen"
-    const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
-    const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
-
-    container.innerHTML = `
-      <h2 style="margin-top:0;">Meine Termine</h2>
-      <div class="tabs">
-        <button class="tab-btn active" data-tab="upcoming">Kommende (${upcoming.length})</button>
-        <button class="tab-btn" data-tab="past">Vergangene (${past.length})</button>
-      </div>
-      <div id="tab-t-upcoming"></div>
-      <div id="tab-t-past" hidden></div>
-    `;
-
-    container.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.onclick = () => {
-        container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        document.getElementById('tab-t-upcoming').hidden = btn.dataset.tab !== 'upcoming';
-        document.getElementById('tab-t-past').hidden     = btn.dataset.tab !== 'past';
-      };
-    });
-
-    const upEl = document.getElementById('tab-t-upcoming');
-    const paEl = document.getElementById('tab-t-past');
-
-    if (!upcoming.length) upEl.innerHTML = '<p class="text-muted">Keine kommenden Termine.</p>';
-    else upcoming.forEach(ev => upEl.appendChild(renderTrainerEventCard(ev, false, settings)));
-
-    if (!past.length) paEl.innerHTML = '<p class="text-muted">Keine vergangenen Termine.</p>';
-    else past.slice().reverse().forEach(ev => paEl.appendChild(renderTrainerEventCard(ev, true, settings)));
-
-  } catch (e) {
-    console.error(e);
-    container.innerHTML = '<p class="text-error">Fehler beim Laden: ' + e.message + '</p>';
-  }
-}
-
-function renderTrainerEventCard(event, isPast, settings) {
-  settings = settings || window.appSettings || {};
-  const card  = createElement('div', 'card');
-  const start = event.startTime?.toDate ? event.startTime.toDate() : null;
-  const end   = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-
-  card.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
       <div>
-        <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
-        <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
+        <h2 style="margin:0 0 4px;">${tLabel}-Bereich</h2>
+        <p class="text-muted" style="margin:0;font-size:0.88rem;">Nutze die Navigation oben, um zwischen den Bereichen zu wechseln.</p>
       </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        ${event.status === 'cancelled' ? '<span class="chip chip-error">Abgesagt</span>' : ''}
-        ${event.status === 'skipped'   ? '<span class="chip chip-warning">Ausgefallen</span>' : ''}
-        <button class="btn-primary" data-action="manage" style="display:inline-flex;align-items:center;gap:4px;">
-          <span class="material-icons" style="font-size:16px;">manage_accounts</span> Verwalten
+    </div>
+
+    <div class="card" style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:var(--space-12) var(--space-8);">
+      <span class="material-icons" style="font-size:48px;color:var(--color-text-faint);margin-bottom:12px;">event_busy</span>
+      <h3 style="margin:0 0 8px;">Keine Termine</h3>
+      <p class="text-muted" style="max-width:38ch;margin:0 0 20px;">
+        Als ${tLabel} siehst du hier keine Terminliste. Termine werden direkt über die Terminplanung verwaltet.
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
+        <button class="btn-primary" onclick="loadMemberReportDashboard()" style="display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">people_alt</span>
+          Meine ${mLabel}
         </button>
       </div>
     </div>
-    ${event.description ? `<p style="margin:0 0 10px;">${event.description}</p>` : ''}
-    <div id="trainer-card-detail-${event.id}"></div>
   `;
-
-  card.querySelector('[data-action="manage"]').onclick = () =>
-    loadTrainerEventDetail(event.id, isPast);
-
-  return card;
 }
 
-async function loadTrainerEventDetail(eventId, isPast) {
-  const container = document.getElementById('app-content');
-  container.innerHTML = `<div class="loading-center">Lade Termin...</div>`;
+// renderAttendanceRow und showAddMemberToEventDialog werden von coordinator-dashboard.js
+// oder bei Bedarf direkt aufgerufen. Diese Datei definiert nur das leere Trainer-Dashboard.
 
-  try {
-    const settings    = window.appSettings || {};
-    const evDoc       = await firestore.collection('events').doc(eventId).get();
-    if (!evDoc.exists) { container.innerHTML = '<p class="text-error">Termin nicht gefunden.</p>'; return; }
-    const event       = { id: evDoc.id, ...evDoc.data() };
-    const start       = event.startTime?.toDate ? event.startTime.toDate() : null;
-    const end         = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-    const mLabel      = getRoleLabel('member');
-    const eventMode   = event.mode || settings.defaultMode || 'opt_in';
-
-    // Alle Nutzer laden (fuer Mitglied-Hinzufuegen-Dialog)
-    const allUsersSnap = await firestore.collection('users').orderBy('displayName').get();
-    const allUsers = [];
-    allUsersSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
-
-    // Gruppenmitglieder + directMembers
-    let memberIds = new Set(event.directMembers || []);
-    if (event.groupId) {
-      const groupDoc = await firestore.collection('groups').doc(event.groupId).get();
-      if (groupDoc.exists) (groupDoc.data().members || []).forEach(id => memberIds.add(id));
-    }
-
-    // Anwesenheitsdaten
-    const attSnap = await firestore.collection('eventAttendance')
-      .where('eventId', '==', eventId).get();
-    const attendances = {};
-    attSnap.forEach(doc => { attendances[doc.data().userId] = { id: doc.id, ...doc.data() }; });
-
-    Object.keys(attendances).forEach(uid => memberIds.add(uid));
-    const memberIdArr = [...memberIds];
-
-    const memberDetails = {};
-    await Promise.all(memberIdArr.map(async uid => {
-      const uDoc = await firestore.collection('users').doc(uid).get();
-      memberDetails[uid] = uDoc.exists ? { id: uid, ...uDoc.data() } : { id: uid, displayName: uid };
-    }));
-
-    const renderDetail = () => {
-      container.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
-          <button class="btn-secondary" id="trainer-back" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:18px;">arrow_back</span> Zurück
-          </button>
-          <div style="flex:1;">
-            <h2 style="margin:0 0 2px;">${event.title || 'Termin'}</h2>
-            <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
-          </div>
-          ${event.status === 'cancelled' ? '<span class="chip chip-error">Abgesagt</span>' : ''}
-          ${event.status === 'skipped'   ? '<span class="chip chip-warning">Ausgefallen</span>' : ''}
-        </div>
-
-        <div class="card" style="margin-bottom:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <h3 style="margin:0;">Anwesenheit</h3>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button class="btn-secondary" id="trainer-add-member" style="display:inline-flex;align-items:center;gap:4px;">
-                <span class="material-icons" style="font-size:16px;">person_add</span> ${mLabel} hinzufügen
-              </button>
-              <button class="btn-secondary" id="trainer-cancel-btn" style="display:inline-flex;align-items:center;gap:4px;color:var(--color-error);">
-                <span class="material-icons" style="font-size:16px;">block</span> Termin absagen
-              </button>
-            </div>
-          </div>
-          <div id="attendance-list" style="margin-top:16px;"></div>
-        </div>
-
-        <div class="card">
-          <h3 style="margin-top:0;">Nachricht an alle senden</h3>
-          <textarea id="trainer-broadcast" rows="3" placeholder="Nachricht an alle Teilnehmer...">${event.trainerBroadcast || ''}</textarea>
-          <button class="btn-primary" id="trainer-broadcast-btn" style="display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:16px;">send</span> Senden
-          </button>
-        </div>
-      `;
-
-      document.getElementById('trainer-back').onclick = () => loadTrainerDashboard();
-
-      document.getElementById('trainer-add-member').onclick = () =>
-        showAddMemberToEventDialog(eventId, memberIds, allUsers, () => loadTrainerEventDetail(eventId, isPast));
-
-      document.getElementById('trainer-cancel-btn').onclick = () =>
-        trainerCancelEvent(event, () => loadTrainerEventDetail(eventId, isPast));
-
-      const listEl = document.getElementById('attendance-list');
-      if (!memberIdArr.length) {
-        listEl.innerHTML = '<p class="text-muted">Keine Mitglieder zugewiesen.</p>';
-      } else {
-        memberIdArr.forEach(uid => {
-          const member = memberDetails[uid];
-          const att    = attendances[uid];
-          listEl.appendChild(renderAttendanceRow(event, member, att, isPast, eventMode, settings, () => loadTrainerEventDetail(eventId, isPast)));
-        });
-      }
-
-      document.getElementById('trainer-broadcast-btn').onclick = async () => {
-        const msg = document.getElementById('trainer-broadcast')?.value.trim();
-        await firestore.collection('events').doc(eventId).update({
-          trainerBroadcast: msg,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        showToast('Nachricht gespeichert.', 'success');
-      };
-    };
-
-    renderDetail();
-
-  } catch (e) {
-    console.error(e);
-    container.innerHTML = '<p class="text-error">Fehler: ' + e.message + '</p>';
-  }
+function renderTrainerEventCard(event, isPast, settings) {
+  // Stub – wird nicht mehr verwendet, bleibt fuer Rueckwaertskompatibilitaet
+  return document.createElement('div');
 }
 
-// ── Mitglied zu Termin hinzufügen (auch außerhalb der Gruppe) ────────────────────
 function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded) {
   const mLabel  = getRoleLabel('member');
-  // Alle Nutzer zeigen, nicht nur Members – auch Betreuer/Koordinatoren können hinzugefügt werden
   const members = allUsers.filter(u => (u.roles || []).some(r => ['member','teacher','coordinator','admin'].includes(r)));
 
   const overlay = document.createElement('div');
@@ -273,8 +107,8 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
               directMembers: firebase.firestore.FieldValue.arrayUnion(u.id),
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            const ev = await firestore.collection('events').doc(eventId).get();
-            const mode = ev.exists ? (ev.data().mode || 'opt_in') : 'opt_in';
+            const evDoc = await firestore.collection('events').doc(eventId).get();
+            const mode = evDoc.exists ? (evDoc.data().mode || 'opt_in') : 'opt_in';
             const initStatus = mode === 'confirmation' ? 'confirmation_pending' : 'registered';
             await firestore.collection('eventAttendance').doc(`${eventId}_${u.id}`).set({
               eventId, userId: u.id, status: initStatus, trainerSet: false,
@@ -296,7 +130,6 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
   searchEl.oninput = () => renderList(searchEl.value);
 }
 
-// ── Anwesenheits-Zeile ────────────────────────────────────────────────────────────────────────────
 function renderAttendanceRow(event, member, att, isPast, eventMode, settings, onChanged) {
   const row    = document.createElement('div');
   row.style.cssText = 'display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 0;border-bottom:1px solid var(--color-border);';
@@ -383,7 +216,6 @@ function renderAttendanceRow(event, member, att, isPast, eventMode, settings, on
     });
   };
 
-  // Neutrales Wort "Termin" statt "Training"
   row.querySelector('[data-action="remove-termin"]').onclick = () => {
     showModal({
       title: 'Termin absagen',

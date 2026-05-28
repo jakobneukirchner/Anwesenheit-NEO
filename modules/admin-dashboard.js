@@ -1,5 +1,7 @@
 // modules/admin-dashboard.js
-// Admin-Dashboard: alles wie Koordinator + systemkritische Settings (Branding, Auth, Cooldowns)
+// Admin-Dashboard: alles wie Koordinator + systemkritische Settings
+// Beim Start werden NUR die Tabs gerendert – kein Tab-Inhalt wird automatisch geladen.
+// Inhalte werden lazy beim ersten Klick auf den jeweiligen Tab geladen.
 
 async function loadAdminDashboard() {
   const container = document.getElementById('app-content');
@@ -7,13 +9,13 @@ async function loadAdminDashboard() {
   container.innerHTML = `
     <h2 style="margin-top:0;">${aLabel}-Dashboard</h2>
     <div class="tabs">
-      <button class="tab-btn active" data-tab="users">Benutzer</button>
-      <button class="tab-btn"        data-tab="groups">Gruppen</button>
-      <button class="tab-btn"        data-tab="schedule">Terminplanung</button>
-      <button class="tab-btn"        data-tab="settings">Einstellungen</button>
-      <button class="tab-btn"        data-tab="system">System</button>
+      <button class="tab-btn" data-tab="users">Benutzer</button>
+      <button class="tab-btn" data-tab="groups">Gruppen</button>
+      <button class="tab-btn" data-tab="schedule">Terminplanung</button>
+      <button class="tab-btn" data-tab="settings">Einstellungen</button>
+      <button class="tab-btn" data-tab="system">System</button>
     </div>
-    <div id="tab-users"></div>
+    <div id="tab-users"    hidden></div>
     <div id="tab-groups"   hidden></div>
     <div id="tab-schedule" hidden></div>
     <div id="tab-settings" hidden></div>
@@ -49,7 +51,7 @@ async function loadAdminDashboard() {
     };
   });
 
-  loaders.users();
+  // Kein automatischer Load beim Start – Nutzer muss einen Tab anklicken.
 }
 
 async function renderAdminSystemTab(el) {
