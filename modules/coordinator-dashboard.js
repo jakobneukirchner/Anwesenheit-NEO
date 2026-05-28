@@ -144,17 +144,13 @@ async function showUserForm(user, parentEl) {
     }
   });
 
-  // Load groups async and inject checkboxes
   try {
     const gSnap = await firestore.collection('groups').orderBy('name').get();
     const groupsContainer = document.getElementById('uf-groups-loading');
     if (!groupsContainer) return;
     const allGroups = [];
     gSnap.forEach(doc => allGroups.push({ id: doc.id, ...doc.data() }));
-    if (!allGroups.length) {
-      groupsContainer.textContent = 'Keine Gruppen vorhanden.';
-      return;
-    }
+    if (!allGroups.length) { groupsContainer.textContent = 'Keine Gruppen vorhanden.'; return; }
     groupsContainer.id = 'uf-groups-list';
     groupsContainer.innerHTML = allGroups.map(g => `
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -178,7 +174,6 @@ async function confirmDeleteUser(user, parentEl) {
     confirmLabel: 'Löschen',
     onConfirm: async () => {
       try {
-        // Remove user from all groups
         const gSnap = await firestore.collection('groups').get();
         const batch = firestore.batch();
         gSnap.forEach(doc => {
@@ -367,7 +362,7 @@ async function renderScheduleTab(el) {
   } catch (e) { console.error(e); el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>'; }
 }
 
-/* ── Wiederholungs-Scope-Dialog ────────────────────────────────────────────── */
+/* ── Wiederholungs-Scope-Dialog ─────────────────────────────────────────────── */
 function askRecurrenceScope() {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -398,7 +393,7 @@ function askRecurrenceScope() {
   });
 }
 
-/* ── Ausfallen-lassen-Dialog ───────────────────────────────────────────────── */
+/* ── Ausfallen-lassen-Dialog ────────────────────────────────────────────────── */
 async function confirmSkipEvents(selectedIds, events, parentEl) {
   const toSkip = events.filter(e => selectedIds.has(e.id) && e.status !== 'skipped');
   const already = selectedIds.size - toSkip.length;
@@ -430,7 +425,7 @@ async function confirmSkipEvents(selectedIds, events, parentEl) {
   });
 }
 
-/* ── Ausfall-aufheben-Dialog ───────────────────────────────────────────────── */
+/* ── Ausfall-aufheben-Dialog ────────────────────────────────────────────────── */
 async function confirmUnskipEvents(selectedIds, events, parentEl) {
   const toUnskip = events.filter(e => selectedIds.has(e.id) && e.status === 'skipped');
   if (!toUnskip.length) { showToast('Keine ausgefallenen Termine in der Auswahl.', 'info'); return; }
@@ -482,7 +477,7 @@ async function confirmDeleteEvents(selectedIds, events, parentEl) {
   });
 }
 
-/* ── Terminliste ─────────────────────────────────────────────────────────────── */
+/* ── Terminliste ──────────────────────────────────────────────────────────────── */
 function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn) {
   const selected = new Set();
 
@@ -580,10 +575,10 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
 }
 
 function translateMode(mode) {
-  return { open:'Offen', closed:'Geschlossen', confirmation:'Bestätigung' }[mode] || mode;
+  return { open:'Aktiv anmelden', closed:'Abmeldebasiert', confirmation:'Bestätigung' }[mode] || mode;
 }
 
-/* ── Kalenderansicht ─────────────────────────────────────────────────────────── */
+/* ── Kalenderansicht ──────────────────────────────────────────────────────────── */
 function renderCalendarView(el, events, groups, parentEl) {
   const groupMap = {};
   groups.forEach(g => groupMap[g.id] = g.name);
@@ -595,7 +590,7 @@ function renderCalendarView(el, events, groups, parentEl) {
   function render() {
     const firstDay = new Date(viewYear, viewMonth, 1);
     const lastDay  = new Date(viewYear, viewMonth+1, 0);
-    const startDow = (firstDay.getDay() + 6) % 7; // Monday-first
+    const startDow = (firstDay.getDay() + 6) % 7;
 
     const monthEvents = events.filter(ev => {
       const d = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
@@ -617,7 +612,6 @@ function renderCalendarView(el, events, groups, parentEl) {
     el.querySelector('#cal-next').onclick = () => { viewMonth++; if(viewMonth>11){viewMonth=0;viewYear++;} render(); };
 
     const grid = el.querySelector('#cal-grid');
-    // Empty cells before first day
     for (let i = 0; i < startDow; i++) {
       const cell = document.createElement('div');
       cell.style.cssText = 'min-height:64px;background:var(--color-surface-offset);border-radius:4px;';
@@ -647,7 +641,7 @@ function renderCalendarView(el, events, groups, parentEl) {
   render();
 }
 
-/* ── Termin-Formular ─────────────────────────────────────────────────────────── */
+/* ── Termin-Formular ──────────────────────────────────────────────────────────── */
 async function showEventForm(event, groups, parentEl) {
   const isNew = !event;
 
@@ -660,7 +654,6 @@ async function showEventForm(event, groups, parentEl) {
 
   const allTrainers = window._allTrainers || [];
 
-  // Load ALL users for "add member" feature
   let allUsers = [];
   try {
     const uSnap = await firestore.collection('users').orderBy('displayName').get();
@@ -682,8 +675,8 @@ async function showEventForm(event, groups, parentEl) {
       </select>
       <label>Anmeldemodus</label>
       <select id="ef-mode">
-        <option value="open"         ${(event?.mode||'open')==='open'?'selected':''}>Offen</option>
-        <option value="closed"       ${event?.mode==='closed'?'selected':''}>Geschlossen</option>
+        <option value="open"         ${(event?.mode||'open')==='open'?'selected':''}>Aktiv anmelden</option>
+        <option value="closed"       ${event?.mode==='closed'?'selected':''}>Abmeldebasiert</option>
         <option value="confirmation" ${event?.mode==='confirmation'?'selected':''}>Bestätigung</option>
       </select>
       <label>Start</label>
@@ -752,8 +745,8 @@ async function showEventForm(event, groups, parentEl) {
 
       try {
         if (isNew) {
-          const recurVal   = document.getElementById('ef-recur')?.value;
-          const untilVal   = document.getElementById('ef-until')?.value;
+          const recurVal = document.getElementById('ef-recur')?.value;
+          const untilVal = document.getElementById('ef-until')?.value;
 
           if (recurVal && untilVal) {
             const untilDate = new Date(untilVal);
@@ -774,10 +767,9 @@ async function showEventForm(event, groups, parentEl) {
             showToast('Termin angelegt.', 'success');
           }
         } else {
-          // Check if this is part of a recurrence series
           if (event.recurrenceId) {
             const scope = await askRecurrenceScope();
-            if (!scope) return false; // cancelled
+            if (!scope) return false;
             if (scope === 'all') {
               const seriesSnap = await firestore.collection('events')
                 .where('recurrenceId', '==', event.recurrenceId).get();
@@ -821,11 +813,6 @@ function generateRecurringDates(startDate, endDate, recurrence, until) {
   return results;
 }
 
-function toDatetimeLocal(date) {
-  const pad=n=>String(n).padStart(2,'0');
-  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 /* ===================== SETTINGS TAB (Koordinator) ===================== */
 async function renderCoordSettingsTab(el) {
   el.innerHTML=`<div class="loading-center">Lade Einstellungen...</div>`;
@@ -837,10 +824,11 @@ async function renderCoordSettingsTab(el) {
         <h3 style="margin-top:0;">Anmeldeeinstellungen</h3>
         <label>Standard-Anmeldemodus</label>
         <select id="cs-default-mode">
-          <option value="open"         ${(d.defaultMode||'open')==='open'?'selected':''}>Offen – jeder kann sich anmelden</option>
-          <option value="closed"       ${d.defaultMode==='closed'?'selected':''}>Geschlossen – Anmeldung durch Betreuer</option>
+          <option value="open"         ${(d.defaultMode||'open')==='open'?'selected':''}>Aktiv anmelden – Mitglieder melden sich selbst an</option>
+          <option value="closed"       ${d.defaultMode==='closed'?'selected':''}>Abmeldebasiert – automatisch angemeldet, Abmeldung möglich</option>
           <option value="confirmation" ${d.defaultMode==='confirmation'?'selected':''}>Bestätigung – automatisch angemeldet, Bestätigung erforderlich</option>
         </select>
+
         <label style="margin-top:12px;">Bestätigungsfenster</label>
         <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
           Legt fest, wie lange nach Terminbeginn die Buttons „Teilnahme bestätigen" / „Termin absagen" noch verfügbar sind.<br>
@@ -851,6 +839,14 @@ async function renderCoordSettingsTab(el) {
           <input type="number" id="cs-confirm-window" value="${d.confirmationWindowMinutes??60}" style="max-width:100px;" />
           <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten (relativ zu Terminbeginn)</span>
         </div>
+
+        <label style="margin-top:12px;">Vorausschau für Mitglieder</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">Legt fest, wie viele Tage Mitglieder in die Zukunft sehen können (Standard: 30 Tage).</p>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="number" id="cs-look-ahead" value="${d.defaultEventLookAhead??30}" style="max-width:100px;" min="1" max="365" />
+          <span style="font-size:0.88rem;color:var(--color-text-muted);">Tage</span>
+        </div>
+
         <button class="btn-primary" id="cs-save-mode" style="margin-top:12px;display:inline-flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:18px;">save</span> Speichern
         </button>
@@ -874,7 +870,8 @@ async function renderCoordSettingsTab(el) {
     el.querySelector('#cs-save-mode').onclick=async()=>{
       const updates={
         defaultMode: document.getElementById('cs-default-mode').value,
-        confirmationWindowMinutes: parseInt(document.getElementById('cs-confirm-window').value)||60
+        confirmationWindowMinutes: parseInt(document.getElementById('cs-confirm-window').value)||60,
+        defaultEventLookAhead: parseInt(document.getElementById('cs-look-ahead').value)||30
       };
       await firestore.collection('settings').doc('global').set(updates,{merge:true});
       window.appSettings={...(window.appSettings||{}),...updates};
