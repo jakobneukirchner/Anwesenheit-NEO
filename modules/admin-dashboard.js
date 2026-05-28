@@ -1,7 +1,5 @@
 // modules/admin-dashboard.js
 // Admin-Dashboard: alles wie Koordinator + systemkritische Settings
-// Beim Start werden NUR die Tabs gerendert – kein Tab-Inhalt wird automatisch geladen.
-// Inhalte werden lazy beim ersten Klick auf den jeweiligen Tab geladen.
 
 async function loadAdminDashboard() {
   const container = document.getElementById('app-content');
@@ -39,19 +37,21 @@ async function loadAdminDashboard() {
     system:   () => renderAdminSystemTab(tabEls.system)
   };
 
+  const switchTab = (tabKey) => {
+    container.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabKey));
+    Object.keys(tabEls).forEach(k => { tabEls[k].hidden = k !== tabKey; });
+    if (!loaded[tabKey]) {
+      loaded[tabKey] = true;
+      loaders[tabKey]();
+    }
+  };
+
   container.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.onclick = () => {
-      container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      Object.keys(tabEls).forEach(k => { tabEls[k].hidden = k !== btn.dataset.tab; });
-      if (!loaded[btn.dataset.tab]) {
-        loaded[btn.dataset.tab] = true;
-        loaders[btn.dataset.tab]();
-      }
-    };
+    btn.onclick = () => switchTab(btn.dataset.tab);
   });
 
-  // Kein automatischer Load beim Start – Nutzer muss einen Tab anklicken.
+  // Ersten Tab beim Start aktivieren und laden
+  switchTab('users');
 }
 
 async function renderAdminSystemTab(el) {
