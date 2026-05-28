@@ -11,13 +11,17 @@ async function loadTrainerDashboard() {
     window.appSettings = settings;
 
     const now = new Date();
+
+    // Kein .orderBy() – vermeidet Composite-Index-Fehler → clientseitig sortieren
     const evSnap = await firestore.collection('events')
       .where('trainers', 'array-contains', user.uid)
-      .orderBy('startTime', 'asc')
       .get();
 
     const events = [];
     evSnap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
+
+    // Clientseitig nach startTime sortieren
+    events.sort((a, b) => (a.startTime?.toMillis?.() ?? 0) - (b.startTime?.toMillis?.() ?? 0));
 
     // Laufende Termine (startTime <= now) erscheinen unter "Vergangen"
     const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
@@ -103,7 +107,7 @@ async function loadTrainerEventDetail(eventId, isPast) {
     const mLabel      = getRoleLabel('member');
     const eventMode   = event.mode || settings.defaultMode || 'opt_in';
 
-    // Alle Nutzer laden (für Mitglied-Hinzufügen-Dialog)
+    // Alle Nutzer laden (fuer Mitglied-Hinzufuegen-Dialog)
     const allUsersSnap = await firestore.collection('users').orderBy('displayName').get();
     const allUsers = [];
     allUsersSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
@@ -121,7 +125,7 @@ async function loadTrainerEventDetail(eventId, isPast) {
     const attendances = {};
     attSnap.forEach(doc => { attendances[doc.data().userId] = { id: doc.id, ...doc.data() }; });
 
-    // Alle relevanten User-IDs (Gruppe + directMembers + jemand mit Attendance-Eintrag)
+    // Alle relevanten User-IDs
     Object.keys(attendances).forEach(uid => memberIds.add(uid));
     const memberIdArr = [...memberIds];
 
@@ -171,7 +175,6 @@ async function loadTrainerEventDetail(eventId, isPast) {
 
       document.getElementById('trainer-back').onclick = () => loadTrainerDashboard();
 
-      // Mitglied zu Termin hinzufügen (auch wenn nicht in Gruppe)
       document.getElementById('trainer-add-member').onclick = () =>
         showAddMemberToEventDialog(eventId, memberIds, allUsers, () => loadTrainerEventDetail(eventId, isPast));
 
@@ -207,7 +210,7 @@ async function loadTrainerEventDetail(eventId, isPast) {
   }
 }
 
-// ── Mitglied zu Termin hinzufügen (auch außerhalb der Gruppe) ────────────────
+// ── Mitglied zu Termin hinzufuegen (auch ausserhalb der Gruppe) ───────────────
 function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded) {
   const mLabel   = getRoleLabel('member');
   const members  = allUsers.filter(u => (u.roles || []).includes('member'));
@@ -270,11 +273,9 @@ function showAddMemberToEventDialog(eventId, currentMemberIds, allUsers, onAdded
               directMembers: firebase.firestore.FieldValue.arrayUnion(u.id),
               updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            // Attendance-Eintrag anlegen je nach Modus
             const ev = await firestore.collection('events').doc(eventId).get();
             const mode = ev.exists ? (ev.data().mode || 'opt_in') : 'opt_in';
-            const initStatus = mode === 'confirmation' ? 'confirmation_pending'
-              : mode === 'opt_out' ? 'registered' : 'registered';
+            const initStatus = mode === 'confirmation' ? 'confirmation_pending' : 'registered';
             await firestore.collection('eventAttendance').doc(`${eventId}_${u.id}`).set({
               eventId, userId: u.id, status: initStatus, trainerSet: false,
               createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -383,7 +384,7 @@ function renderAttendanceRow(event, member, att, isPast, eventMode, settings, on
     });
   };
 
-  // "Termin absagen" = Mitglied von diesem Termin abmelden (neutrales Wort "Termin")
+  // Neutrales Wort "Termin" statt "Training"
   row.querySelector('[data-action="remove-termin"]').onclick = () => {
     showModal({
       title: 'Termin absagen',
