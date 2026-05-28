@@ -663,6 +663,13 @@ async function showEventForm(event, groups, parentEl) {
   const currentTrainers = event?.trainers || event?.trainer || [];
   const currentMembers  = event?.members  || [];
 
+  // Globalen Fallback-Wert für das Rückzugsfenster anzeigen
+  const globalCancelWindow = window.appSettings?.cancellationWindowMinutes ?? 60;
+  // Termin-spezifischer Wert: leer wenn nicht gesetzt (→ Fallback greift)
+  const eventCancelWindow = (typeof event?.cancellationWindowMinutes === 'number')
+    ? event.cancellationWindowMinutes
+    : '';
+
   showModal({
     title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
     body: `
@@ -687,7 +694,27 @@ async function showEventForm(event, groups, parentEl) {
       <input type="text" id="ef-location" value="${event?.location||''}" />
       <label>Beschreibung (optional)</label>
       <textarea id="ef-desc" rows="2" style="width:100%;">${event?.description||''}</textarea>
-      <label>Betreuer</label>
+
+      <details style="margin-top:10px;" ${eventCancelWindow !== '' ? 'open' : ''}>
+        <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);display:flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:15px;">timer_off</span>
+          Rückzugsfenster (individuell)
+        </summary>
+        <div style="margin-top:8px;">
+          <p class="text-muted" style="margin:0 0 8px;font-size:0.83rem;">
+            Wie lange nach Terminbeginn können Mitglieder sich noch abmelden / absagen.<br>
+            <strong>Positiver Wert:</strong> X Minuten nach Terminbeginn (z.B. 60 = bis 1 Std. nach Start).<br>
+            <strong>Negativer Wert:</strong> X Minuten vor Terminbeginn (z.B. -30 = bis 30 Min. vor Start).<br>
+            <em>Leer lassen = globaler Standard aus Einstellungen (aktuell: ${globalCancelWindow} Min.)</em>
+          </p>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="number" id="ef-cancel-window" value="${eventCancelWindow}" placeholder="${globalCancelWindow} (global)" style="max-width:120px;" />
+            <span style="font-size:0.85rem;color:var(--color-text-muted);">Minuten</span>
+          </div>
+        </div>
+      </details>
+
+      <label style="margin-top:10px;">Betreuer</label>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;max-height:120px;overflow-y:auto;">
         ${allTrainers.map(t=>`
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:0.88rem;">
@@ -732,6 +759,10 @@ async function showEventForm(event, groups, parentEl) {
       const trainers = [...document.querySelectorAll('input[name="ef-trainer"]:checked')].map(i=>i.value);
       const extraMembers = [...document.querySelectorAll('input[name="ef-extra-member"]:checked')].map(i=>i.value);
 
+      // Rückzugsfenster: leer = Feld löschen (globaler Fallback greift), sonst Zahl speichern
+      const cancelWindowRaw = document.getElementById('ef-cancel-window').value.trim();
+      const cancelWindowVal = cancelWindowRaw !== '' ? parseInt(cancelWindowRaw, 10) : null;
+
       if (!title)    { showToast('Bitte Titel eingeben.',  'error'); return false; }
       if (!startStr) { showToast('Bitte Startzeit eingeben.', 'error'); return false; }
 
@@ -742,11 +773,23 @@ async function showEventForm(event, groups, parentEl) {
       if (endTime)   payload.endTime   = endTime;
       if (location)  payload.location  = location;
       if (desc)      payload.description = desc;
+      // Rückzugsfenster: explizit auf null setzen (→ Firestore löscht Feld) oder Zahl
+      if (cancelWindowVal !== null && !isNaN(cancelWindowVal)) {
+        payload.cancellationWindowMinutes = cancelWindowVal;
+      } else {
+        payload.cancellationWindowMinutes = firebase.firestore.FieldValue.delete();
+      }
 
       try {
         if (isNew) {
           const recurVal = document.getElementById('ef-recur')?.value;
           const untilVal = document.getElementById('ef-until')?.value;
+
+          // Bei neuen Terminen: FieldValue.delete() ist in add/set nicht erlaubt → weglassen
+          const payloadNew = { ...payload };
+          if (cancelWindowVal === null || isNaN(cancelWindowVal)) {
+            delete payloadNew.cancellationWindowMinutes;
+          }
 
           if (recurVal && untilVal) {
             const untilDate = new Date(untilVal);
@@ -756,14 +799,14 @@ async function showEventForm(event, groups, parentEl) {
             const batch = firestore.batch();
             dates.forEach(({start, end}) => {
               const ref = firestore.collection('events').doc();
-              const p = { ...payload, startTime: start, recurrenceId };
+              const p = { ...payloadNew, startTime: start, recurrenceId };
               if (end) p.endTime = end; else delete p.endTime;
               batch.set(ref, p);
             });
             await batch.commit();
             showToast(`${dates.length} Termine angelegt.`, 'success');
           } else {
-            await firestore.collection('events').add(payload);
+            await firestore.collection('events').add(payloadNew);
             showToast('Termin angelegt.', 'success');
           }
         } else {
@@ -778,7 +821,8 @@ async function showEventForm(event, groups, parentEl) {
                 title, groupId: groupId||null, mode,
                 location: location||firebase.firestore.FieldValue.delete(),
                 description: desc||firebase.firestore.FieldValue.delete(),
-                trainers, members: extraMembers
+                trainers, members: extraMembers,
+                cancellationWindowMinutes: payload.cancellationWindowMinutes
               }));
               await b.commit();
               showToast(`Alle Termine der Reihe aktualisiert.`, 'success');
@@ -822,6 +866,7 @@ async function renderCoordSettingsTab(el) {
     el.innerHTML=`
       <div class="card">
         <h3 style="margin-top:0;">Anmeldeeinstellungen</h3>
+
         <label>Standard-Anmeldemodus</label>
         <select id="cs-default-mode">
           <option value="open"         ${(d.defaultMode||'open')==='open'?'selected':''}>Aktiv anmelden – Mitglieder melden sich selbst an</option>
@@ -829,25 +874,39 @@ async function renderCoordSettingsTab(el) {
           <option value="confirmation" ${d.defaultMode==='confirmation'?'selected':''}>Bestätigung – automatisch angemeldet, Bestätigung erforderlich</option>
         </select>
 
-        <label style="margin-top:12px;">Bestätigungsfenster</label>
-        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
-          Legt fest, wie lange nach Terminbeginn die Buttons „Teilnahme bestätigen" / „Termin absagen" noch verfügbar sind.<br>
-          <strong>Positive Werte:</strong> Fenster endet X Minuten nach Terminbeginn (z.B. 60 = bis 60 Min nach Start).<br>
-          <strong>Negative Werte:</strong> Fenster endet X Minuten vor Terminbeginn (z.B. -30 = bis 30 Min vor Start).
+        <label style="margin-top:14px;">Vorausschau für Mitglieder</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.83rem;">
+          Wie viele Tage in die Zukunft können Mitglieder Termine sehen und sich anmelden?
+        </p>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="number" id="cs-look-ahead" value="${d.defaultEventLookAhead??30}" style="max-width:100px;" min="1" max="365" />
+          <span style="font-size:0.88rem;color:var(--color-text-muted);">Tage</span>
+        </div>
+
+        <label style="margin-top:14px;">Bestätigungsfenster</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.83rem;">
+          Wie lange nach Terminbeginn können Mitglieder beim Modus „Bestätigung" noch bestätigen oder absagen.<br>
+          <strong>Positiver Wert:</strong> X Min. nach Start &nbsp;|&nbsp;
+          <strong>Negativer Wert:</strong> X Min. vor Start
         </p>
         <div style="display:flex;align-items:center;gap:8px;">
           <input type="number" id="cs-confirm-window" value="${d.confirmationWindowMinutes??60}" style="max-width:100px;" />
           <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten (relativ zu Terminbeginn)</span>
         </div>
 
-        <label style="margin-top:12px;">Vorausschau für Mitglieder</label>
-        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">Legt fest, wie viele Tage Mitglieder in die Zukunft sehen können (Standard: 30 Tage).</p>
+        <label style="margin-top:14px;">Rückzugsfenster (global)</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.83rem;">
+          Globaler Fallback: Wie lange nach Terminbeginn können Mitglieder sich standardmäßig abmelden / absagen.<br>
+          Kann pro Termin individuell überschrieben werden.<br>
+          <strong>Positiver Wert:</strong> X Min. nach Start &nbsp;|&nbsp;
+          <strong>Negativer Wert:</strong> X Min. vor Start
+        </p>
         <div style="display:flex;align-items:center;gap:8px;">
-          <input type="number" id="cs-look-ahead" value="${d.defaultEventLookAhead??30}" style="max-width:100px;" min="1" max="365" />
-          <span style="font-size:0.88rem;color:var(--color-text-muted);">Tage</span>
+          <input type="number" id="cs-cancel-window" value="${d.cancellationWindowMinutes??60}" style="max-width:100px;" />
+          <span style="font-size:0.88rem;color:var(--color-text-muted);">Minuten (relativ zu Terminbeginn)</span>
         </div>
 
-        <button class="btn-primary" id="cs-save-mode" style="margin-top:12px;display:inline-flex;align-items:center;gap:6px;">
+        <button class="btn-primary" id="cs-save-mode" style="margin-top:16px;display:inline-flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:18px;">save</span> Speichern
         </button>
       </div>
@@ -867,28 +926,30 @@ async function renderCoordSettingsTab(el) {
         </button>
       </div>`;
 
-    el.querySelector('#cs-save-mode').onclick=async()=>{
-      const updates={
-        defaultMode: document.getElementById('cs-default-mode').value,
-        confirmationWindowMinutes: parseInt(document.getElementById('cs-confirm-window').value)||60,
-        defaultEventLookAhead: parseInt(document.getElementById('cs-look-ahead').value)||30
+    el.querySelector('#cs-save-mode').onclick = async () => {
+      const updates = {
+        defaultMode:                 document.getElementById('cs-default-mode').value,
+        confirmationWindowMinutes:   parseInt(document.getElementById('cs-confirm-window').value)  || 60,
+        cancellationWindowMinutes:   parseInt(document.getElementById('cs-cancel-window').value)   || 60,
+        defaultEventLookAhead:       parseInt(document.getElementById('cs-look-ahead').value)       || 30
       };
-      await firestore.collection('settings').doc('global').set(updates,{merge:true});
-      window.appSettings={...(window.appSettings||{}),...updates};
-      showToast('Einstellungen gespeichert.','success');
+      await firestore.collection('settings').doc('global').set(updates, { merge: true });
+      window.appSettings = { ...(window.appSettings || {}), ...updates };
+      showToast('Einstellungen gespeichert.', 'success');
     };
-    el.querySelector('#cs-save-labels').onclick=async()=>{
-      const updates={
-        roleLabels:{
-          admin:       document.getElementById('rl-admin')?.value||'Admin',
-          coordinator: document.getElementById('rl-coordinator')?.value||'Koordinator',
-          teacher:     document.getElementById('rl-teacher')?.value||'Trainer',
-          member:      document.getElementById('rl-member')?.value||'Mitglied'
+    el.querySelector('#cs-save-labels').onclick = async () => {
+      const updates = {
+        roleLabels: {
+          admin:       document.getElementById('rl-admin')?.value       || 'Admin',
+          coordinator: document.getElementById('rl-coordinator')?.value || 'Koordinator',
+          teacher:     document.getElementById('rl-teacher')?.value     || 'Trainer',
+          member:      document.getElementById('rl-member')?.value      || 'Mitglied'
         }
       };
-      await firestore.collection('settings').doc('global').set(updates,{merge:true});
-      window.roleLabels=updates.roleLabels; window.appSettings={...(window.appSettings||{}),...updates};
-      showToast('Einstellungen gespeichert.','success');
+      await firestore.collection('settings').doc('global').set(updates, { merge: true });
+      window.roleLabels  = updates.roleLabels;
+      window.appSettings = { ...(window.appSettings || {}), ...updates };
+      showToast('Einstellungen gespeichert.', 'success');
     };
-  } catch(e) { el.innerHTML='<p class="text-error">Fehler beim Laden.</p>'; }
+  } catch(e) { el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>'; }
 }

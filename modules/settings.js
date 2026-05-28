@@ -74,3 +74,49 @@ function isInConfirmationWindow(eventStartTime) {
   const deadline  = new Date(eventStartTime.getTime() + windowMs);
   return Date.now() <= deadline.getTime();
 }
+
+/**
+ * Gibt das Rückzugsfenster für einen Termin in Minuten zurück.
+ *
+ * Priorität:
+ *   1. Termin-spezifischer Wert (event.cancellationWindowMinutes), falls definiert
+ *   2. Globale Einstellung (appSettings.cancellationWindowMinutes)
+ *   3. Standard: 60 Minuten
+ *
+ * Semantik (gleich wie Bestätigungsfenster):
+ *   - Positiver Wert: Abmeldung möglich bis X Minuten NACH Terminbeginn
+ *   - Negativer Wert: Abmeldung nur bis X Minuten VOR Terminbeginn möglich
+ *   - 0 = genau zum Terminbeginn
+ *
+ * Rückzugs-Deadline = startTime + cancellationWindowMinutes Minuten
+ *
+ * @param {Object|null} event - Das Event-Objekt (optional). Wenn übergeben, wird
+ *   ein event-spezifischer Wert bevorzugt.
+ * @returns {number} Fenster in Minuten
+ */
+function getCancellationWindowMinutes(event) {
+  // 1. Per-Event-Wert (explizit gesetzt, auch 0 ist gültig)
+  if (event && typeof event.cancellationWindowMinutes === 'number') {
+    return event.cancellationWindowMinutes;
+  }
+  // 2. Globale Einstellung
+  if (typeof window.appSettings?.cancellationWindowMinutes === 'number') {
+    return window.appSettings.cancellationWindowMinutes;
+  }
+  // 3. Standard
+  return 60;
+}
+
+/**
+ * Gibt zurück ob ein Termin noch im Rückzugsfenster liegt
+ * (d.h. ob Abmelden / Absagen noch möglich ist).
+ * @param {Date}        eventStartTime - Startzeit des Termins
+ * @param {Object|null} event          - Das Event-Objekt (für per-Event-Konfiguration)
+ * @returns {boolean} true wenn Abmelden noch möglich ist
+ */
+function isInCancellationWindow(eventStartTime, event) {
+  if (!eventStartTime) return true; // kein Start → immer erlauben
+  const windowMs  = getCancellationWindowMinutes(event) * 60 * 1000;
+  const deadline  = new Date(eventStartTime.getTime() + windowMs);
+  return Date.now() <= deadline.getTime();
+}
