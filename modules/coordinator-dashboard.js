@@ -330,6 +330,9 @@ async function renderScheduleTab(el) {
             <button id="sch-skip-selected" class="btn-secondary" style="padding:6px 14px;display:inline-flex;align-items:center;gap:4px;">
               <span class="material-icons" style="font-size:16px;">event_busy</span> Ausfallen lassen
             </button>
+            <button id="sch-unskip-selected" class="btn-secondary" style="padding:6px 14px;display:inline-flex;align-items:center;gap:4px;">
+              <span class="material-icons" style="font-size:16px;">event_available</span> Ausfall aufheben
+            </button>
             <button id="sch-delete-selected" class="btn-danger" style="padding:6px 14px;">Löschen</button>
           </div>
           <div style="display:flex;border:1px solid var(--color-border);border-radius:6px;overflow:hidden;">
@@ -341,14 +344,15 @@ async function renderScheduleTab(el) {
       </div>
       <div id="schedule-content"></div>`;
 
-    const contentEl  = el.querySelector('#schedule-content');
-    const bulkBar    = el.querySelector('#bulk-actions');
-    const bulkCount  = el.querySelector('#bulk-count');
-    const skipSelBtn = el.querySelector('#sch-skip-selected');
-    const delSelBtn  = el.querySelector('#sch-delete-selected');
+    const contentEl    = el.querySelector('#schedule-content');
+    const bulkBar      = el.querySelector('#bulk-actions');
+    const bulkCount    = el.querySelector('#bulk-count');
+    const skipSelBtn   = el.querySelector('#sch-skip-selected');
+    const unskipSelBtn = el.querySelector('#sch-unskip-selected');
+    const delSelBtn    = el.querySelector('#sch-delete-selected');
 
     const renderView = () => scheduleViewMode === 'list'
-      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, delSelBtn)
+      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn)
       : renderCalendarView(contentEl, events, groups, el);
 
     el.querySelector('#view-list').onclick = () => { scheduleViewMode='list'; el.querySelector('#view-list').classList.add('active'); el.querySelector('#view-calendar').classList.remove('active'); renderView(); };
@@ -358,22 +362,8 @@ async function renderScheduleTab(el) {
   } catch (e) { console.error(e); el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>'; }
 }
 
-/* ── Hilfsfunktion: gibt alle Ereignisse einer recurrenceGroup zurück,
-   sortiert nach startTime aufsteigend ── */
-function getSeriesEvents(allEvents, recurrenceGroup) {
-  return allEvents
-    .filter(e => e.recurrenceGroup === recurrenceGroup)
-    .sort((a,b) => (a.startTime?.toMillis?.()??0) - (b.startTime?.toMillis?.()??0));
-}
-
-/* ── Wiederholungs-Scope-Dialog ──────────────────────────────────────────────
-   Zeigt einen Dialog mit den Optionen:
-     'single'    – Nur diesen Termin
-     'following' – Diesen und alle nachfolgenden
-     'all'       – Alle Termine der Serie
-   Gibt den gewählten Scope als Promise<string|null> zurück (null = abgebrochen).
-*/
-function askRecurrenceScope(extraOption) {
+/* ── Wiederholungs-Scope-Dialog ────────────────────────────────────────────── */
+function askRecurrenceScope() {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     Object.assign(overlay.style, {
@@ -386,7 +376,6 @@ function askRecurrenceScope(extraOption) {
       { value:'following', label:'Diesen und alle nachfolgenden Termine' },
       { value:'all',       label:'Alle Termine der Serie' },
     ];
-    if (extraOption) options.push(extraOption);
 
     overlay.innerHTML = `
       <div style="background:var(--color-surface);border-radius:12px;width:min(460px,95vw);box-shadow:0 8px 40px rgba(0,0,0,0.35);overflow:hidden;">
@@ -408,8 +397,6 @@ function askRecurrenceScope(extraOption) {
       </div>`;
 
     document.body.appendChild(overlay);
-
-    // Erste Option vorauswählen
     overlay.querySelector('input[name="rec-scope"]').checked = true;
 
     overlay.querySelector('#rsd-cancel').onclick = () => { overlay.remove(); resolve(null); };
@@ -422,10 +409,7 @@ function askRecurrenceScope(extraOption) {
   });
 }
 
-/* ── Bulk-Ausfallen-Dialog ───────────────────────────────────────────────────
-   Öffnet einen Dialog mit Begründungsfeld und setzt status='skipped' für alle
-   übergebenen Termine.
-*/
+/* ── Bulk-Ausfallen-Dialog ──────────────────────────────────────────────────── */
 function confirmSkipEvents(eventsToSkip, allEvents, groups, parentEl) {
   const recGroups    = [...new Set(eventsToSkip.filter(e=>e.recurrenceGroup).map(e=>e.recurrenceGroup))];
   const hasRecurrence = recGroups.length > 0;
@@ -472,7 +456,45 @@ function confirmSkipEvents(eventsToSkip, allEvents, groups, parentEl) {
   });
 }
 
-function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, delSelBtn) {
+/* ── Bulk-Ausfall-aufheben-Dialog ───────────────────────────────────────────── */
+function confirmUnskipEvents(selectedIds, events, parentEl) {
+  const toUnskip = selectedIds
+    .map(id => events.find(e => e.id === id))
+    .filter(e => e && e.status === 'skipped');
+
+  if (!toUnskip.length) {
+    showToast('Keine als ausgefallen markierten Termine in der Auswahl.', 'warning');
+    return;
+  }
+
+  showModal({
+    title: `Ausfall aufheben (${toUnskip.length} Termin${toUnskip.length !== 1 ? 'e' : ''})`,
+    body: `
+      <p>Bei <strong>${toUnskip.length}</strong> Termin${toUnskip.length !== 1 ? 'en' : ''} wird der Ausgefallen-Status entfernt und auf <em>Geplant</em> zurückgesetzt.</p>
+      ${toUnskip.length <= 8
+        ? `<ul style="font-size:0.9rem;padding-left:18px;margin:6px 0;">${toUnskip.map(e => `<li>${e.title||'Termin'} – ${e.startTime?.toDate ? formatDateTime(e.startTime.toDate()) : ''}</li>`).join('')}</ul>`
+        : `<p class="text-muted">${toUnskip.map(e=>e.title||'Termin').slice(0,5).join(', ')} … und ${toUnskip.length-5} weitere</p>`}
+    `,
+    confirmLabel: 'Ausfall aufheben',
+    onConfirm: async () => {
+      for (let i = 0; i < toUnskip.length; i += 499) {
+        const batch = firestore.batch();
+        toUnskip.slice(i, i + 499).forEach(e => {
+          batch.update(firestore.collection('events').doc(e.id), {
+            status:     'planned',
+            skipReason: firebase.firestore.FieldValue.delete(),
+            updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+        await batch.commit();
+      }
+      showToast(`Ausfall bei ${toUnskip.length} Termin(en) aufgehoben.`, 'success');
+      renderScheduleTab(parentEl);
+    }
+  });
+}
+
+function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn) {
   if (!events.length) { el.innerHTML = '<p class="text-muted">Keine Termine vorhanden.</p>'; return; }
   const sorted = [...events].sort((a,b) => (a.startTime?.toMillis?.()??0) - (b.startTime?.toMillis?.()??0));
   el.innerHTML = `
@@ -528,6 +550,12 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     const ids = [...el.querySelectorAll('.ev-cb:checked')].map(c=>c.dataset.id);
     confirmSkipEvents(events.filter(e=>ids.includes(e.id)), events, groups, parentEl);
   };
+
+  if (unskipSelBtn) unskipSelBtn.onclick = () => {
+    const ids = [...el.querySelectorAll('.ev-cb:checked')].map(c=>c.dataset.id);
+    confirmUnskipEvents(ids, events, parentEl);
+  };
+
   delSelBtn.onclick = () => {
     const ids = [...el.querySelectorAll('.ev-cb:checked')].map(c=>c.dataset.id);
     confirmDeleteEvents(events.filter(e=>ids.includes(e.id)), events, groups, parentEl);
@@ -588,7 +616,7 @@ function renderCalendarView(el, events, groups, parentEl) {
     const de=byDay[day]||[];
     const pills=de.slice(0,3).map(ev=>`<div class="cal-event-pill" data-ev-id="${ev.id}" style="font-size:0.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px;padding:1px 5px;margin-bottom:1px;cursor:pointer;background:${ev.status==='cancelled'?'var(--color-error)':ev.status==='skipped'?'var(--color-warning)':'var(--color-primary)'};color:#fff;">${ev.title||'Termin'}</div>`).join('');
     const more=de.length>3?`<div style="font-size:0.7rem;color:var(--color-text-muted);">+${de.length-3} mehr</div>`:'';
-    html+=`<div style="min-height:90px;border:1px solid var(--color-border);border-radius:6px;padding:4px;background:${isToday?'rgba(21,101,192,0.07)':'var(--color-surface)'};">
+    html+=`<div style="min-height:90px;border:1px solid var(--color-border);border-radius:6px;padding:4px;background:${isToday?'rgba(21,101,192,0.07)':'var(--color-surface)};">
       <div style="font-size:0.82rem;font-weight:${isToday?700:400};color:${isToday?'var(--color-primary)':'var(--color-text)'};margin-bottom:3px;">${day}</div>
       ${pills}${more}
     </div>`;
@@ -610,7 +638,6 @@ async function showEventForm(event, groups, parentEl) {
   const teacherLabel = getRoleLabel('teacher');
   const isPartOfSeries = !isNew && !!event?.recurrenceGroup;
 
-  // Alle Events der gleichen Serie für Scope-Operationen vorladen
   let seriesEvents = [];
   if (isPartOfSeries) {
     try {
@@ -649,7 +676,7 @@ async function showEventForm(event, groups, parentEl) {
         ${groups.map(g=>`<option value="${g.id}" ${event?.groupId===g.id?'selected':''}>${g.name}</option>`).join('')}
       </select>
       <label>${teacherLabel} auswählen</label>
-      <div style="border:1px solid var(--color-border);border-radius:6px;padding:4px 0;max-height:180px;overflow-y:auto;background:var(--color-bg-elevated);">
+      <div style="border:1px solid var(--color-border);border-radius:6px;padding:4px 0;max-height:180px;overflow-y:auto;">
         <div style="padding:6px 8px 4px;border-bottom:1px solid var(--color-border);">
           <input type="search" id="ef-trainer-search" placeholder="${teacherLabel} suchen..." style="margin-bottom:0;font-size:0.88rem;" />
         </div>
@@ -731,17 +758,14 @@ async function showEventForm(event, groups, parentEl) {
         return;
       }
 
-      // ── Bestehendes Event: Scope-Dialog wenn Serie
       if (isPartOfSeries) {
         const scope = await askRecurrenceScope();
-        if (!scope) return false; // Abgebrochen
-
+        if (!scope) return false;
         const eventStartMs = event.startTime?.toMillis?.() ?? 0;
 
         if (scope === 'single') {
           await firestore.collection('events').doc(event.id).update(data);
           showToast('Termin aktualisiert (nur dieser Termin).','success');
-
         } else if (scope === 'following') {
           const toUpdate = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) >= eventStartMs);
           const diffMs   = new Date(startStr).getTime() - event.startTime.toDate().getTime();
@@ -757,7 +781,6 @@ async function showEventForm(event, groups, parentEl) {
           });
           await batch.commit();
           showToast(`${toUpdate.length} Termin(e) aktualisiert (dieser + nachfolgende).`,'success');
-
         } else if (scope === 'all') {
           const diffMs = new Date(startStr).getTime() - event.startTime.toDate().getTime();
           const batch  = firestore.batch();
@@ -796,7 +819,6 @@ async function showEventForm(event, groups, parentEl) {
       });
     }
 
-    // ── Ausfallen-Button (einzelner Termin / ganzer Scope)
     const skipBtn = document.getElementById('ef-skip-btn');
     if (skipBtn) {
       skipBtn.onclick = async () => {
@@ -845,7 +867,6 @@ async function showEventForm(event, groups, parentEl) {
       };
     }
 
-    // ── "Diesen + nachfolgende ausfallen lassen"
     const skipFollowingBtn = document.getElementById('ef-skip-following-btn');
     if (skipFollowingBtn && isPartOfSeries) {
       skipFollowingBtn.onclick = async () => {
@@ -864,13 +885,11 @@ async function showEventForm(event, groups, parentEl) {
       };
     }
 
-    // ── "Nachfolgende löschen"
     const deleteFollowingBtn = document.getElementById('ef-delete-following-btn');
     if (deleteFollowingBtn && isPartOfSeries) {
       deleteFollowingBtn.onclick = () => {
-        const eventStartMs  = event.startTime?.toMillis?.() ?? 0;
-        // "Nachfolgende" = alle NACH diesem Termin (dieser selbst bleibt)
-        const toDelete      = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) > eventStartMs);
+        const eventStartMs = event.startTime?.toMillis?.() ?? 0;
+        const toDelete     = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) > eventStartMs);
         if (!toDelete.length) { showToast('Keine nachfolgenden Termine gefunden.', 'warning'); return; }
         showModal({
           title: 'Nachfolgende Termine löschen',
@@ -937,7 +956,7 @@ async function renderCoordSettingsTab(el) {
           <strong>Positiv</strong> (z.B. 60): Fenster schließt 60 Min <em>nach</em> Terminbeginn.
         </p>
         <input type="number" id="cs-confirm-window" value="${data.confirmationWindowMinutes??60}" />
-        <label>Termine-Vorschau (Tage in die Zukunft, Standard für alle Nutzer)</label>
+        <label>Termine-Vorschau (Tage in die Zukunft)</label>
         <input type="number" id="cs-lookahead" value="${data.defaultEventLookAhead??30}" min="1" max="365" />
         <label>Teilnehmer-Sichtbarkeit für Mitglieder</label>
         <select id="cs-vis">
@@ -946,7 +965,6 @@ async function renderCoordSettingsTab(el) {
           <option value="none"  ${data.visibilityMode==='none' ?'selected':''}>Nichts anzeigen</option>
         </select>
         <label>Rückzugsfenster für Mitglieder (Minuten nach Anmeldung)</label>
-        <p class="text-muted" style="margin:-4px 0 6px;font-size:0.84rem;">Wie lange ein Mitglied seine Anmeldung zurückziehen kann. Einmalig pro Termin.</p>
         <input type="number" id="cs-withdraw-window" value="${data.withdrawWindowMinutes??60}" min="1" />
         <hr class="divider" />
         <h4>Rollen-Labels</h4>
