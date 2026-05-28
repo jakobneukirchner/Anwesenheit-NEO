@@ -1,5 +1,5 @@
 // modules/trainer-dashboard.js
-// Betreuer-Dashboard im Stil der gelieferten Referenzgrafiken
+// Betreuer-Dashboard
 
 async function loadTrainerDashboard() {
   const container = document.getElementById('app-content');
@@ -49,48 +49,51 @@ async function loadTrainerDashboard() {
     const untilText = formatDateGerman(futureEnd);
 
     container.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
-        <h2 style="margin:0;">${getRoleLabel('teacher')}-Dashboard</h2>
-        <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
-      </div>
+      <div id="trainer-list-view">
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
+          <h2 style="margin:0;">${getRoleLabel('teacher')}-Dashboard</h2>
+          <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
+        </div>
 
-      <div class="tabs" style="margin-bottom:14px;">
-        <button class="tab-btn active" data-tab="upcoming">Kommende Termine (${upcoming.length})</button>
-        <button class="tab-btn" data-tab="past">Vergangene Termine (${past.length})</button>
-      </div>
+        <!-- KOMMENDE TERMINE -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <span class="material-icons" style="font-size:20px;color:var(--color-primary);">event</span>
+          <span style="font-weight:700;font-size:1.05rem;">Kommende Termine</span>
+          <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
+        </div>
+        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;margin-bottom:28px;"></div>
 
-      <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"></div>
-      <div id="trainer-overview-past" hidden style="display:flex;flex-direction:column;gap:12px;"></div>
-      <div id="trainer-detail-view" hidden></div>
+        <!-- TRENNER -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;margin-top:8px;">
+          <div style="flex:1;height:1px;background:var(--color-border);"></div>
+          <div style="display:flex;align-items:center;gap:7px;color:var(--color-text-muted);font-size:0.88rem;font-weight:600;white-space:nowrap;">
+            <span class="material-icons" style="font-size:17px;">history</span>
+            Vergangene Termine
+          </div>
+          <div style="flex:1;height:1px;background:var(--color-border);"></div>
+        </div>
+
+        <!-- VERGANGENE TERMINE -->
+        <div id="trainer-overview-past" style="display:flex;flex-direction:column;gap:12px;"></div>
+      </div>
     `;
 
     const upEl = document.getElementById('trainer-overview-upcoming');
     const paEl = document.getElementById('trainer-overview-past');
-    const detailEl = document.getElementById('trainer-detail-view');
 
     if (!upcoming.length) upEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine kommenden Termine.</p></div>`;
     if (!past.length) paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
 
-    for (const ev of upcoming) upEl.appendChild(await renderTrainerOverviewCard(ev, false, detailEl, upEl, paEl));
-    for (const ev of past) paEl.appendChild(await renderTrainerOverviewCard(ev, true, detailEl, upEl, paEl));
+    for (const ev of upcoming) upEl.appendChild(await renderTrainerOverviewCard(ev, false));
+    for (const ev of past) paEl.appendChild(await renderTrainerOverviewCard(ev, true));
 
-    container.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.onclick = () => {
-        container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const isUpcoming = btn.dataset.tab === 'upcoming';
-        upEl.hidden = !isUpcoming;
-        paEl.hidden = isUpcoming;
-        detailEl.hidden = true;
-      };
-    });
   } catch (e) {
     console.error(e);
     container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
   }
 }
 
-async function renderTrainerOverviewCard(event, isPast, detailEl, upcomingEl, pastEl) {
+async function renderTrainerOverviewCard(event, isPast) {
   const card = createElement('div', 'card');
   card.style.marginBottom = '0';
   if (event.status === 'skipped') card.style.borderLeft = '4px solid var(--color-warning)';
@@ -122,19 +125,29 @@ async function renderTrainerOverviewCard(event, isPast, detailEl, upcomingEl, pa
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
         ${needsBadge ? `<span class="chip chip-warning" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span>Noch ${missing} Person${missing === 1 ? '' : 'en'} benötigt</span>` : ''}
         <span class="chip ${activeClass}" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">${event.status === 'cancelled' ? 'cancel' : 'check_circle'}</span>${activeLabel}</span>
-        <button class="btn-primary" data-open-detail="${event.id}" style="padding:7px 14px;">Details ›</button>
+        <button class="btn-primary" data-open-detail="${event.id}" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">open_in_new</span>Details
+        </button>
       </div>
     </div>
   `;
 
-  card.querySelector('[data-open-detail]').onclick = async () => {
-    upcomingEl.hidden = true;
-    pastEl.hidden = true;
-    detailEl.hidden = false;
-    await renderTrainerDetailView(event.id, detailEl, { backTo: isPast ? 'past' : 'upcoming' });
+  card.querySelector('[data-open-detail]').onclick = () => {
+    openTrainerDetailPage(event.id, isPast);
   };
 
   return card;
+}
+
+function openTrainerDetailPage(eventId, isPast) {
+  const container = document.getElementById('app-content');
+
+  // Überschreibe den gesamten app-content mit der Detailseite
+  container.innerHTML = `<div id="trainer-detail-page"><div class="loading-center">Lade Termin…</div></div>`;
+
+  renderTrainerDetailView(eventId, document.getElementById('trainer-detail-page'), {
+    backFn: () => loadTrainerDashboard()
+  });
 }
 
 async function renderTrainerDetailView(eventId, container, options = {}) {
@@ -165,20 +178,37 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const needed = Math.max(0, (event.minParticipants || 0) - registered);
     const minReached = needed === 0;
 
+    // Ort oder Beschreibung als Fallback
+    const locationOrDescription = (event.location && event.location.trim())
+      ? event.location.trim()
+      : (event.description && event.description.trim())
+        ? event.description.trim()
+        : null;
+
     container.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-        <button class="btn-secondary" id="trainer-back-btn" style="padding:6px 14px;">← Zurück</button>
-        <h2 style="margin:0;">${event.title || 'Termin'}, ${start ? formatDateGermanShort(start) : ''} ${start ? formatTime(start) + ' Uhr' : ''}</h2>
+      <!-- Zurück-Zeile -->
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;">
+        <button class="btn-secondary" id="trainer-back-btn" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">arrow_back</span>Zurück
+        </button>
+        <div>
+          <h2 style="margin:0;line-height:1.2;">${event.title || 'Termin'}</h2>
+          <div class="text-muted" style="font-size:0.92rem;margin-top:4px;">
+            ${start ? formatDateGerman(start) : ''} · ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}
+          </div>
+        </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:12px;">
+      <!-- Stat-Cards -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
         ${renderTrainerStatCard('Datum & Zeit', `${start ? formatDateGerman(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}`)}
-        ${renderTrainerStatCard('Angemeldet', `${registered} / ${event.minParticipants || totalOr(registered)}`)}
+        ${renderTrainerStatCard('Angemeldet', `${registered} / ${event.minParticipants || registered}`)}
         ${renderTrainerStatCard('Anwesend', `${present}`, 'var(--color-success)')}
         ${renderTrainerStatCard('Gefehlt', `${absent}`, absent > 0 ? 'var(--color-error)' : 'var(--color-text)')}
         ${renderTrainerNeedCard(needed, minReached)}
       </div>
 
+      <!-- Betreuer -->
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-weight:700;">
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">groups</span>
@@ -197,27 +227,44 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </div>
       </div>
 
+      <!-- Ort / Beschreibung -->
+      ${locationOrDescription ? `
       <div class="card" style="margin-bottom:12px;">
-        <div>${event.location || 'Kein Ort angegeben'}</div>
-      </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;">
+          <span class="material-icons" style="font-size:18px;color:var(--color-primary);">${(event.location && event.location.trim()) ? 'place' : 'description'}</span>
+          ${(event.location && event.location.trim()) ? 'Ort' : 'Beschreibung'}
+        </div>
+        <div style="color:var(--color-text);white-space:pre-line;">${escapeHtml(locationOrDescription)}</div>
+      </div>` : ''}
 
+      <!-- Broadcast -->
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-weight:700;">
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${window.currentUser?.profile?.displayName || 'Betreuer'}“ angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${window.currentUser?.profile?.displayName || 'Betreuer'}" angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${event.trainerBroadcast || ''}</textarea>
-        <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;">💾 Nachricht speichern</button></div>
+        <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
 
+      <!-- Anwesenheitsliste -->
       <div class="card" style="margin-bottom:12px;overflow-x:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-          <div style="font-weight:700;">Anwesenheitsliste (${attendances.length})</div>
+          <div style="font-weight:700;display:flex;align-items:center;gap:8px;">
+            <span class="material-icons" style="font-size:18px;color:var(--color-primary);">checklist</span>
+            Anwesenheitsliste (${attendances.length})
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn-secondary" id="trainer-add-person" style="padding:7px 14px;">👥 Person hinzufügen</button>
-            <button class="btn-secondary" id="trainer-mark-all-present" style="padding:7px 14px;">✓ Alle anwesend</button>
-            <button class="btn-primary" id="trainer-save-attendance" style="padding:7px 14px;">💾 Speichern</button>
+            <button class="btn-secondary" id="trainer-add-person" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">person_add</span>Person hinzufügen
+            </button>
+            <button class="btn-secondary" id="trainer-mark-all-present" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">done_all</span>Alle anwesend
+            </button>
+            <button class="btn-primary" id="trainer-save-attendance" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">save</span>Speichern
+            </button>
           </div>
         </div>
         <table style="width:100%;min-width:1050px;">
@@ -227,7 +274,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <th>Status</th>
               <th>Schnell-Check</th>
               <th>Detailstatus</th>
-              <th>Interne Notiz (nur Betreuer)</th>
+              <th>Interne Notiz</th>
               <th>Notiz an Mitglied</th>
               <th>Hinweis v. Mitglied</th>
               <th></th>
@@ -237,28 +284,25 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </table>
       </div>
 
+      <!-- Aktionen -->
       <div class="card">
-        <div style="font-weight:700;margin-bottom:10px;">Aktionen</div>
+        <div style="font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
+          <span class="material-icons" style="font-size:18px;color:var(--color-primary);">settings</span>Aktionen
+        </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button class="btn-danger" id="trainer-cancel-self-btn" style="padding:8px 16px;">📅 Abmelden / Termin absagen</button>
-          <button class="btn-secondary" id="trainer-late-btn" style="padding:8px 16px;">🕒 Verspätung melden</button>
+          <button class="btn-danger" id="trainer-cancel-self-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">event_busy</span>Abmelden / Termin absagen
+          </button>
+          <button class="btn-secondary" id="trainer-late-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">schedule</span>Verspätung melden
+          </button>
         </div>
       </div>
     `;
 
     document.getElementById('trainer-back-btn').onclick = () => {
-      container.hidden = true;
-      const up = document.getElementById('trainer-overview-upcoming');
-      const pa = document.getElementById('trainer-overview-past');
-      if (options.backTo === 'past') {
-        up.hidden = true;
-        pa.hidden = false;
-        document.querySelector('.tab-btn[data-tab="past"]')?.click();
-      } else {
-        up.hidden = false;
-        pa.hidden = true;
-        document.querySelector('.tab-btn[data-tab="upcoming"]')?.click();
-      }
+      if (options.backFn) options.backFn();
+      else loadTrainerDashboard();
     };
 
     document.getElementById('trainer-save-broadcast').onclick = async () => {
@@ -332,7 +376,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           ${att.addedByTrainer ? `<div><span class="chip" style="font-size:0.72rem;">Manuell</span></div>` : ''}
         </td>
         <td>${renderTrainerStatusChip(att.status)}</td>
-        <td><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="trainer-present-check" ${isPast ? '' : ''} ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}/> Anwesend</label></td>
+        <td><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}/> Anwesend</label></td>
         <td>
           <select class="trainer-status-select" style="min-width:180px;">
             ${selectOptions.map(([value, label]) => `<option value="${value}" ${att.status === value ? 'selected' : ''}>${label}</option>`).join('')}
@@ -340,8 +384,12 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </td>
         <td><input class="trainer-internal-note" type="text" value="${escapeHtml(att.trainerNoteInternal || '')}" placeholder="Interne Notiz (nur Betreuer)" style="width:100%;min-width:180px;" /></td>
         <td><input class="trainer-member-note" type="text" value="${escapeHtml(att.trainerNoteMember || '')}" placeholder="Notiz an Mitglied" style="width:100%;min-width:160px;" /></td>
-        <td><input type="text" value="${escapeHtml(att.memberNote || '')}" disabled style="width:100%;min-width:150px;background:#f7f7f7;" /></td>
-        <td><button class="btn-danger trainer-remove-person" style="padding:6px 8px;">🧑‍💻</button></td>
+        <td><input type="text" value="${escapeHtml(att.memberNote || '')}" disabled style="width:100%;min-width:150px;background:var(--color-surface-offset);" /></td>
+        <td>
+          <button class="btn-danger trainer-remove-person" style="padding:6px 8px;display:inline-flex;align-items:center;gap:4px;" title="Entfernen">
+            <span class="material-icons" style="font-size:16px;">person_remove</span>
+          </button>
+        </td>
       `;
 
       const selectEl = tr.querySelector('.trainer-status-select');
@@ -401,14 +449,14 @@ function renderTrainerNeedCard(needed, reached) {
 
 function renderTrainerStatusChip(status) {
   const map = {
-    registered: ['Angemeldet', 'chip-primary'],
-    confirmation_pending: ['Ausstehend', 'chip-warning'],
-    present: ['Anwesend', 'chip-success'],
-    absent_excused: ['Abgemeldet', 'chip-error'],
-    absent_unexcused: ['Unentschuldigt', 'chip-error'],
-    late_excused: ['Verspätet (entsch.)', 'chip-warning'],
-    late_unexcused: ['Verspätet (unentsch.)', 'chip-warning'],
-    cancelled: ['Termin abgesagt', 'chip-error']
+    registered:           ['Angemeldet',            'chip-primary'],
+    confirmation_pending: ['Ausstehend',             'chip-warning'],
+    present:              ['Anwesend',               'chip-success'],
+    absent_excused:       ['Abgemeldet',             'chip-error'],
+    absent_unexcused:     ['Unentschuldigt',         'chip-error'],
+    late_excused:         ['Verspätet (entsch.)',    'chip-warning'],
+    late_unexcused:       ['Verspätet (unentsch.)', 'chip-warning'],
+    cancelled:            ['Termin abgesagt',        'chip-error']
   };
   const [label, cls] = map[status] || [status, ''];
   return `<span class="chip ${cls}">${label}</span>`;
