@@ -325,7 +325,13 @@ async function renderScheduleTab(el) {
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
         <h3 style="margin:0;">Termine</h3>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button id="sch-delete-selected" class="btn-danger" hidden style="padding:6px 14px;">Ausgewählte löschen</button>
+          <div id="bulk-actions" style="display:none;gap:6px;align-items:center;">
+            <span id="bulk-count" style="font-size:0.85rem;color:var(--color-text-muted);white-space:nowrap;"></span>
+            <button id="sch-skip-selected" class="btn-secondary" style="padding:6px 14px;display:inline-flex;align-items:center;gap:4px;">
+              <span class="material-icons" style="font-size:16px;">event_busy</span> Ausfallen lassen
+            </button>
+            <button id="sch-delete-selected" class="btn-danger" style="padding:6px 14px;">Löschen</button>
+          </div>
           <div style="display:flex;border:1px solid var(--color-border);border-radius:6px;overflow:hidden;">
             <button id="view-list"     class="view-toggle-btn ${scheduleViewMode==='list'    ?'active':''}"><span class="material-icons" style="font-size:16px;vertical-align:middle;">list</span> Liste</button>
             <button id="view-calendar" class="view-toggle-btn ${scheduleViewMode==='calendar'?'active':''}"><span class="material-icons" style="font-size:16px;vertical-align:middle;">calendar_month</span> Kalender</button>
@@ -335,10 +341,14 @@ async function renderScheduleTab(el) {
       </div>
       <div id="schedule-content"></div>`;
 
-    const contentEl    = el.querySelector('#schedule-content');
-    const deleteSelBtn = el.querySelector('#sch-delete-selected');
-    const renderView   = () => scheduleViewMode === 'list'
-      ? renderEventList(contentEl, events, groups, el, deleteSelBtn)
+    const contentEl  = el.querySelector('#schedule-content');
+    const bulkBar    = el.querySelector('#bulk-actions');
+    const bulkCount  = el.querySelector('#bulk-count');
+    const skipSelBtn = el.querySelector('#sch-skip-selected');
+    const delSelBtn  = el.querySelector('#sch-delete-selected');
+
+    const renderView = () => scheduleViewMode === 'list'
+      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, delSelBtn)
       : renderCalendarView(contentEl, events, groups, el);
 
     el.querySelector('#view-list').onclick = () => { scheduleViewMode='list'; el.querySelector('#view-list').classList.add('active'); el.querySelector('#view-calendar').classList.remove('active'); renderView(); };
@@ -348,7 +358,121 @@ async function renderScheduleTab(el) {
   } catch (e) { console.error(e); el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>'; }
 }
 
-function renderEventList(el, events, groups, parentEl, deleteSelBtn) {
+/* ── Hilfsfunktion: gibt alle Ereignisse einer recurrenceGroup zurück,
+   sortiert nach startTime aufsteigend ── */
+function getSeriesEvents(allEvents, recurrenceGroup) {
+  return allEvents
+    .filter(e => e.recurrenceGroup === recurrenceGroup)
+    .sort((a,b) => (a.startTime?.toMillis?.()??0) - (b.startTime?.toMillis?.()??0));
+}
+
+/* ── Wiederholungs-Scope-Dialog ──────────────────────────────────────────────
+   Zeigt einen Dialog mit den Optionen:
+     'single'    – Nur diesen Termin
+     'following' – Diesen und alle nachfolgenden
+     'all'       – Alle Termine der Serie
+   Gibt den gewählten Scope als Promise<string|null> zurück (null = abgebrochen).
+*/
+function askRecurrenceScope(extraOption) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+      position:'fixed', inset:'0', backgroundColor:'rgba(0,0,0,0.55)',
+      display:'flex', alignItems:'center', justifyContent:'center', zIndex:10100
+    });
+
+    const options = [
+      { value:'single',    label:'Nur diesen Termin' },
+      { value:'following', label:'Diesen und alle nachfolgenden Termine' },
+      { value:'all',       label:'Alle Termine der Serie' },
+    ];
+    if (extraOption) options.push(extraOption);
+
+    overlay.innerHTML = `
+      <div style="background:var(--color-surface);border-radius:12px;width:min(460px,95vw);box-shadow:0 8px 40px rgba(0,0,0,0.35);overflow:hidden;">
+        <div style="padding:20px 24px 14px;border-bottom:1px solid var(--color-border);">
+          <h3 style="margin:0;">Wiederholungstermin bearbeiten</h3>
+          <p class="text-muted" style="margin:6px 0 0;font-size:0.88rem;">Dieser Termin ist Teil einer Serie. Für welche Termine soll die Änderung gelten?</p>
+        </div>
+        <div style="padding:16px 24px;display:flex;flex-direction:column;gap:10px;">
+          ${options.map(o => `
+            <label style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;border:1px solid var(--color-border);cursor:pointer;background:var(--color-bg);">
+              <input type="radio" name="rec-scope" value="${o.value}" style="width:17px;height:17px;flex-shrink:0;margin-bottom:0;" />
+              <span>${o.label}</span>
+            </label>`).join('')}
+        </div>
+        <div style="padding:14px 24px 20px;display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--color-border);">
+          <button id="rsd-cancel" class="btn-secondary">Abbrechen</button>
+          <button id="rsd-confirm" class="btn-primary">Übernehmen</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    // Erste Option vorauswählen
+    overlay.querySelector('input[name="rec-scope"]').checked = true;
+
+    overlay.querySelector('#rsd-cancel').onclick = () => { overlay.remove(); resolve(null); };
+    overlay.querySelector('#rsd-confirm').onclick = () => {
+      const val = overlay.querySelector('input[name="rec-scope"]:checked')?.value || null;
+      overlay.remove();
+      resolve(val);
+    };
+    overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+  });
+}
+
+/* ── Bulk-Ausfallen-Dialog ───────────────────────────────────────────────────
+   Öffnet einen Dialog mit Begründungsfeld und setzt status='skipped' für alle
+   übergebenen Termine.
+*/
+function confirmSkipEvents(eventsToSkip, allEvents, groups, parentEl) {
+  const recGroups    = [...new Set(eventsToSkip.filter(e=>e.recurrenceGroup).map(e=>e.recurrenceGroup))];
+  const hasRecurrence = recGroups.length > 0;
+
+  showModal({
+    title: 'Termine als ausgefallen markieren',
+    body: `
+      <p><strong>${eventsToSkip.length}</strong> Termin(e) werden als ausgefallen markiert:</p>
+      <ul style="font-size:0.9rem;max-height:130px;overflow-y:auto;padding-left:18px;margin:8px 0 12px;">
+        ${eventsToSkip.slice(0,8).map(e=>`<li>${e.title||'Termin'} – ${e.startTime?.toDate?formatDateTime(e.startTime.toDate()):''}</li>`).join('')}
+        ${eventsToSkip.length>8?`<li>... und ${eventsToSkip.length-8} weitere</li>`:''}
+      </ul>
+      <label>Begründung (optional, für alle ausgewählten Termine)</label>
+      <input type="text" id="bulk-skip-reason" placeholder="z.B. Feiertag, kein Betreuer verfügbar..." />
+      ${hasRecurrence ? `
+        <div style="margin-top:12px;background:var(--color-bg);border-radius:8px;padding:12px;border:1px solid var(--color-border);">
+          <p style="margin:0 0 8px;font-weight:500;font-size:0.9rem;">Wiederholungstermine in der Auswahl:</p>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--color-text);"><input type="radio" name="skip-scope" value="selected" checked /> Nur ausgewählte (${eventsToSkip.length})</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--color-text);margin-top:6px;"><input type="radio" name="skip-scope" value="all-recurrence" /> Alle Wiederholungen der betroffenen Serien</label>
+        </div>` : ''}
+    `,
+    confirmLabel: 'Ausfallen lassen',
+    onConfirm: async () => {
+      const reason = document.getElementById('bulk-skip-reason')?.value.trim() || '';
+      let toSkip = [...eventsToSkip];
+      if (hasRecurrence && document.querySelector('input[name="skip-scope"]:checked')?.value === 'all-recurrence') {
+        toSkip = allEvents.filter(e => recGroups.includes(e.recurrenceGroup));
+        eventsToSkip.filter(e=>!e.recurrenceGroup).forEach(e => { if (!toSkip.find(t=>t.id===e.id)) toSkip.push(e); });
+      }
+      for (let i=0; i<toSkip.length; i+=499) {
+        const b = firestore.batch();
+        toSkip.slice(i,i+499).forEach(e => {
+          b.update(firestore.collection('events').doc(e.id), {
+            status: 'skipped',
+            skipReason: reason || firebase.firestore.FieldValue.delete(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+        await b.commit();
+      }
+      showToast(`${toSkip.length} Termin(e) als ausgefallen markiert.`, 'success');
+      renderScheduleTab(parentEl);
+    }
+  });
+}
+
+function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, delSelBtn) {
   if (!events.length) { el.innerHTML = '<p class="text-muted">Keine Termine vorhanden.</p>'; return; }
   const sorted = [...events].sort((a,b) => (a.startTime?.toMillis?.()??0) - (b.startTime?.toMillis?.()??0));
   el.innerHTML = `
@@ -368,7 +492,7 @@ function renderEventList(el, events, groups, parentEl, deleteSelBtn) {
               <td style="white-space:nowrap;">${s?formatDateTime(s):'–'}</td>
               <td>${g}</td>
               <td><span class="chip ${ev.status==='cancelled'?'chip-error':ev.status==='skipped'?'chip-warning':'chip-success'}">${ev.status==='cancelled'?'Abgesagt':ev.status==='skipped'?'Ausgefallen':'geplant'}</span></td>
-              <td>${ev.recurrence&&ev.recurrence!=='none'?ev.recurrence:'–'}</td>
+              <td>${ev.recurrenceGroup?`<span class="chip" style="font-size:0.78rem;">Serie</span>`:'–'}</td>
               <td style="white-space:nowrap;">
                 <button class="btn-secondary" data-action="edit" data-id="${ev.id}" style="padding:3px 10px;">Bearbeiten</button>
                 <button class="btn-danger" data-action="del" data-id="${ev.id}" style="padding:3px 10px;margin-left:4px;">Löschen</button>
@@ -379,12 +503,35 @@ function renderEventList(el, events, groups, parentEl, deleteSelBtn) {
       </table>
     </div>`;
 
+  const updateBulkBar = () => {
+    const checked = [...el.querySelectorAll('.ev-cb:checked')];
+    if (checked.length > 0) {
+      bulkBar.style.display = 'flex';
+      bulkCount.textContent = `${checked.length} ausgewählt`;
+    } else {
+      bulkBar.style.display = 'none';
+      bulkCount.textContent = '';
+    }
+    const selAll = el.querySelector('#sel-all');
+    const all    = [...el.querySelectorAll('.ev-cb')];
+    selAll.checked       = all.length > 0 && all.every(c=>c.checked);
+    selAll.indeterminate = !selAll.checked && all.some(c=>c.checked);
+  };
+
   const selAll = el.querySelector('#sel-all');
-  selAll.onchange = () => { el.querySelectorAll('.ev-cb').forEach(c => c.checked=selAll.checked); deleteSelBtn.hidden=!selAll.checked; };
-  el.querySelectorAll('.ev-cb').forEach(cb => { cb.onchange = () => { const cbs=[...el.querySelectorAll('.ev-cb')]; deleteSelBtn.hidden=!cbs.some(c=>c.checked); selAll.checked=cbs.every(c=>c.checked); }; });
+  selAll.onchange = () => { el.querySelectorAll('.ev-cb').forEach(c => c.checked=selAll.checked); updateBulkBar(); };
+  el.querySelectorAll('.ev-cb').forEach(cb => { cb.onchange = updateBulkBar; });
   el.querySelectorAll('[data-action="edit"]').forEach(btn => btn.onclick = () => showEventForm(events.find(e=>e.id===btn.dataset.id), groups, parentEl));
   el.querySelectorAll('[data-action="del"]').forEach(btn  => btn.onclick = () => confirmDeleteEvents([events.find(e=>e.id===btn.dataset.id)], events, groups, parentEl));
-  deleteSelBtn.onclick = () => { const ids=[...el.querySelectorAll('.ev-cb:checked')].map(c=>c.dataset.id); confirmDeleteEvents(events.filter(e=>ids.includes(e.id)), events, groups, parentEl); };
+
+  skipSelBtn.onclick = () => {
+    const ids = [...el.querySelectorAll('.ev-cb:checked')].map(c=>c.dataset.id);
+    confirmSkipEvents(events.filter(e=>ids.includes(e.id)), events, groups, parentEl);
+  };
+  delSelBtn.onclick = () => {
+    const ids = [...el.querySelectorAll('.ev-cb:checked')].map(c=>c.dataset.id);
+    confirmDeleteEvents(events.filter(e=>ids.includes(e.id)), events, groups, parentEl);
+  };
 }
 
 function confirmDeleteEvents(eventsToDelete, allEvents, groups, parentEl) {
@@ -440,7 +587,7 @@ function renderCalendarView(el, events, groups, parentEl) {
     const isToday=today.getFullYear()===year&&today.getMonth()===month&&today.getDate()===day;
     const de=byDay[day]||[];
     const pills=de.slice(0,3).map(ev=>`<div class="cal-event-pill" data-ev-id="${ev.id}" style="font-size:0.72rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:3px;padding:1px 5px;margin-bottom:1px;cursor:pointer;background:${ev.status==='cancelled'?'var(--color-error)':ev.status==='skipped'?'var(--color-warning)':'var(--color-primary)'};color:#fff;">${ev.title||'Termin'}</div>`).join('');
-    const more=de.length>3?`<div style="font-size:0.7rem;color:var(--color-text-muted);">+${de.length-3} mehr</div>`:"";
+    const more=de.length>3?`<div style="font-size:0.7rem;color:var(--color-text-muted);">+${de.length-3} mehr</div>`:'';
     html+=`<div style="min-height:90px;border:1px solid var(--color-border);border-radius:6px;padding:4px;background:${isToday?'rgba(21,101,192,0.07)':'var(--color-surface)'};">
       <div style="font-size:0.82rem;font-weight:${isToday?700:400};color:${isToday?'var(--color-primary)':'var(--color-text)'};margin-bottom:3px;">${day}</div>
       ${pills}${more}
@@ -461,6 +608,18 @@ async function showEventForm(event, groups, parentEl) {
   const allTrainers = window._allTrainers || [];
   const selTrainers = new Set(event?.trainers || []);
   const teacherLabel = getRoleLabel('teacher');
+  const isPartOfSeries = !isNew && !!event?.recurrenceGroup;
+
+  // Alle Events der gleichen Serie für Scope-Operationen vorladen
+  let seriesEvents = [];
+  if (isPartOfSeries) {
+    try {
+      const serSnap = await firestore.collection('events')
+        .where('recurrenceGroup', '==', event.recurrenceGroup).get();
+      serSnap.forEach(doc => seriesEvents.push({ id: doc.id, ...doc.data() }));
+      seriesEvents.sort((a,b) => (a.startTime?.toMillis?.()??0) - (b.startTime?.toMillis?.()??0));
+    } catch(e) { console.error('Serie laden:', e); }
+  }
 
   const trainerListHtml = allTrainers.length
     ? allTrainers.map(t => `
@@ -476,6 +635,10 @@ async function showEventForm(event, groups, parentEl) {
   showModal({
     title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
     body: `
+      ${isPartOfSeries ? `<div style="background:rgba(21,101,192,0.07);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:8px;font-size:0.88rem;color:var(--color-primary);">
+        <span class="material-icons" style="font-size:17px;">repeat</span>
+        Dieser Termin ist Teil einer Wiederholungsserie (${seriesEvents.length} Termine). Beim Speichern wird gefragt, für welche Termine die Änderungen gelten sollen.
+      </div>` : ''}
       <label>Titel</label><input type="text" id="ef-title" value="${event?.title||''}" />
       <label>Beschreibung</label><textarea id="ef-desc" rows="2">${event?.description||''}</textarea>
       <label>Start</label><input type="datetime-local" id="ef-start" value="${startVal}" />
@@ -512,12 +675,21 @@ async function showEventForm(event, groups, parentEl) {
         <hr class="divider" />
         <div style="background:rgba(245,124,0,0.07);border-radius:8px;padding:12px;border:1px solid var(--color-warning,#f57c00);">
           <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#f57c00);display:flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:18px;">block</span> Termin ausfallen lassen</p>
-          <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Mitglieder sehen den Termin als ausgefallen (anders als "Abgesagt" bleibt er sichtbar ohne Anmeldung).</p>
+          <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Mitglieder sehen den Termin als ausgefallen.</p>
           <label>Begründung (optional)</label>
           <input type="text" id="ef-skip-reason" placeholder="z.B. Feiertag, kein ${teacherLabel} verfügbar..." value="${event?.skipReason||''}" />
-          <button type="button" class="btn-danger" id="ef-skip-btn" style="margin-top:0;padding:6px 16px;">
-            ${event?.status==='skipped' ? 'Ausgefallen-Status aufheben' : 'Termin als ausgefallen markieren'}
-          </button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+            <button type="button" class="btn-danger" id="ef-skip-btn" style="padding:6px 16px;">
+              ${event?.status==='skipped' ? 'Ausgefallen-Status aufheben' : 'Termin als ausgefallen markieren'}
+            </button>
+            ${isPartOfSeries && event?.status !== 'skipped' ? `
+              <button type="button" class="btn-danger" id="ef-skip-following-btn" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;">
+                <span class="material-icons" style="font-size:15px;">event_busy</span> Diesen + nachfolgende ausfallen
+              </button>
+              <button type="button" class="btn-secondary" id="ef-delete-following-btn" style="padding:6px 16px;display:inline-flex;align-items:center;gap:4px;color:var(--color-error);">
+                <span class="material-icons" style="font-size:15px;">delete_sweep</span> Nachfolgende löschen
+              </button>` : ''}
+          </div>
         </div>` : ''}
     `,
     confirmLabel: isNew ? 'Anlegen' : 'Speichern',
@@ -536,7 +708,14 @@ async function showEventForm(event, groups, parentEl) {
       if (!title||!startStr) { showToast('Titel und Startzeit erforderlich.','error'); return false; }
       const startTs = firebase.firestore.Timestamp.fromDate(new Date(startStr));
       const endTs   = endStr ? firebase.firestore.Timestamp.fromDate(new Date(endStr)) : null;
-      const data = { title, description:desc||'', startTime:startTs, endTime:endTs, groupId, trainers, minParticipants:minPart, signupDeadlineMinutes:deadline, mode, recurrence, recurrenceEnd:recEnd, status:event?.status||'planned', directMembers:event?.directMembers||[], updatedAt:firebase.firestore.FieldValue.serverTimestamp() };
+      const data = {
+        title, description:desc||'', startTime:startTs, endTime:endTs, groupId, trainers,
+        minParticipants:minPart, signupDeadlineMinutes:deadline, mode, recurrence,
+        recurrenceEnd:recEnd, status:event?.status||'planned',
+        directMembers:event?.directMembers||[],
+        updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+      };
+
       if (isNew) {
         data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
         if (recurrence!=='none'&&recEnd) {
@@ -544,8 +723,60 @@ async function showEventForm(event, groups, parentEl) {
           const batch=firestore.batch(); const rgId=`rg_${Date.now()}`;
           instances.forEach(({start,end})=>{ const ref=firestore.collection('events').doc(); batch.set(ref,{...data,startTime:firebase.firestore.Timestamp.fromDate(start),endTime:end?firebase.firestore.Timestamp.fromDate(end):null,recurrenceGroup:rgId}); });
           await batch.commit(); showToast(`${instances.length} Wiederholungstermine angelegt.`,'success');
-        } else { await firestore.collection('events').add(data); showToast('Termin angelegt.','success'); }
-      } else { await firestore.collection('events').doc(event.id).update(data); showToast('Termin aktualisiert.','success'); }
+        } else {
+          await firestore.collection('events').add(data);
+          showToast('Termin angelegt.','success');
+        }
+        renderScheduleTab(parentEl);
+        return;
+      }
+
+      // ── Bestehendes Event: Scope-Dialog wenn Serie
+      if (isPartOfSeries) {
+        const scope = await askRecurrenceScope();
+        if (!scope) return false; // Abgebrochen
+
+        const eventStartMs = event.startTime?.toMillis?.() ?? 0;
+
+        if (scope === 'single') {
+          await firestore.collection('events').doc(event.id).update(data);
+          showToast('Termin aktualisiert (nur dieser Termin).','success');
+
+        } else if (scope === 'following') {
+          const toUpdate = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) >= eventStartMs);
+          const diffMs   = new Date(startStr).getTime() - event.startTime.toDate().getTime();
+          const batch    = firestore.batch();
+          toUpdate.forEach(e => {
+            const newStart = new Date(e.startTime.toDate().getTime() + diffMs);
+            const newEnd   = e.endTime ? new Date(e.endTime.toDate().getTime() + diffMs) : null;
+            batch.update(firestore.collection('events').doc(e.id), {
+              ...data,
+              startTime: firebase.firestore.Timestamp.fromDate(newStart),
+              endTime:   newEnd ? firebase.firestore.Timestamp.fromDate(newEnd) : null
+            });
+          });
+          await batch.commit();
+          showToast(`${toUpdate.length} Termin(e) aktualisiert (dieser + nachfolgende).`,'success');
+
+        } else if (scope === 'all') {
+          const diffMs = new Date(startStr).getTime() - event.startTime.toDate().getTime();
+          const batch  = firestore.batch();
+          seriesEvents.forEach(e => {
+            const newStart = new Date(e.startTime.toDate().getTime() + diffMs);
+            const newEnd   = e.endTime ? new Date(e.endTime.toDate().getTime() + diffMs) : null;
+            batch.update(firestore.collection('events').doc(e.id), {
+              ...data,
+              startTime: firebase.firestore.Timestamp.fromDate(newStart),
+              endTime:   newEnd ? firebase.firestore.Timestamp.fromDate(newEnd) : null
+            });
+          });
+          await batch.commit();
+          showToast(`${seriesEvents.length} Termin(e) der Serie aktualisiert.`,'success');
+        }
+      } else {
+        await firestore.collection('events').doc(event.id).update(data);
+        showToast('Termin aktualisiert.','success');
+      }
       renderScheduleTab(parentEl);
     }
   });
@@ -565,21 +796,98 @@ async function showEventForm(event, groups, parentEl) {
       });
     }
 
+    // ── Ausfallen-Button (einzelner Termin / ganzer Scope)
     const skipBtn = document.getElementById('ef-skip-btn');
     if (skipBtn) {
       skipBtn.onclick = async () => {
-        const reason = document.getElementById('ef-skip-reason')?.value.trim() || '';
+        const reason    = document.getElementById('ef-skip-reason')?.value.trim() || '';
         const isSkipped = event?.status === 'skipped';
-        try {
+
+        if (!isSkipped && isPartOfSeries) {
+          const scope = await askRecurrenceScope();
+          if (!scope) return;
+          const eventStartMs = event.startTime?.toMillis?.() ?? 0;
+
+          if (scope === 'single') {
+            await firestore.collection('events').doc(event.id).update({
+              status: 'skipped', skipReason: reason || firebase.firestore.FieldValue.delete(),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          } else if (scope === 'following') {
+            const toSkip = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) >= eventStartMs);
+            const batch  = firestore.batch();
+            toSkip.forEach(e => batch.update(firestore.collection('events').doc(e.id), {
+              status: 'skipped', skipReason: reason || firebase.firestore.FieldValue.delete(),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            }));
+            await batch.commit();
+            showToast(`${toSkip.length} Termin(e) als ausgefallen markiert.`, 'success');
+          } else if (scope === 'all') {
+            const batch = firestore.batch();
+            seriesEvents.forEach(e => batch.update(firestore.collection('events').doc(e.id), {
+              status: 'skipped', skipReason: reason || firebase.firestore.FieldValue.delete(),
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            }));
+            await batch.commit();
+            showToast(`${seriesEvents.length} Termin(e) als ausgefallen markiert.`, 'success');
+          }
+        } else {
           await firestore.collection('events').doc(event.id).update({
             status:     isSkipped ? 'planned' : 'skipped',
             skipReason: isSkipped ? firebase.firestore.FieldValue.delete() : reason,
             updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
           });
           showToast(isSkipped ? 'Ausgefallen-Status aufgehoben.' : 'Termin als ausgefallen markiert.', 'success');
-          document.querySelector('.modal-overlay')?.remove();
-          renderScheduleTab(parentEl);
-        } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
+        }
+
+        document.querySelector('.modal-overlay')?.remove();
+        renderScheduleTab(parentEl);
+      };
+    }
+
+    // ── "Diesen + nachfolgende ausfallen lassen"
+    const skipFollowingBtn = document.getElementById('ef-skip-following-btn');
+    if (skipFollowingBtn && isPartOfSeries) {
+      skipFollowingBtn.onclick = async () => {
+        const reason       = document.getElementById('ef-skip-reason')?.value.trim() || '';
+        const eventStartMs = event.startTime?.toMillis?.() ?? 0;
+        const toSkip       = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) >= eventStartMs);
+        const batch        = firestore.batch();
+        toSkip.forEach(e => batch.update(firestore.collection('events').doc(e.id), {
+          status: 'skipped', skipReason: reason || firebase.firestore.FieldValue.delete(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }));
+        await batch.commit();
+        showToast(`${toSkip.length} Termin(e) als ausgefallen markiert.`, 'success');
+        document.querySelector('.modal-overlay')?.remove();
+        renderScheduleTab(parentEl);
+      };
+    }
+
+    // ── "Nachfolgende löschen"
+    const deleteFollowingBtn = document.getElementById('ef-delete-following-btn');
+    if (deleteFollowingBtn && isPartOfSeries) {
+      deleteFollowingBtn.onclick = () => {
+        const eventStartMs  = event.startTime?.toMillis?.() ?? 0;
+        // "Nachfolgende" = alle NACH diesem Termin (dieser selbst bleibt)
+        const toDelete      = seriesEvents.filter(e => (e.startTime?.toMillis?.()??0) > eventStartMs);
+        if (!toDelete.length) { showToast('Keine nachfolgenden Termine gefunden.', 'warning'); return; }
+        showModal({
+          title: 'Nachfolgende Termine löschen',
+          body: `<p>Es werden <strong>${toDelete.length}</strong> nachfolgende Termin(e) dieser Serie endgültig gelöscht. Dieser Termin bleibt erhalten.</p>
+                 <p class="text-muted">Diese Aktion kann nicht rückgängig gemacht werden.</p>`,
+          confirmLabel: 'Löschen',
+          onConfirm: async () => {
+            for (let i=0; i<toDelete.length; i+=499) {
+              const b = firestore.batch();
+              toDelete.slice(i,i+499).forEach(e => b.delete(firestore.collection('events').doc(e.id)));
+              await b.commit();
+            }
+            showToast(`${toDelete.length} nachfolgende Termin(e) gelöscht.`, 'success');
+            document.querySelector('.modal-overlay')?.remove();
+            renderScheduleTab(parentEl);
+          }
+        });
       };
     }
   }, 50);
