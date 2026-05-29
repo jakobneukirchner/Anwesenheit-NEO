@@ -25,14 +25,26 @@ function showApp() {
 /* ─── Auto-Refresh ──────────────────────────────────────────────────────────── */
 let _autoRefreshTimer = null;
 
+/**
+ * Startet den Auto-Refresh-Timer.
+ * Beim Tick wird window._silentRefresh = true gesetzt, damit alle
+ * Dashboard-Loader wissen, dass sie KEIN Loading-Overlay zeigen
+ * und KEINE Textfelder leeren sollen.
+ */
 function startAutoRefresh(seconds) {
   stopAutoRefresh();
   const ms = parseInt(seconds) * 1000;
-  if (!ms || ms < 5000) return;  // 0 oder < 5 s → deaktiviert
+  if (!ms || ms < 5000) return;
   _autoRefreshTimer = setInterval(() => {
     if (!window.currentUser) return;
-    // Nur aktiven Dashboard-Inhalt neu laden – Shell bleibt unangetastet
-    routeToDashboard(window.currentUser.roles, window.currentDashboardRole);
+    window._silentRefresh = true;
+    try {
+      routeToDashboard(window.currentUser.roles, window.currentDashboardRole);
+    } finally {
+      // Flag wird nach dem synchronen Teil zurückgesetzt;
+      // async-Teile prüfen es selbst.
+      window._silentRefresh = false;
+    }
   }, ms);
 }
 
@@ -94,7 +106,6 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
 
   try { await applyBranding(); } catch(e) { console.warn('applyBranding Fehler:', e); }
 
-  // Auto-Refresh mit gespeichertem Wert starten
   startAutoRefresh(window.appSettings?.autoRefreshSeconds ?? 0);
 
   routeToDashboard(window.currentUser.roles);
@@ -129,7 +140,8 @@ const MY_MEMBERS_ROLES = ['admin', 'coordinator', 'teacher'];
 function routeToDashboard(roles, forceRole) {
   const role = forceRole || getPrimaryRole(roles);
   window.currentDashboardRole = role;
-  renderDashboardSwitcher(roles);
+  // Beim stillen Refresh keinen neuen Switcher bauen (würde flackern)
+  if (!window._silentRefresh) renderDashboardSwitcher(roles);
   (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
 }
 

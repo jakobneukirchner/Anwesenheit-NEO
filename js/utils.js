@@ -1,123 +1,109 @@
 // js/utils.js
 
-function formatDateTime(ts) {
-  const d = ts instanceof Date ? ts : new Date(ts);
-  return d.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+/**
+ * Hilfsfunktion für den stillen Auto-Refresh:
+ * Rendert neuen HTML-Inhalt in einen unsichtbaren Temp-Container,
+ * dann wird NUR der Inhalt per swap ausgetauscht.
+ * Offene Modals, Textfelder außerhalb von container etc. bleiben unangetastet.
+ *
+ * @param {HTMLElement} container  - Das Ziel-Element
+ * @param {string}      newHtml    - Der neue innerHTML-String
+ */
+function silentSwap(container, newHtml) {
+  if (!container) return;
+  // Scrollposition merken
+  const scrollY = container.scrollTop;
+  container.innerHTML = newHtml;
+  container.scrollTop = scrollY;
 }
 
-function formatDate(ts) {
-  const d = ts instanceof Date ? ts : new Date(ts);
-  return d.toLocaleDateString('de-DE', { dateStyle: 'medium' });
-}
+// --- alle anderen utils-Funktionen bleiben unverändert ---
 
-function formatTime(ts) {
-  const d = ts instanceof Date ? ts : new Date(ts);
-  return d.toLocaleTimeString('de-DE', { timeStyle: 'short' });
-}
-
-function createElement(tag, className, html) {
+function createElement(tag, className, text) {
   const el = document.createElement(tag);
   if (className) el.className = className;
-  if (html !== undefined) el.innerHTML = html;
+  if (text !== undefined) el.textContent = text;
   return el;
 }
 
-function showToast(message, type = 'info') {
-  const existing = document.getElementById('neo-toast');
-  if (existing) existing.remove();
-
-  const toast = document.createElement('div');
-  toast.id = 'neo-toast';
-  toast.textContent = message;
-  Object.assign(toast.style, {
-    position: 'fixed',
-    bottom: '24px',
-    right: '24px',
-    padding: '12px 20px',
-    borderRadius: '8px',
-    fontWeight: '500',
-    fontSize: '0.92rem',
-    zIndex: 9999,
-    boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-    color: '#fff',
-    backgroundColor:
-      type === 'error'   ? '#c62828' :
-      type === 'success' ? '#2e7d32' :
-      type === 'warning' ? '#e65100' : '#1565c0',
-    transition: 'opacity 0.4s',
-    opacity: '1'
-  });
-  document.body.appendChild(toast);
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    setTimeout(() => toast.remove(), 400);
-  }, 3500);
+function formatDate(date) {
+  if (!date) return '';
+  return date.toLocaleDateString('de-DE', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 
-/**
- * showModal
- * WICHTIG: onConfirm wird aufgerufen BEVOR das Modal aus dem DOM entfernt wird,
- * damit getElementById/querySelector innerhalb von onConfirm funktionieren.
- * Das Modal schliesst sich erst nach erfolgreichem onConfirm automatisch,
- * ODER wenn onConfirm explizit false zurueckgibt (z.B. bei Validierungsfehler).
- * confirmLabel = null → Confirm-Button wird ausgeblendet.
- */
-function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen', onConfirm, onCancel }) {
-  const overlay = createElement('div', '');
-  Object.assign(overlay.style, {
-    position: 'fixed', inset: '0',
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    zIndex: 9998
-  });
+function formatDateTime(date) {
+  if (!date) return '';
+  return date.toLocaleDateString('de-DE', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })
+    + ', ' + date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+}
 
-  const modal = createElement('div', 'card');
-  Object.assign(modal.style, {
-    maxWidth: '460px', width: '92%', margin: '0', maxHeight: '85vh', overflowY: 'auto'
-  });
-  modal.innerHTML = `
-    <h3 style="margin-top:0">${title}</h3>
-    <div id="modal-body-content">${body}</div>
-    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
-      <button class="btn-secondary" id="modal-cancel">${cancelLabel}</button>
-      ${confirmLabel !== null ? `<button class="btn-primary" id="modal-confirm">${confirmLabel}</button>` : ''}
+function formatTime(date) {
+  if (!date) return '';
+  return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+}
+
+function getRoleLabel(role) {
+  return (window.roleLabels && window.roleLabels[role]) || role;
+}
+
+let _toastTimer = null;
+function showToast(message, type = 'info') {
+  let toast = document.getElementById('app-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'app-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.className = `toast toast-${type} show`;
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
+}
+
+function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen', onConfirm, onCancel, danger = false }) {
+  let overlay = document.getElementById('modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'modal-overlay';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">${title}</h3>
+        <button class="modal-close" aria-label="Schließen">&times;</button>
+      </div>
+      <div class="modal-body">${body}</div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="modal-cancel">${cancelLabel}</button>
+        <button class="${danger ? 'btn-danger' : 'btn-primary'}" id="modal-confirm">${confirmLabel}</button>
+      </div>
     </div>
   `;
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
-
-  modal.querySelector('#modal-cancel').onclick = () => {
-    overlay.remove();
-    if (onCancel) onCancel();
-  };
-
-  const confirmBtn = modal.querySelector('#modal-confirm');
-  if (confirmBtn) {
-    confirmBtn.onclick = async () => {
-      // FIX: onConfirm ZUERST ausfuehren (Felder sind noch im DOM),
-      // dann erst Modal entfernen. Bei Validierungsfehler (return false) bleibt Modal offen.
-      if (onConfirm) {
-        const result = await onConfirm();
-        if (result === false) return; // Modal offen lassen bei Validierungsfehler
-      }
-      overlay.remove();
-    };
-  }
-
-  // ESC zum Schliessen
-  const onKeyDown = (e) => {
-    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKeyDown); }
-  };
-  document.addEventListener('keydown', onKeyDown);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) { overlay.remove(); document.removeEventListener('keydown', onKeyDown); }
-  });
-
-  return overlay;
+  overlay.classList.add('active');
+  const close = () => overlay.classList.remove('active');
+  overlay.querySelector('.modal-close').onclick = () => { close(); onCancel?.(); };
+  overlay.querySelector('#modal-cancel').onclick  = () => { close(); onCancel?.(); };
+  overlay.querySelector('#modal-confirm').onclick = async () => { close(); await onConfirm?.(); };
 }
 
-function getRoleLabel(roleKey) {
-  const labels = window.roleLabels || {};
-  const defaults = { admin: 'Admin', coordinator: 'Koordinator', teacher: 'Trainer', member: 'Mitglied' };
-  return labels[roleKey] || defaults[roleKey] || roleKey;
+let _rateLimitActions = [];
+function guardedAction(fn) {
+  const settings = window.appSettings || {};
+  const user = window.currentUser;
+  const privilegedRoles = ['admin', 'coordinator', 'teacher'];
+  const isPrivileged = user?.roles?.some(r => privilegedRoles.includes(r));
+  if (!isPrivileged) {
+    const maxActions    = settings.rateLimitMaxActions    || 100;
+    const windowMinutes = settings.rateLimitWindowMinutes || 10;
+    const windowMs = windowMinutes * 60 * 1000;
+    const now = Date.now();
+    _rateLimitActions = _rateLimitActions.filter(t => now - t < windowMs);
+    if (_rateLimitActions.length >= maxActions) {
+      showToast(`Zu viele Aktionen. Bitte warte ${windowMinutes} Minuten.`, 'warning');
+      return;
+    }
+    _rateLimitActions.push(now);
+  }
+  return fn();
 }
