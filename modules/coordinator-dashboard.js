@@ -19,7 +19,7 @@ async function loadCoordinatorDashboard() {
     <div id="tab-settings" hidden></div>
     <div id="tab-messages" hidden></div>
   `;
-  const tabs   = { users: null, groups: null, schedule: null, settings: null, messages: null };
+  const tabs   = { users: null, groups: null, schedule: null, settings: null, messages: null};
   const tabEls = {
     users:    document.getElementById('tab-users'),
     groups:   document.getElementById('tab-groups'),
