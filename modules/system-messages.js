@@ -23,11 +23,37 @@ const MSG_TYPES = {
       font-size: 0.88rem;
       line-height: 1.4;
       border-bottom: 2px solid transparent;
-      transition: background 0.2s, border-color 0.2s;
+      transition: padding 0.4s cubic-bezier(0.16,1,0.3,1),
+                  font-size 0.4s cubic-bezier(0.16,1,0.3,1),
+                  background 0.2s, border-color 0.2s;
       position: relative;
       flex-wrap: wrap;
     }
-    #sys-msg-banner .smb-icon { font-size: 20px; flex-shrink: 0; }
+
+    /* Hervorgehoben: Banner wird vorübergehend groß */
+    #sys-msg-banner.smb-highlight {
+      padding: 18px 20px;
+      font-size: 1rem;
+      border-bottom-width: 3px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    }
+    #sys-msg-banner.smb-highlight .smb-icon { font-size: 28px; }
+
+    @keyframes smbWiggle {
+      0%   { transform: translateX(0); }
+      15%  { transform: translateX(-6px); }
+      30%  { transform: translateX(5px); }
+      45%  { transform: translateX(-4px); }
+      60%  { transform: translateX(3px); }
+      75%  { transform: translateX(-2px); }
+      90%  { transform: translateX(1px); }
+      100% { transform: translateX(0); }
+    }
+    #sys-msg-banner.smb-wiggle {
+      animation: smbWiggle 0.55s ease;
+    }
+
+    #sys-msg-banner .smb-icon { font-size: 20px; flex-shrink: 0; transition: font-size 0.4s; }
     #sys-msg-banner .smb-title { font-weight: 600; margin-right: 4px; }
     #sys-msg-banner .smb-text { flex: 1; min-width: 0; }
     #sys-msg-banner .smb-until {
@@ -56,41 +82,6 @@ const MSG_TYPES = {
     .sys-msg-card .smc-icon { font-size: 18px; flex-shrink: 0; }
     .sys-msg-card .smc-title { font-weight: 600; }
     .sys-msg-card .smc-meta { font-size: 0.78rem; margin-top: 6px; opacity: 0.7; }
-
-    /* Hervorgehobenes Nachrichten-Popup */
-    .sys-critical-modal-overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.55);
-      z-index: 9000;
-      display: flex; align-items: center; justify-content: center;
-      padding: 16px;
-      animation: sysMsgFadeIn 0.2s ease;
-    }
-    @keyframes sysMsgFadeIn { from { opacity:0; } to { opacity:1; } }
-    .sys-critical-modal {
-      background: var(--color-surface);
-      border-radius: var(--radius-lg);
-      box-shadow: 0 8px 40px rgba(0,0,0,0.22);
-      max-width: 520px;
-      width: 100%;
-      max-height: 80vh;
-      overflow-y: auto;
-      padding: 0;
-      animation: sysMsgSlideIn 0.25s cubic-bezier(0.16,1,0.3,1);
-    }
-    @keyframes sysMsgSlideIn { from { transform: translateY(24px); opacity:0; } to { transform: translateY(0); opacity:1; } }
-    .sys-critical-modal-header {
-      display: flex; align-items: center; gap: 10px;
-      padding: 18px 20px 14px;
-      border-bottom: 1px solid var(--color-border);
-    }
-    .sys-critical-modal-header .scm-icon { font-size: 26px; flex-shrink: 0; }
-    .sys-critical-modal-header h3 { margin: 0; font-size: 1rem; }
-    .sys-critical-modal-body { padding: 16px 20px; }
-    .sys-critical-modal-footer {
-      padding: 12px 20px 18px;
-      display: flex; justify-content: flex-end;
-    }
 
     /* Weggeklickte Nachrichten in Profil */
     .dismissed-msg-card {
@@ -206,42 +197,6 @@ function _getAppBarEl() {
   return document.getElementById('app-bar') || document.querySelector('.app-bar') || null;
 }
 
-/* ─── Hervorgehobene Nachrichten als Popup (1x pro 30min) ────────────────────── */
-function _showHighlightPopup(highlightedMsgs) {
-  const overlay = document.createElement('div');
-  overlay.className = 'sys-critical-modal-overlay';
-
-  const cards = highlightedMsgs.map(m => {
-    const cfg   = MSG_TYPES[m.type] || MSG_TYPES.info;
-    const until = m.endAt ? `<div class="smc-meta">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : '';
-    return `
-      <div class="sys-msg-card" style="background:${cfg.bg};border-color:${cfg.border};color:${cfg.text};">
-        <div class="smc-header">
-          <span class="material-icons smc-icon">${cfg.icon}</span>
-          <span class="smc-title">${m.title || cfg.label}</span>
-        </div>
-        <div>${m.message || ''}</div>
-        ${until}
-      </div>`;
-  }).join('');
-
-  overlay.innerHTML = `
-    <div class="sys-critical-modal">
-      <div class="sys-critical-modal-header" style="color:var(--color-warning);">
-        <span class="material-icons scm-icon" style="color:var(--color-warning);">notification_important</span>
-        <h3>Wichtige Hinweise</h3>
-      </div>
-      <div class="sys-critical-modal-body">${cards}</div>
-      <div class="sys-critical-modal-footer">
-        <button class="btn-primary" id="sys-critical-close">Verstanden</button>
-      </div>
-    </div>`;
-
-  overlay.querySelector('#sys-critical-close').onclick = () => overlay.remove();
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-}
-
 /* ─── Banner rendern ─────────────────────────────────────────────────────────── */
 async function renderSystemMessageBanner() {
   const old = document.getElementById('sys-msg-banner');
@@ -258,19 +213,13 @@ async function renderSystemMessageBanner() {
   const allActive = msgs
     .filter(m => _msgIsActive(m) && _msgMatchesUser(m))
     .sort((a, b) => {
+      // Hervorgehobene zuerst, dann nach Typ-Priorität
+      if (b.highlight && !a.highlight) return 1;
+      if (a.highlight && !b.highlight) return -1;
       const order = { danger:0, warning:1, info:2, success:3 };
       return (order[a.type]??2) - (order[b.type]??2);
     });
 
-  // Beim ersten Laden (1x pro 30min): hervorgehobene Nachrichten als Popup
-  if (isFirst) {
-    const highlighted = allActive.filter(m => m.highlight === true && !_isDismissed(m.id));
-    if (highlighted.length) {
-      setTimeout(() => _showHighlightPopup(highlighted), 400);
-    }
-  }
-
-  // Banner: alle nicht-dismissten aktiven Nachrichten
   const bannerMsgs = allActive.filter(m => !_isDismissed(m.id));
   if (!bannerMsgs.length) return;
 
@@ -281,13 +230,15 @@ async function renderSystemMessageBanner() {
   const rest = bannerMsgs.slice(1);
   const cfg  = MSG_TYPES[main.type] || MSG_TYPES.info;
 
+  // Hervorgehoben + erster Ladevorgang → Banner groß + wackeln
+  const doHighlight = main.highlight === true && isFirst;
+
   const banner = document.createElement('div');
   banner.id = 'sys-msg-banner';
   banner.style.background  = cfg.bg;
   banner.style.borderColor = cfg.border;
   banner.style.color       = cfg.text;
 
-  // Banner: Icon + Titel + Text + optionales 'Gültig bis' + Schließen
   const untilHtml = main.endAt
     ? `<span class="smb-until">bis ${_formatMsgDate(main.endAt)}</span>`
     : '';
@@ -315,6 +266,21 @@ async function renderSystemMessageBanner() {
   }
 
   appBar.insertAdjacentElement('afterend', banner);
+
+  // Hervorheben: Banner kurz groß machen + wackeln, dann wieder normal
+  if (doHighlight) {
+    setTimeout(() => {
+      banner.classList.add('smb-highlight', 'smb-wiggle');
+      // Wackeln-Klasse nach Ende der Animation entfernen
+      banner.addEventListener('animationend', () => {
+        banner.classList.remove('smb-wiggle');
+      }, { once: true });
+      // Nach 3s wieder auf Normalgröße schrumpfen
+      setTimeout(() => {
+        banner.classList.remove('smb-highlight');
+      }, 3000);
+    }, 400);
+  }
 }
 
 /* ─── Alle Nachrichten Modal ─────────────────────────────────────────────────── */
@@ -613,7 +579,7 @@ async function showMsgForm(msg, allGroups, parentEl) {
           <input type="checkbox" id="sm-highlight" style="margin-top:2px;flex-shrink:0;" ${msg?.highlight?'checked':''}/>
           <div>
             <div style="font-weight:600;color:var(--color-warning);font-size:0.88rem;">Hervorheben</div>
-            <div style="font-size:0.8rem;color:var(--color-text-muted);margin-top:2px;">Nachricht wird beim ersten Aufruf (1× pro 30 Min.) als großes Popup angezeigt.</div>
+            <div style="font-size:0.8rem;color:var(--color-text-muted);margin-top:2px;">Banner wird beim ersten Aufruf (1× pro 30 Min.) groß angezeigt und wackelt kurz.</div>
           </div>
         </label>
       </div>
@@ -652,12 +618,10 @@ async function showMsgForm(msg, allGroups, parentEl) {
         if (startStr) payload.startAt = new Date(startStr);
         if (endStr)   payload.endAt   = new Date(endStr);
       }
-      // Bei 'permanent' + update: startAt/endAt löschen
       if (period === 'permanent' && !isNew) {
         payload.startAt = firebase.firestore.FieldValue.delete();
         payload.endAt   = firebase.firestore.FieldValue.delete();
       }
-      // Bei 'permanent' + neu: Felder einfach weglassen (kein FieldValue.delete() bei add()!)
 
       try {
         if (isNew) {
