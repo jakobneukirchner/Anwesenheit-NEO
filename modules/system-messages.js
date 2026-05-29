@@ -199,6 +199,11 @@ function _formatMsgDate(ts) {
   return d.toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
+/* ─── App-Bar Element finden (ID oder Klasse) ───────────────────────────────── */
+function _getAppBarEl() {
+  return document.getElementById('app-bar') || document.querySelector('.app-bar') || null;
+}
+
 /* ─── Kritische Nachrichten als Vollbild-Modal ───────────────────────────────── */
 function _showCriticalModal(criticalMsgs) {
   const overlay = document.createElement('div');
@@ -263,12 +268,12 @@ async function renderSystemMessageBanner() {
     }
   }
 
-  // Banner: nicht-dismisste nicht-kritische Nachrichten (info/success)
-  // Kritische werden nur im Modal gezeigt, können aber auch als Banner bleiben
+  // Banner: alle nicht-dismissten aktiven Nachrichten
   const bannerMsgs = allActive.filter(m => !_isDismissed(m.id));
   if (!bannerMsgs.length) return;
 
-  const appBar = document.getElementById('app-bar');
+  // App-Bar Element finden (ID oder Klasse)
+  const appBar = _getAppBarEl();
   if (!appBar) return;
 
   const main = bannerMsgs[0];
@@ -302,6 +307,7 @@ async function renderSystemMessageBanner() {
     banner.querySelector('.smb-more').onclick = () => showAllMessagesModal(bannerMsgs);
   }
 
+  // Banner direkt NACH der App-Bar einfügen
   appBar.insertAdjacentElement('afterend', banner);
 }
 
@@ -626,11 +632,15 @@ async function showMsgForm(msg, allGroups, parentEl) {
       }
 
       if (period === 'range') {
+        // Zeitraum: startAt/endAt als Date-Objekte setzen
         const startStr = document.getElementById('sm-start').value;
         const endStr   = document.getElementById('sm-end').value;
         if (startStr) payload.startAt = new Date(startStr);
         if (endStr)   payload.endAt   = new Date(endStr);
-      } else {
+      }
+      // Bei 'permanent' und isNew: Felder einfach weglassen (kein FieldValue.delete()!)
+      // Bei 'permanent' und update (isNew=false): explizit löschen
+      if (period === 'permanent' && !isNew) {
         payload.startAt = firebase.firestore.FieldValue.delete();
         payload.endAt   = firebase.firestore.FieldValue.delete();
       }
