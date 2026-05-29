@@ -25,102 +25,57 @@
   </script>
 
   <style>
-    /* ── Login-Screen ─────────────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    /* ── Einfacher Login-Screen ── */
     #login-screen {
-      min-height: 100dvh;
+      min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px 16px;
       background: var(--color-bg);
+      padding: 16px;
     }
-    /* WICHTIG: display:flex wird durch hidden-Attribut NICHT überschrieben –
-       deshalb explizit display:none setzen wenn hidden gesetzt ist */
-    #login-screen[hidden] { display: none !important; }
-    #app-root[hidden]     { display: none !important; }
-
-    .login-card {
+    #login-box {
       width: 100%;
-      max-width: 400px;
+      max-width: 360px;
       background: var(--color-surface);
       border: 1px solid var(--color-border);
-      border-radius: 14px;
-      padding: 36px 32px 32px;
-      box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+      border-radius: var(--radius-medium);
+      padding: 28px 24px;
+      box-shadow: var(--shadow-elevated);
     }
-    .login-logo {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 28px;
-      justify-content: center;
-    }
-    .login-logo-icon {
-      width: 40px;
-      height: 40px;
-      border-radius: 10px;
-      background: var(--color-primary);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-    }
-    .login-logo-title {
+    #login-box h2 {
+      margin: 0 0 20px;
       font-size: 1.2rem;
-      font-weight: 700;
-      color: var(--color-text);
-      letter-spacing: -0.01em;
-    }
-    .login-card h2 {
-      font-size: 1.35rem;
-      font-weight: 700;
-      margin: 0 0 6px;
-      text-align: center;
-    }
-    .login-card .login-subtitle {
-      font-size: 0.88rem;
-      color: var(--color-text-muted);
-      text-align: center;
-      margin-bottom: 28px;
-    }
-    .login-field {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      margin-bottom: 16px;
-    }
-    .login-field label {
-      font-size: 0.875rem;
       font-weight: 600;
-      color: var(--color-text);
     }
-    .login-pw-wrap {
-      position: relative;
-      display: flex;
-      align-items: center;
-    }
-    .login-pw-wrap input {
-      width: 100%;
-      padding-right: 44px;
-    }
-    #toggle-pw {
-      position: absolute;
-      right: 10px;
-      background: none;
-      border: none;
-      cursor: pointer;
+    #login-box label {
+      display: block;
+      font-size: 0.85rem;
       color: var(--color-text-muted);
-      display: flex;
-      align-items: center;
-      padding: 4px;
-      border-radius: 50%;
-      transition: color 0.15s, background 0.15s;
+      margin-bottom: 4px;
+      margin-top: 12px;
     }
-    #toggle-pw:hover { color: var(--color-primary); background: var(--color-primary-highlight); }
+    #login-box input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-small);
+      background: var(--color-bg-elevated);
+      color: var(--color-text);
+      font: inherit;
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }
+    #login-box input:focus {
+      outline: 2px solid var(--color-primary);
+      border-color: var(--color-primary);
+    }
     #login-submit-btn {
       width: 100%;
-      margin-top: 8px;
-      padding: 11px;
+      margin-top: 20px;
+      padding: 10px;
       font-size: 1rem;
       font-weight: 600;
       display: flex;
@@ -128,106 +83,68 @@
       justify-content: center;
       gap: 8px;
     }
-    #login-error { margin-top: 10px; min-height: 36px; }
-    .login-error-box {
-      background: rgba(161,44,123,0.08);
-      border: 1px solid var(--color-error, #a12c7b);
-      color: var(--color-error, #a12c7b);
-      border-radius: 8px;
-      padding: 9px 13px;
+    #login-error {
+      margin-top: 12px;
       font-size: 0.875rem;
-      display: flex;
-      align-items: center;
-      gap: 7px;
+      color: var(--color-error);
+      min-height: 20px;
     }
     #forgot-pw-btn {
       display: block;
       width: 100%;
-      margin-top: 14px;
-      padding: 7px;
+      margin-top: 12px;
+      padding: 6px;
       background: none;
       border: none;
       cursor: pointer;
-      font-size: 0.875rem;
+      font-size: 0.85rem;
       color: var(--color-text-muted);
       text-align: center;
-      border-radius: 8px;
-      transition: color 0.15s, background 0.15s;
+      border-radius: var(--radius-small);
     }
-    #forgot-pw-btn:hover {
-      color: var(--color-primary);
-      background: var(--color-primary-highlight);
-    }
+    #forgot-pw-btn:hover { color: var(--color-primary); background: rgba(21,101,192,0.07); }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @media (max-width: 480px) {
-      .login-card { padding: 28px 20px 24px; }
+    #login-spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
     }
   </style>
 </head>
 <body>
 
-  <!-- ═══ LOGIN-SCREEN (wird ausgeblendet wenn eingeloggt) ═══ -->
+  <!-- LOGIN -->
   <div id="login-screen">
-    <div class="login-card">
-      <div class="login-logo">
-        <div class="login-logo-icon">
-          <span class="material-icons" style="font-size:22px;">how_to_reg</span>
-        </div>
-        <span class="login-logo-title" id="login-app-title">Anwesenheit-NEO</span>
-      </div>
-      <h2>Anmelden</h2>
-      <p class="login-subtitle">Bitte melde dich mit deinem Konto an.</p>
-
+    <div id="login-box">
+      <h2>Anwesenheit-NEO</h2>
       <form id="login-form" autocomplete="on" novalidate>
-        <div class="login-field">
-          <label for="login-email">E-Mail-Adresse</label>
-          <input
-            id="login-email"
-            type="email"
-            name="email"
-            autocomplete="email"
-            placeholder="deine@email.de"
-            required
-          />
-        </div>
-        <div class="login-field">
-          <label for="login-password">Passwort</label>
-          <div class="login-pw-wrap">
-            <input
-              id="login-password"
-              type="password"
-              name="password"
-              autocomplete="current-password"
-              placeholder="Passwort"
-              required
-            />
-            <button type="button" id="toggle-pw" aria-label="Passwort anzeigen/verstecken" tabindex="-1">
-              <span class="material-icons" style="font-size:20px;">visibility</span>
-            </button>
-          </div>
-        </div>
+        <label for="login-email">E-Mail</label>
+        <input id="login-email" type="email" name="email" autocomplete="email" placeholder="deine@email.de" />
+
+        <label for="login-password">Passwort</label>
+        <input id="login-password" type="password" name="password" autocomplete="current-password" placeholder="Passwort" />
 
         <div id="login-error"></div>
 
         <button type="submit" id="login-submit-btn" class="btn-primary">
           <span id="login-btn-text">Anmelden</span>
-          <span id="login-spinner" class="material-icons" hidden style="animation:spin 0.8s linear infinite;font-size:18px;">refresh</span>
+          <div id="login-spinner" class="hidden"></div>
         </button>
       </form>
-
       <button type="button" id="forgot-pw-btn">Passwort vergessen?</button>
     </div>
   </div>
 
-  <!-- ═══ APP-SHELL (wird eingeblendet wenn eingeloggt) ═══ -->
-  <div id="app-root" hidden>
+  <!-- APP -->
+  <div id="app-root" class="hidden">
     <div class="app-shell">
       <header class="app-bar">
         <div class="app-brand">
           <div id="app-logo" class="app-logo"></div>
           <span id="app-title">Anwesenheit-NEO</span>
         </div>
-
         <div class="app-actions desktop-only" id="app-actions-desktop">
           <span id="app-user-name"
             style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
@@ -241,7 +158,6 @@
             <span class="btn-label">Abmelden</span>
           </button>
         </div>
-
         <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menü" aria-label="Menü">
           <span class="material-icons">menu</span>
         </button>
@@ -300,30 +216,21 @@
       const drawer   = document.getElementById('mobile-drawer');
       const overlay  = document.getElementById('mobile-drawer-overlay');
       const closeBtn = document.getElementById('mobile-drawer-close');
-
-      function isMobile() {
-        return window.matchMedia('(max-width: 639px)').matches;
-      }
+      function isMobile() { return window.matchMedia('(max-width: 639px)').matches; }
       function openDrawer() {
         if (!isMobile()) return;
-        drawer.hidden = false;
-        overlay.hidden = false;
+        drawer.hidden = false; overlay.hidden = false;
         document.body.style.overflow = 'hidden';
       }
       function closeDrawer() {
-        drawer.hidden = true;
-        overlay.hidden = true;
+        drawer.hidden = true; overlay.hidden = true;
         document.body.style.overflow = '';
-      }
-      function syncDrawerState() {
-        if (!isMobile()) closeDrawer();
       }
       menuBtn?.addEventListener('click', openDrawer);
       closeBtn?.addEventListener('click', closeDrawer);
       overlay?.addEventListener('click', closeDrawer);
-      window.addEventListener('resize', syncDrawerState);
+      window.addEventListener('resize', () => { if (!isMobile()) closeDrawer(); });
       window._mobileDrawerClose = closeDrawer;
-      syncDrawerState();
     })();
   </script>
 </body>

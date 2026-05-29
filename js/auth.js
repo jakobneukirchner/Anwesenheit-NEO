@@ -7,36 +7,33 @@ async function getUserData(uid) {
   } catch (e) { console.error('getUserData:', e); return null; }
 }
 
-firebaseAuth.onAuthStateChanged(async (fbUser) => {
-  const loginScreen   = document.getElementById('login-screen');
-  const appRoot       = document.getElementById('app-root');
-  const appContent    = document.getElementById('app-content');
-  const mobileProfile = document.getElementById('mobile-profile-btn');
-  const mobileLogout  = document.getElementById('mobile-logout-btn');
-  const profileBtn    = document.getElementById('profile-btn');
-  const logoutBtn     = document.getElementById('logout-btn');
+function showLogin() {
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('app-root').classList.add('hidden');
+}
+function showApp() {
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('app-root').classList.remove('hidden');
+}
 
+firebaseAuth.onAuthStateChanged(async (fbUser) => {
   if (!fbUser) {
     window.currentUser = null;
-    if (appContent)  appContent.innerHTML = '';
-    if (loginScreen) loginScreen.hidden = false;
-    if (appRoot)     appRoot.hidden = true;
+    const appContent = document.getElementById('app-content');
+    if (appContent) appContent.innerHTML = '';
+    showLogin();
     removeDashboardSwitcher();
     const old = document.getElementById('sys-msg-banner');
     if (old) old.remove();
     return;
   }
 
-  // Eingeloggt: Login-Screen weg, App anzeigen
-  if (loginScreen) loginScreen.hidden = true;
-  if (appRoot)     appRoot.hidden = false;
-  if (appContent)  appContent.innerHTML = '<div class="loading-center">Lade...</div>';
+  showApp();
+  const appContent = document.getElementById('app-content');
+  if (appContent) appContent.innerHTML = '<div class="loading-center">Lade...</div>';
 
   const userData = await getUserData(fbUser.uid);
-  if (!userData) {
-    firebaseAuth.signOut();
-    return;
-  }
+  if (!userData) { firebaseAuth.signOut(); return; }
 
   window.currentUser = {
     firebaseUser: fbUser,
@@ -45,36 +42,30 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
     groups: userData.groups || []
   };
 
-  // Desktop-Buttons verdrahten
-  if (profileBtn) {
-    profileBtn.hidden = false;
-    profileBtn.onclick = () => loadProfilePage();
-  }
-  if (logoutBtn) {
-    logoutBtn.hidden = false;
-    logoutBtn.onclick = () => firebaseAuth.signOut();
-  }
+  // Buttons verdrahten
+  const profileBtn = document.getElementById('profile-btn');
+  const logoutBtn  = document.getElementById('logout-btn');
+  if (profileBtn) { profileBtn.hidden = false; profileBtn.onclick = () => loadProfilePage(); }
+  if (logoutBtn)  { logoutBtn.hidden  = false; logoutBtn.onclick  = () => firebaseAuth.signOut(); }
 
-  // Mobile-Drawer-Buttons verdrahten
+  const mobileProfile = document.getElementById('mobile-profile-btn');
+  const mobileLogout  = document.getElementById('mobile-logout-btn');
   if (mobileProfile) {
     mobileProfile.hidden = false;
-    mobileProfile.onclick = () => {
-      if (window._mobileDrawerClose) window._mobileDrawerClose();
-      loadProfilePage();
-    };
+    mobileProfile.onclick = () => { if (window._mobileDrawerClose) window._mobileDrawerClose(); loadProfilePage(); };
   }
   if (mobileLogout) {
     mobileLogout.hidden = false;
     mobileLogout.onclick = () => firebaseAuth.signOut();
   }
 
-  // Benutzername anzeigen
   const nameEl = document.getElementById('app-user-name');
   if (nameEl) nameEl.textContent = userData.name || fbUser.email || '';
   const mobileNameEl = document.getElementById('mobile-user-name');
   if (mobileNameEl) mobileNameEl.textContent = userData.name || fbUser.email || '';
 
-  await applyBranding();
+  try { await applyBranding(); } catch(e) { console.warn('applyBranding Fehler:', e); }
+
   routeToDashboard(window.currentUser.roles);
   if (typeof renderSystemMessageBanner === 'function') renderSystemMessageBanner();
 });
@@ -85,7 +76,6 @@ function getPrimaryRole(roles) {
   for (const r of ROLE_ORDER) if (roles.includes(r)) return r;
   return 'member';
 }
-
 const DASHBOARD_LOADERS = {
   admin:       () => loadAdminDashboard(),
   coordinator: () => loadCoordinatorDashboard(),
@@ -94,24 +84,14 @@ const DASHBOARD_LOADERS = {
   statistics:  () => loadStatisticsDashboard(),
   myMembers:   () => loadMemberReportDashboard()
 };
-
 const ROLE_LABELS_SWITCHER = {
-  admin:       'Admin',
-  coordinator: 'Koordinator',
-  teacher:     'Trainer',
-  member:      'Mitglieder',
-  myMembers:   'Meine Mitglieder'
+  admin: 'Admin', coordinator: 'Koordinator', teacher: 'Trainer',
+  member: 'Mitglieder', myMembers: 'Meine Mitglieder'
 };
-
 const ROLE_ICONS = {
-  admin:       'admin_panel_settings',
-  coordinator: 'supervisor_account',
-  teacher:     'sports',
-  member:      'group',
-  statistics:  'bar_chart',
-  myMembers:   'people_alt'
+  admin: 'admin_panel_settings', coordinator: 'supervisor_account',
+  teacher: 'sports', member: 'group', statistics: 'bar_chart', myMembers: 'people_alt'
 };
-
 const STATS_ROLES      = ['admin', 'coordinator', 'teacher'];
 const MY_MEMBERS_ROLES = ['admin', 'coordinator', 'teacher'];
 
@@ -146,7 +126,6 @@ function renderDashboardSwitcher(roles) {
   const available    = ROLE_ORDER.filter(r => roles.includes(r));
   const hasStats     = STATS_ROLES.some(r => roles.includes(r));
   const hasMyMembers = MY_MEMBERS_ROLES.some(r => roles.includes(r));
-
   if (available.length <= 1 && !hasStats && !hasMyMembers) return;
 
   const desktopBar = document.querySelector('#app-actions-desktop');
@@ -154,12 +133,11 @@ function renderDashboardSwitcher(roles) {
     const wrapper = document.createElement('div');
     wrapper.id = 'role-switcher';
     Object.assign(wrapper.style, { display:'flex', alignItems:'center', gap:'2px', marginRight:'6px' });
-
     const makeBtn = (role, label) => {
       const btn = document.createElement('button');
       btn.className = 'btn-text role-switch-btn';
       btn.dataset.role = role;
-      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role] || 'dashboard'}</span><span class="btn-label">${label}</span>`;
+      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role]||'dashboard'}</span><span class="btn-label">${label}</span>`;
       _applyActive(btn, role === window.currentDashboardRole);
       btn.onclick = () => {
         window.currentDashboardRole = role;
@@ -169,37 +147,29 @@ function renderDashboardSwitcher(roles) {
       };
       return btn;
     };
-
     if (available.length > 1) available.forEach(r => {
       const label = typeof getRoleLabel === 'function' ? getRoleLabel(r) : (ROLE_LABELS_SWITCHER[r] || r);
       wrapper.appendChild(makeBtn(r, label));
     });
-    if (hasStats) {
-      if (available.length > 1) wrapper.appendChild(_makeSeparator());
-      wrapper.appendChild(makeBtn('statistics', 'Statistiken'));
-    }
-    if (hasMyMembers) {
-      wrapper.appendChild(_makeSeparator());
-      wrapper.appendChild(makeBtn('myMembers', 'Meine Mitglieder'));
-    }
+    if (hasStats)     { if (available.length > 1) wrapper.appendChild(_makeSeparator()); wrapper.appendChild(makeBtn('statistics', 'Statistiken')); }
+    if (hasMyMembers) { wrapper.appendChild(_makeSeparator()); wrapper.appendChild(makeBtn('myMembers', 'Meine Mitglieder')); }
     desktopBar.insertBefore(wrapper, desktopBar.firstChild);
   }
 
   const mobileContainer = document.getElementById('mobile-role-switcher');
   if (mobileContainer) {
     mobileContainer.innerHTML = '';
-    const allRoles = [
+    [
       ...(available.length > 1 ? available : []),
       ...(hasStats     ? ['statistics'] : []),
       ...(hasMyMembers ? ['myMembers']  : [])
-    ];
-    allRoles.forEach(role => {
+    ].forEach(role => {
       const btn = document.createElement('button');
       btn.className = 'icon-btn role-switch-btn';
       btn.dataset.role = role;
       btn.setAttribute('aria-label', ROLE_LABELS_SWITCHER[role] || role);
       btn.title = ROLE_LABELS_SWITCHER[role] || role;
-      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role] || 'dashboard'}</span>`;
+      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role]||'dashboard'}</span>`;
       _applyActive(btn, role === window.currentDashboardRole);
       btn.onclick = () => {
         window.currentDashboardRole = role;
@@ -211,7 +181,6 @@ function renderDashboardSwitcher(roles) {
     });
   }
 }
-
 function removeDashboardSwitcher() {
   const rs = document.getElementById('role-switcher');
   if (rs) rs.remove();
@@ -225,106 +194,51 @@ const errorEl       = document.getElementById('login-error');
 const submitBtn     = document.getElementById('login-submit-btn');
 const btnText       = document.getElementById('login-btn-text');
 const spinner       = document.getElementById('login-spinner');
-const togglePw      = document.getElementById('toggle-pw');
 
 function setLoginLoading(loading) {
   if (submitBtn) submitBtn.disabled = loading;
   if (btnText)   btnText.textContent = loading ? 'Anmelden…' : 'Anmelden';
-  if (spinner)   spinner.hidden = !loading;
-}
-
-if (togglePw && passwordInput) {
-  togglePw.addEventListener('click', () => {
-    const isText = passwordInput.type === 'text';
-    passwordInput.type = isText ? 'password' : 'text';
-    togglePw.querySelector('.material-icons').textContent = isText ? 'visibility' : 'visibility_off';
-  });
+  if (spinner)   spinner.classList.toggle('hidden', !loading);
 }
 
 if (loginForm) {
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-
     const email    = emailInput    ? emailInput.value.trim() : '';
     const password = passwordInput ? passwordInput.value     : '';
 
-    if (!email) {
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">warning</span>
-          Bitte gib deine E-Mail-Adresse ein.
-        </div>`;
-      emailInput && emailInput.focus();
-      return;
-    }
-    if (!password) {
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">lock</span>
-          Bitte gib dein Passwort ein.
-        </div>`;
-      passwordInput && passwordInput.focus();
-      return;
-    }
+    if (!email)    { if (errorEl) errorEl.textContent = 'Bitte E-Mail eingeben.';    emailInput?.focus();    return; }
+    if (!password) { if (errorEl) errorEl.textContent = 'Bitte Passwort eingeben.'; passwordInput?.focus(); return; }
 
-    if (errorEl) errorEl.innerHTML = '';
+    if (errorEl) errorEl.textContent = '';
     setLoginLoading(true);
-
     try {
       await firebaseAuth.signInWithEmailAndPassword(email, password);
     } catch (err) {
       let msg = 'Anmeldung fehlgeschlagen.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        msg = 'E-Mail oder Passwort falsch.';
-      } else if (err.code === 'auth/invalid-email') {
-        msg = 'Ungültige E-Mail-Adresse.';
-      } else if (err.code === 'auth/too-many-requests') {
-        msg = 'Konto vorübergehend gesperrt. Bitte warte oder setze das Passwort zurück.';
-      } else if (err.code === 'auth/network-request-failed') {
-        msg = 'Netzwerkfehler. Bitte überprüfe deine Internetverbindung.';
-      }
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}
-        </div>`;
+      if (['auth/user-not-found','auth/wrong-password','auth/invalid-credential'].includes(err.code)) msg = 'E-Mail oder Passwort falsch.';
+      else if (err.code === 'auth/invalid-email')           msg = 'Ungültige E-Mail-Adresse.';
+      else if (err.code === 'auth/too-many-requests')       msg = 'Zu viele Versuche. Bitte kurz warten.';
+      else if (err.code === 'auth/network-request-failed')  msg = 'Kein Netzwerk.';
+      if (errorEl) errorEl.textContent = msg;
     } finally {
       setLoginLoading(false);
     }
   });
 }
 
-// ── Passwort vergessen ─────────────────────────────────────────
 const forgotBtn = document.getElementById('forgot-pw-btn');
 if (forgotBtn) {
   forgotBtn.addEventListener('click', async () => {
     const email = emailInput ? emailInput.value.trim() : '';
-    if (!email) {
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">info</span>
-          Bitte trag zuerst deine E-Mail-Adresse ein.
-        </div>`;
-      emailInput && emailInput.focus();
-      return;
-    }
+    if (!email) { if (errorEl) errorEl.textContent = 'Bitte zuerst E-Mail eingeben.'; emailInput?.focus(); return; }
     forgotBtn.disabled = true;
     forgotBtn.textContent = 'Sende…';
     try {
       await firebaseAuth.sendPasswordResetEmail(email);
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box" style="background:rgba(67,122,34,0.08);border-color:var(--color-success,#437a22);color:var(--color-success,#437a22);">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">mark_email_read</span>
-          E-Mail gesendet! Bitte prüfe dein Postfach.
-        </div>`;
+      if (errorEl) { errorEl.style.color = 'var(--color-success)'; errorEl.textContent = 'E-Mail gesendet! Bitte Postfach prüfen.'; }
     } catch (err) {
-      let msg = 'Fehler beim Senden.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-        msg = 'Kein Konto mit dieser E-Mail-Adresse gefunden.';
-      }
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}
-        </div>`;
+      if (errorEl) { errorEl.style.color = ''; errorEl.textContent = 'Kein Konto mit dieser E-Mail gefunden.'; }
     } finally {
       forgotBtn.disabled = false;
       forgotBtn.textContent = 'Passwort vergessen?';
