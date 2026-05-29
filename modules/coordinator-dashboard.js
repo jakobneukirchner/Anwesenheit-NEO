@@ -24,14 +24,14 @@ async function loadCoordinatorDashboard() {
     users:    document.getElementById('tab-users'),
     groups:   document.getElementById('tab-groups'),
     schedule: document.getElementById('tab-schedule'),
-    settings: document.getElementById('tab-settings')
+    settings: document.getElementById('tab-settings'),
     messages: document.getElementById('tab-messages')
   };
   const loaders = {
     users:    () => renderUsersTab(tabEls.users),
     groups:   () => renderGroupsTab(tabEls.groups),
     schedule: () => renderScheduleTab(tabEls.schedule),
-    settings: () => renderCoordSettingsTab(tabEls.settings)
+    settings: () => renderCoordSettingsTab(tabEls.settings),
     messages: () => renderSystemMessagesTab(tabEls.messages)
   };
   container.querySelectorAll('.tab-btn').forEach(btn => {
