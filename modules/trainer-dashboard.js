@@ -3,7 +3,14 @@
 
 async function loadTrainerDashboard() {
   const container = document.getElementById('app-content');
-  container.innerHTML = `<div class="loading-center">Lade Dashboard…</div>`;
+
+  // Fokus-Schutz: Wenn der Nutzer gerade tippt, Refresh überspringen
+  if (window._silentRefresh && container.contains(document.activeElement)) return;
+
+  // Loading-Spinner nur beim ersten (nicht-stillen) Laden anzeigen
+  if (!window._silentRefresh) {
+    container.innerHTML = `<div class="loading-center">Lade Dashboard…</div>`;
+  }
 
   try {
     const uid = window.currentUser?.firebaseUser?.uid;
@@ -43,65 +50,82 @@ async function loadTrainerDashboard() {
 
     const untilText = formatDateGerman(futureEnd);
 
-    container.innerHTML = `
+    // ── Aktiven Tab merken für stillen Refresh
+    const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
+
+    const newHtml = `
       <div id="trainer-list-view">
         <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
           <h2 style="margin:0;">${getRoleLabel('teacher')}-Dashboard</h2>
           <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
         </div>
 
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-          <span class="material-icons" style="font-size:20px;color:var(--color-primary);">event</span>
-          <span style="font-weight:700;font-size:1.05rem;">Kommende Termine</span>
-          <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
-        </div>
-        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;margin-bottom:28px;"></div>
-
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;margin-top:8px;">
-          <div style="flex:1;height:1px;background:var(--color-border);"></div>
-          <div style="display:flex;align-items:center;gap:7px;color:var(--color-text-muted);font-size:0.88rem;font-weight:600;white-space:nowrap;">
-            <span class="material-icons" style="font-size:17px;">history</span>
+        <div class="tabs" style="margin-bottom:16px;">
+          <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">event</span>
+            Kommende Termine
+            <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
+          </button>
+          <button class="tab-btn${activeTab === 'past' ? ' active' : ''}" data-tab="past">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">history</span>
             Vergangene Termine
-          </div>
-          <div style="flex:1;height:1px;background:var(--color-border);"></div>
+          </button>
         </div>
 
-        <div id="trainer-overview-past" style="display:flex;flex-direction:column;gap:12px;"></div>
+        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
+        <div id="trainer-overview-past"     style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'past'     ? ' hidden' : ''}></div>
       </div>
     `;
+
+    // Swap: erst jetzt DOM aktualisieren
+    const scrollY = container.scrollTop;
+    container.innerHTML = newHtml;
+    container.scrollTop = scrollY;
+
+    // Tab-Wechsel-Logik
+    container.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.onclick = () => {
+        container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('trainer-overview-upcoming').hidden = btn.dataset.tab !== 'upcoming';
+        document.getElementById('trainer-overview-past').hidden     = btn.dataset.tab !== 'past';
+      };
+    });
 
     const upEl = document.getElementById('trainer-overview-upcoming');
     const paEl = document.getElementById('trainer-overview-past');
 
     if (!upcoming.length) upEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine kommenden Termine.</p></div>`;
-    if (!past.length) paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
+    if (!past.length)     paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
 
     for (const ev of upcoming) upEl.appendChild(await renderTrainerOverviewCard(ev, false));
-    for (const ev of past) paEl.appendChild(await renderTrainerOverviewCard(ev, true));
+    for (const ev of past)     paEl.appendChild(await renderTrainerOverviewCard(ev, true));
 
   } catch (e) {
     console.error(e);
-    container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
+    if (!window._silentRefresh) {
+      container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
+    }
   }
 }
 
 async function renderTrainerOverviewCard(event, isPast) {
   const card = createElement('div', 'card');
   card.style.marginBottom = '0';
-  if (event.status === 'skipped') card.style.borderLeft = '4px solid var(--color-warning)';
+  if (event.status === 'skipped')   card.style.borderLeft = '4px solid var(--color-warning)';
   if (event.status === 'cancelled') card.style.borderLeft = '4px solid var(--color-error)';
 
   const start = event.startTime?.toDate?.();
-  const end = event.endTime?.toDate?.();
+  const end   = event.endTime?.toDate?.();
 
   const attendanceSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
   const rows = [];
   attendanceSnap.forEach(doc => rows.push({ id: doc.id, ...doc.data() }));
 
   const registered = rows.filter(r => ['registered','present','confirmation_pending','late_excused','late_unexcused'].includes(r.status)).length;
-  const total = rows.length;
-  const present = rows.filter(r => ['present','late_excused','late_unexcused'].includes(r.status)).length;
-  const missing = Math.max(0, (event.minParticipants || 0) - registered);
+  const total      = rows.length;
+  const present    = rows.filter(r => ['present','late_excused','late_unexcused'].includes(r.status)).length;
+  const missing    = Math.max(0, (event.minParticipants || 0) - registered);
   const needsBadge = !isPast && missing > 0;
   const activeLabel = event.status === 'cancelled' ? 'Abgesagt' : event.status === 'skipped' ? 'Ausgefallen' : 'Aktiv';
   const activeClass = event.status === 'cancelled' ? 'chip-error' : event.status === 'skipped' ? 'chip-warning' : 'chip-success';
@@ -143,7 +167,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     if (!eventDoc.exists) throw new Error('Termin nicht gefunden.');
     const event = { id: eventDoc.id, ...eventDoc.data() };
     const start = event.startTime?.toDate?.();
-    const end = event.endTime?.toDate?.();
+    const end   = event.endTime?.toDate?.();
 
     const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
     const attendances = [];
@@ -157,15 +181,14 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     }));
 
     const registered = attendances.filter(a => ['registered','present','confirmation_pending','late_excused','late_unexcused'].includes(a.status)).length;
-    const present = attendances.filter(a => ['present','late_excused','late_unexcused'].includes(a.status)).length;
-    const absent = attendances.filter(a => ['absent_excused','absent_unexcused','cancelled'].includes(a.status)).length;
-    const needed = Math.max(0, (event.minParticipants || 0) - registered);
+    const present    = attendances.filter(a => ['present','late_excused','late_unexcused'].includes(a.status)).length;
+    const absent     = attendances.filter(a => ['absent_excused','absent_unexcused','cancelled'].includes(a.status)).length;
+    const needed     = Math.max(0, (event.minParticipants || 0) - registered);
     const minReached = needed === 0;
 
     const description = event.description?.trim() || '';
-    const location = event.location?.trim() || '';
+    const location    = event.location?.trim()    || '';
 
-    // Beschreibung-Block (immer wenn vorhanden)
     const descriptionBlock = description ? `
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;">
@@ -175,7 +198,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <div style="color:var(--color-text);white-space:pre-line;">${escapeHtml(description)}</div>
       </div>` : '';
 
-    // Ort-Block (immer wenn vorhanden, unter Beschreibung)
     const locationBlock = location ? `
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;">
@@ -188,42 +210,22 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     container.innerHTML = `
       <style>
         .member-note-tooltip-popup {
-          position: fixed;
-          z-index: 9999;
-          background: var(--color-surface-2);
-          border: 1px solid var(--color-border);
-          border-radius: 8px;
-          padding: 10px 14px;
-          max-width: 280px;
-          box-shadow: 0 6px 24px rgba(0,0,0,0.15);
-          font-size: 0.88rem;
-          line-height: 1.5;
-          color: var(--color-text);
-          pointer-events: none;
-          opacity: 0;
-          transform: translateY(4px);
-          transition: opacity 0.15s ease, transform 0.15s ease;
+          position: fixed; z-index: 9999;
+          background: var(--color-surface-2); border: 1px solid var(--color-border);
+          border-radius: 8px; padding: 10px 14px; max-width: 280px;
+          box-shadow: 0 6px 24px rgba(0,0,0,0.15); font-size: 0.88rem; line-height: 1.5;
+          color: var(--color-text); pointer-events: none; opacity: 0;
+          transform: translateY(4px); transition: opacity 0.15s ease, transform 0.15s ease;
         }
-        .member-note-tooltip-popup.visible {
-          opacity: 1;
-          transform: translateY(0);
-        }
+        .member-note-tooltip-popup.visible { opacity: 1; transform: translateY(0); }
         .member-note-icon {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          color: var(--color-primary);
-          vertical-align: middle;
-          margin-left: 5px;
-          border-radius: 50%;
-          padding: 2px;
-          transition: background 0.15s;
+          display: inline-flex; align-items: center; justify-content: center;
+          cursor: pointer; color: var(--color-primary); vertical-align: middle;
+          margin-left: 5px; border-radius: 50%; padding: 2px; transition: background 0.15s;
           -webkit-tap-highlight-color: transparent;
         }
         .member-note-icon:hover, .member-note-icon:focus {
-          background: var(--color-primary-highlight);
-          outline: none;
+          background: var(--color-primary-highlight); outline: none;
         }
       </style>
 
@@ -365,7 +367,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     document.getElementById('trainer-cancel-self-btn').onclick = () => _cancelTrainerSelf(event, window.currentUser?.firebaseUser?.uid);
     document.getElementById('trainer-late-btn').onclick = () => showToast('Verspätungsfunktion kann als Nächstes ergänzt werden.', 'info');
 
-    // Tooltip-Element einmalig erstellen
     let tooltipEl = document.getElementById('trainer-member-note-tooltip');
     if (!tooltipEl) {
       tooltipEl = document.createElement('div');
@@ -380,20 +381,15 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       clearTimeout(tooltipHideTimer);
       tooltipEl.textContent = noteText;
       tooltipEl.classList.add('visible');
-
       const rect = anchorEl.getBoundingClientRect();
       const tooltipW = 280;
       let left = rect.left;
-      let top = rect.bottom + 6;
-
-      // Nicht über den Bildschirmrand gehen
+      let top  = rect.bottom + 6;
       if (left + tooltipW > window.innerWidth - 8) left = window.innerWidth - tooltipW - 8;
       if (left < 8) left = 8;
-      // Wenn unten kein Platz: über dem Icon anzeigen
       if (top + 80 > window.innerHeight) top = rect.top - 80;
-
       tooltipEl.style.left = left + 'px';
-      tooltipEl.style.top = top + 'px';
+      tooltipEl.style.top  = top  + 'px';
       tooltipEl.style.maxWidth = tooltipW + 'px';
     }
 
@@ -404,25 +400,18 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const tbody = document.getElementById('trainer-attendance-body');
     for (const att of attendances) {
       const user = userMap[att.userId] || { displayName: att.userId };
-      const tr = document.createElement('tr');
+      const tr   = document.createElement('tr');
       tr.dataset.attId = att.id;
 
       const selectOptions = [
-        ['registered','Angemeldet (offen)'],['confirmation_pending','Ausstehend (Bestätigung)'],
+        ['registered','Angemeldet (offen)'],['confirmation_pending','Ausst. (Bestätigung)'],
         ['present','Anwesend'],['absent_excused','Abgemeldet'],['absent_unexcused','Unentschuldigt gefehlt'],
         ['late_excused','Verspätet (entsch.)'],['late_unexcused','Verspätet (unentsch.)'],['cancelled','Termin abgesagt']
       ];
 
-      // Allgemeine Notiz des Mitglieds aus dem Profil
-      const generalNote = (user.generalNote || '').trim();
-      const noteIconHtml = generalNote
-        ? `<button
-            class="member-note-icon"
-            aria-label="Notiz anzeigen"
-            data-general-note="${escapeHtml(generalNote)}"
-            tabindex="0"
-            style="background:none;border:none;cursor:pointer;"
-          ><span class="material-icons" style="font-size:18px;">info</span></button>`
+      const generalNote   = (user.generalNote || '').trim();
+      const noteIconHtml  = generalNote
+        ? `<button class="member-note-icon" aria-label="Notiz anzeigen" data-general-note="${escapeHtml(generalNote)}" tabindex="0" style="background:none;border:none;cursor:pointer;"><span class="material-icons" style="font-size:18px;">info</span></button>`
         : '';
 
       tr.innerHTML = `
@@ -442,28 +431,23 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <td><button class="btn-danger trainer-remove-person" style="padding:6px 8px;display:inline-flex;align-items:center;gap:4px;" title="Entfernen"><span class="material-icons" style="font-size:16px;">person_remove</span></button></td>
       `;
 
-      // Info-Icon Events (Hover + Touch/Click)
       if (generalNote) {
         const noteBtn = tr.querySelector('.member-note-icon');
         noteBtn.addEventListener('mouseenter', () => showMemberNoteTooltip(noteBtn, generalNote));
         noteBtn.addEventListener('mouseleave', hideMemberNoteTooltip);
-        noteBtn.addEventListener('focus', () => showMemberNoteTooltip(noteBtn, generalNote));
-        noteBtn.addEventListener('blur', hideMemberNoteTooltip);
-        // Touch: Toggle-Verhalten
+        noteBtn.addEventListener('focus',      () => showMemberNoteTooltip(noteBtn, generalNote));
+        noteBtn.addEventListener('blur',       hideMemberNoteTooltip);
         noteBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (tooltipEl.classList.contains('visible')) {
-            tooltipEl.classList.remove('visible');
-          } else {
-            showMemberNoteTooltip(noteBtn, generalNote);
-          }
+          if (tooltipEl.classList.contains('visible')) tooltipEl.classList.remove('visible');
+          else showMemberNoteTooltip(noteBtn, generalNote);
         });
       }
 
-      const selectEl = tr.querySelector('.trainer-status-select');
-      const presentCheck = tr.querySelector('.trainer-present-check');
+      const selectEl      = tr.querySelector('.trainer-status-select');
+      const presentCheck  = tr.querySelector('.trainer-present-check');
       presentCheck.onchange = () => { if (presentCheck.checked) selectEl.value = 'present'; };
-      selectEl.onchange = () => {
+      selectEl.onchange     = () => {
         presentCheck.checked = ['present','late_excused','late_unexcused'].includes(selectEl.value);
         tr.children[1].innerHTML = renderTrainerStatusChip(selectEl.value);
       };
@@ -484,7 +468,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       tbody.appendChild(tr);
     }
 
-    // Klick außerhalb schließt Tooltip
     document.addEventListener('click', () => tooltipEl.classList.remove('visible'), { once: false });
 
   } catch (e) {
@@ -511,7 +494,7 @@ function renderTrainerNeedCard(needed, reached) {
 
 function renderTrainerStatusChip(status) {
   const map = {
-    registered:['Angemeldet','chip-primary'], confirmation_pending:['Ausstehend','chip-warning'],
+    registered:['Angemeldet','chip-primary'], confirmation_pending:['Ausst. Bestätigung','chip-warning'],
     present:['Anwesend','chip-success'], absent_excused:['Abgemeldet','chip-error'],
     absent_unexcused:['Unentschuldigt','chip-error'], late_excused:['Verspätet (entsch.)','chip-warning'],
     late_unexcused:['Verspätet (unentsch.)','chip-warning'], cancelled:['Termin abgesagt','chip-error']
@@ -549,7 +532,7 @@ async function _showAddMemberModal(event, _unused, onDone) {
       const selected = [...document.querySelectorAll('input[name="trainer-add-member"]:checked')].map(i => i.value);
       if (!selected.length) { showToast('Bitte mindestens eine Person wählen.', 'error'); return false; }
       try {
-        const defaultMode = event.mode || window.appSettings?.defaultMode || 'opt_in';
+        const defaultMode   = event.mode || window.appSettings?.defaultMode || 'opt_in';
         const initialStatus = defaultMode === 'confirmation' ? 'confirmation_pending' : 'registered';
         const batch = firestore.batch();
         selected.forEach(uid => {
@@ -566,7 +549,7 @@ async function _showAddMemberModal(event, _unused, onDone) {
 
   setTimeout(() => {
     const search = document.getElementById('trainer-add-member-search');
-    const list = document.getElementById('trainer-add-member-list');
+    const list   = document.getElementById('trainer-add-member-list');
     if (!search || !list) return;
     search.oninput = () => {
       const q = search.value.toLowerCase();
@@ -597,7 +580,6 @@ function formatDateGerman(date) {
 function formatDateGermanShort(date) {
   return new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
 }
-function totalOr(v) { return v || 0; }
 function escapeHtml(value) {
   return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
