@@ -199,7 +199,7 @@ function _formatMsgDate(ts) {
   return d.toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
-/* ─── App-Bar Element finden (ID oder Klasse) ───────────────────────────────── */
+/* ─── App-Bar Element finden (ID oder Klasse) ────────────────────────────────── */
 function _getAppBarEl() {
   return document.getElementById('app-bar') || document.querySelector('.app-bar') || null;
 }
@@ -209,6 +209,7 @@ function _showCriticalModal(criticalMsgs) {
   const overlay = document.createElement('div');
   overlay.className = 'sys-critical-modal-overlay';
 
+  // Im Modal: Gültig-bis wird angezeigt
   const cards = criticalMsgs.map(m => {
     const cfg   = MSG_TYPES[m.type] || MSG_TYPES.warning;
     const until = m.endAt ? `<div class="smc-meta">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : '';
@@ -272,7 +273,6 @@ async function renderSystemMessageBanner() {
   const bannerMsgs = allActive.filter(m => !_isDismissed(m.id));
   if (!bannerMsgs.length) return;
 
-  // App-Bar Element finden (ID oder Klasse)
   const appBar = _getAppBarEl();
   if (!appBar) return;
 
@@ -286,6 +286,7 @@ async function renderSystemMessageBanner() {
   banner.style.borderColor = cfg.border;
   banner.style.color       = cfg.text;
 
+  // Banner: kein 'Gültig bis' – nur Icon, Titel und Nachrichtentext
   banner.innerHTML = `
     <span class="material-icons smb-icon">${cfg.icon}</span>
     <div class="smb-text">
@@ -307,12 +308,12 @@ async function renderSystemMessageBanner() {
     banner.querySelector('.smb-more').onclick = () => showAllMessagesModal(bannerMsgs);
   }
 
-  // Banner direkt NACH der App-Bar einfügen
   appBar.insertAdjacentElement('afterend', banner);
 }
 
 /* ─── Alle Nachrichten Modal ─────────────────────────────────────────────────── */
 function showAllMessagesModal(msgs) {
+  // Im Modal: Gültig-bis wird angezeigt
   const cards = msgs.map(m => {
     const cfg = MSG_TYPES[m.type] || MSG_TYPES.info;
     const until = m.endAt ? `<div class="smc-meta">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : '';
@@ -357,11 +358,6 @@ function undismissMessage(id) {
   renderSystemMessageBanner();
 }
 
-/**
- * renderDismissedMessagesSection
- * Rendert eine Sektion "Weggeklickte Nachrichten" in einem Container-Element.
- * Wird aus profile.js aufgerufen.
- */
 async function renderDismissedMessagesSection(containerEl) {
   const msgs = await getDismissedMessagesData();
 
@@ -370,6 +366,7 @@ async function renderDismissedMessagesSection(containerEl) {
     return;
   }
 
+  // In der Profil-Sektion: Gültig-bis wird angezeigt
   containerEl.innerHTML = msgs.map(m => {
     const cfg = MSG_TYPES[m.type] || MSG_TYPES.info;
     return `
@@ -394,7 +391,6 @@ async function renderDismissedMessagesSection(containerEl) {
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    KOORDINATOR-VERWALTUNG
-   Wird aus coordinator-dashboard.js aufgerufen: renderSystemMessagesTab(el)
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 async function renderSystemMessagesTab(el) {
@@ -632,14 +628,11 @@ async function showMsgForm(msg, allGroups, parentEl) {
       }
 
       if (period === 'range') {
-        // Zeitraum: startAt/endAt als Date-Objekte setzen
         const startStr = document.getElementById('sm-start').value;
         const endStr   = document.getElementById('sm-end').value;
         if (startStr) payload.startAt = new Date(startStr);
         if (endStr)   payload.endAt   = new Date(endStr);
       }
-      // Bei 'permanent' und isNew: Felder einfach weglassen (kein FieldValue.delete()!)
-      // Bei 'permanent' und update (isNew=false): explizit löschen
       if (period === 'permanent' && !isNew) {
         payload.startAt = firebase.firestore.FieldValue.delete();
         payload.endAt   = firebase.firestore.FieldValue.delete();
@@ -663,9 +656,7 @@ async function showMsgForm(msg, allGroups, parentEl) {
     }
   });
 
-  // Gruppen und Event-Listener NACH dem Modal-Öffnen per JS befüllen
   requestAnimationFrame(() => {
-    // Gruppen-Checkboxen per JS rendern (zuverlässiger als HTML-String)
     const groupsList = document.getElementById('sm-groups-list');
     if (groupsList) {
       if (allGroups.length) {
