@@ -186,6 +186,47 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       </div>` : '';
 
     container.innerHTML = `
+      <style>
+        .member-note-tooltip-popup {
+          position: fixed;
+          z-index: 9999;
+          background: var(--color-surface-2);
+          border: 1px solid var(--color-border);
+          border-radius: 8px;
+          padding: 10px 14px;
+          max-width: 280px;
+          box-shadow: 0 6px 24px rgba(0,0,0,0.15);
+          font-size: 0.88rem;
+          line-height: 1.5;
+          color: var(--color-text);
+          pointer-events: none;
+          opacity: 0;
+          transform: translateY(4px);
+          transition: opacity 0.15s ease, transform 0.15s ease;
+        }
+        .member-note-tooltip-popup.visible {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        .member-note-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          color: var(--color-primary);
+          vertical-align: middle;
+          margin-left: 5px;
+          border-radius: 50%;
+          padding: 2px;
+          transition: background 0.15s;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .member-note-icon:hover, .member-note-icon:focus {
+          background: var(--color-primary-highlight);
+          outline: none;
+        }
+      </style>
+
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;">
         <button class="btn-secondary" id="trainer-back-btn" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:16px;">arrow_back</span>Zurück
@@ -324,6 +365,42 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     document.getElementById('trainer-cancel-self-btn').onclick = () => _cancelTrainerSelf(event, window.currentUser?.firebaseUser?.uid);
     document.getElementById('trainer-late-btn').onclick = () => showToast('Verspätungsfunktion kann als Nächstes ergänzt werden.', 'info');
 
+    // Tooltip-Element einmalig erstellen
+    let tooltipEl = document.getElementById('trainer-member-note-tooltip');
+    if (!tooltipEl) {
+      tooltipEl = document.createElement('div');
+      tooltipEl.id = 'trainer-member-note-tooltip';
+      tooltipEl.className = 'member-note-tooltip-popup';
+      document.body.appendChild(tooltipEl);
+    }
+
+    let tooltipHideTimer = null;
+
+    function showMemberNoteTooltip(anchorEl, noteText) {
+      clearTimeout(tooltipHideTimer);
+      tooltipEl.textContent = noteText;
+      tooltipEl.classList.add('visible');
+
+      const rect = anchorEl.getBoundingClientRect();
+      const tooltipW = 280;
+      let left = rect.left;
+      let top = rect.bottom + 6;
+
+      // Nicht über den Bildschirmrand gehen
+      if (left + tooltipW > window.innerWidth - 8) left = window.innerWidth - tooltipW - 8;
+      if (left < 8) left = 8;
+      // Wenn unten kein Platz: über dem Icon anzeigen
+      if (top + 80 > window.innerHeight) top = rect.top - 80;
+
+      tooltipEl.style.left = left + 'px';
+      tooltipEl.style.top = top + 'px';
+      tooltipEl.style.maxWidth = tooltipW + 'px';
+    }
+
+    function hideMemberNoteTooltip() {
+      tooltipHideTimer = setTimeout(() => tooltipEl.classList.remove('visible'), 100);
+    }
+
     const tbody = document.getElementById('trainer-attendance-body');
     for (const att of attendances) {
       const user = userMap[att.userId] || { displayName: att.userId };
@@ -336,9 +413,24 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         ['late_excused','Verspätet (entsch.)'],['late_unexcused','Verspätet (unentsch.)'],['cancelled','Termin abgesagt']
       ];
 
+      // Allgemeine Notiz des Mitglieds aus dem Profil
+      const generalNote = (user.generalNote || '').trim();
+      const noteIconHtml = generalNote
+        ? `<button
+            class="member-note-icon"
+            aria-label="Notiz anzeigen"
+            data-general-note="${escapeHtml(generalNote)}"
+            tabindex="0"
+            style="background:none;border:none;cursor:pointer;"
+          ><span class="material-icons" style="font-size:18px;">info</span></button>`
+        : '';
+
       tr.innerHTML = `
         <td>
-          <div style="font-weight:600;">${user.displayName || user.email || att.userId}</div>
+          <div style="font-weight:600;display:flex;align-items:center;gap:0;flex-wrap:nowrap;">
+            <span>${escapeHtml(user.displayName || user.email || att.userId)}</span>
+            ${noteIconHtml}
+          </div>
           ${att.addedByTrainer ? `<div><span class="chip" style="font-size:0.72rem;">Manuell</span></div>` : ''}
         </td>
         <td>${renderTrainerStatusChip(att.status)}</td>
@@ -349,6 +441,24 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <td><input type="text" value="${escapeHtml(att.memberNote||'')}" disabled style="width:100%;min-width:150px;background:var(--color-surface-offset);"/></td>
         <td><button class="btn-danger trainer-remove-person" style="padding:6px 8px;display:inline-flex;align-items:center;gap:4px;" title="Entfernen"><span class="material-icons" style="font-size:16px;">person_remove</span></button></td>
       `;
+
+      // Info-Icon Events (Hover + Touch/Click)
+      if (generalNote) {
+        const noteBtn = tr.querySelector('.member-note-icon');
+        noteBtn.addEventListener('mouseenter', () => showMemberNoteTooltip(noteBtn, generalNote));
+        noteBtn.addEventListener('mouseleave', hideMemberNoteTooltip);
+        noteBtn.addEventListener('focus', () => showMemberNoteTooltip(noteBtn, generalNote));
+        noteBtn.addEventListener('blur', hideMemberNoteTooltip);
+        // Touch: Toggle-Verhalten
+        noteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (tooltipEl.classList.contains('visible')) {
+            tooltipEl.classList.remove('visible');
+          } else {
+            showMemberNoteTooltip(noteBtn, generalNote);
+          }
+        });
+      }
 
       const selectEl = tr.querySelector('.trainer-status-select');
       const presentCheck = tr.querySelector('.trainer-present-check');
@@ -373,6 +483,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       };
       tbody.appendChild(tr);
     }
+
+    // Klick außerhalb schließt Tooltip
+    document.addEventListener('click', () => tooltipEl.classList.remove('visible'), { once: false });
+
   } catch (e) {
     console.error(e);
     container.innerHTML = `<p class="text-error">Fehler beim Laden der Detailansicht: ${e.message}</p>`;
