@@ -135,6 +135,25 @@
       align-items: center;
       gap: 7px;
     }
+    #forgot-pw-btn {
+      display: block;
+      width: 100%;
+      margin-top: 14px;
+      padding: 7px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.875rem;
+      color: var(--color-text-muted);
+      text-align: center;
+      border-radius: 8px;
+      transition: color 0.15s, background 0.15s;
+    }
+    #forgot-pw-btn:hover {
+      color: var(--color-primary);
+      background: var(--color-primary-highlight);
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     @media (max-width: 480px) {
       .login-card { padding: 28px 20px 24px; }
     }
@@ -190,6 +209,8 @@
           <span id="login-spinner" class="material-icons" hidden style="animation:spin 0.8s linear infinite;font-size:18px;">refresh</span>
         </button>
       </form>
+
+      <button type="button" id="forgot-pw-btn">Passwort vergessen?</button>
     </div>
   </div>
 
@@ -253,10 +274,6 @@
       </main>
     </div>
   </div>
-
-  <style>
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
 
   <script src="/js/firebase-init.js"></script>
   <script src="/js/utils.js"></script>
