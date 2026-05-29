@@ -3,10 +3,10 @@
 
 /* ─── Typen & visuelle Konfiguration ─────────────────────────────────────────── */
 const MSG_TYPES = {
-  info:    { icon: 'info',          label: 'Info',    bg: 'var(--color-blue-highlight)',     border: 'var(--color-blue)',     text: 'var(--color-blue)',    critical: false },
-  warning: { icon: 'warning',       label: 'Warnung', bg: 'var(--color-warning-highlight)',  border: 'var(--color-warning)', text: 'var(--color-warning)', critical: true  },
-  danger:  { icon: 'error',         label: 'Achtung', bg: 'var(--color-error-highlight)',    border: 'var(--color-error)',   text: 'var(--color-error)',   critical: true  },
-  success: { icon: 'check_circle',  label: 'Erfolg',  bg: 'var(--color-success-highlight)', border: 'var(--color-success)', text: 'var(--color-success)', critical: false },
+  info:    { icon: 'info',          label: 'Info',    bg: 'var(--color-blue-highlight)',     border: 'var(--color-blue)',     text: 'var(--color-blue)'    },
+  warning: { icon: 'warning',       label: 'Warnung', bg: 'var(--color-warning-highlight)',  border: 'var(--color-warning)', text: 'var(--color-warning)' },
+  danger:  { icon: 'error',         label: 'Achtung', bg: 'var(--color-error-highlight)',    border: 'var(--color-error)',   text: 'var(--color-error)'   },
+  success: { icon: 'check_circle',  label: 'Erfolg',  bg: 'var(--color-success-highlight)', border: 'var(--color-success)', text: 'var(--color-success)' },
 };
 
 /* ─── Banner CSS (injiziert einmalig) ────────────────────────────────────────── */
@@ -30,6 +30,9 @@ const MSG_TYPES = {
     #sys-msg-banner .smb-icon { font-size: 20px; flex-shrink: 0; }
     #sys-msg-banner .smb-title { font-weight: 600; margin-right: 4px; }
     #sys-msg-banner .smb-text { flex: 1; min-width: 0; }
+    #sys-msg-banner .smb-until {
+      font-size: 0.78rem; opacity: 0.75; white-space: nowrap; flex-shrink: 0;
+    }
     #sys-msg-banner .smb-more {
       background: none; border: none; cursor: pointer;
       font-size: 0.82rem; text-decoration: underline; padding: 0; white-space: nowrap;
@@ -54,7 +57,7 @@ const MSG_TYPES = {
     .sys-msg-card .smc-title { font-weight: 600; }
     .sys-msg-card .smc-meta { font-size: 0.78rem; margin-top: 6px; opacity: 0.7; }
 
-    /* Kritisches Nachrichten-Modal */
+    /* Hervorgehobenes Nachrichten-Popup */
     .sys-critical-modal-overlay {
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.55);
@@ -114,8 +117,8 @@ const MSG_TYPES = {
 })();
 
 /* ─── Dismiss-State (sessionStorage, 30min TTL) ──────────────────────────────── */
-const _DISMISS_KEY  = 'neo_dismissed_msgs';
-const _DISMISS_TTL  = 30 * 60 * 1000;
+const _DISMISS_KEY    = 'neo_dismissed_msgs';
+const _DISMISS_TTL    = 30 * 60 * 1000;
 const _FIRST_LOAD_KEY = 'neo_first_load_ts';
 
 function _loadDismissed() {
@@ -199,19 +202,17 @@ function _formatMsgDate(ts) {
   return d.toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
-/* ─── App-Bar Element finden (ID oder Klasse) ────────────────────────────────── */
 function _getAppBarEl() {
   return document.getElementById('app-bar') || document.querySelector('.app-bar') || null;
 }
 
-/* ─── Kritische Nachrichten als Vollbild-Modal ───────────────────────────────── */
-function _showCriticalModal(criticalMsgs) {
+/* ─── Hervorgehobene Nachrichten als Popup (1x pro 30min) ────────────────────── */
+function _showHighlightPopup(highlightedMsgs) {
   const overlay = document.createElement('div');
   overlay.className = 'sys-critical-modal-overlay';
 
-  // Im Modal: Gültig-bis wird angezeigt
-  const cards = criticalMsgs.map(m => {
-    const cfg   = MSG_TYPES[m.type] || MSG_TYPES.warning;
+  const cards = highlightedMsgs.map(m => {
+    const cfg   = MSG_TYPES[m.type] || MSG_TYPES.info;
     const until = m.endAt ? `<div class="smc-meta">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : '';
     return `
       <div class="sys-msg-card" style="background:${cfg.bg};border-color:${cfg.border};color:${cfg.text};">
@@ -226,8 +227,8 @@ function _showCriticalModal(criticalMsgs) {
 
   overlay.innerHTML = `
     <div class="sys-critical-modal">
-      <div class="sys-critical-modal-header" style="color:var(--color-error);">
-        <span class="material-icons scm-icon">notification_important</span>
+      <div class="sys-critical-modal-header" style="color:var(--color-warning);">
+        <span class="material-icons scm-icon" style="color:var(--color-warning);">notification_important</span>
         <h3>Wichtige Hinweise</h3>
       </div>
       <div class="sys-critical-modal-body">${cards}</div>
@@ -261,11 +262,11 @@ async function renderSystemMessageBanner() {
       return (order[a.type]??2) - (order[b.type]??2);
     });
 
-  // Beim ersten Laden (innerhalb 30min): kritische Nachrichten als Modal
+  // Beim ersten Laden (1x pro 30min): hervorgehobene Nachrichten als Popup
   if (isFirst) {
-    const criticals = allActive.filter(m => (MSG_TYPES[m.type]||{}).critical && !_isDismissed(m.id));
-    if (criticals.length) {
-      setTimeout(() => _showCriticalModal(criticals), 400);
+    const highlighted = allActive.filter(m => m.highlight === true && !_isDismissed(m.id));
+    if (highlighted.length) {
+      setTimeout(() => _showHighlightPopup(highlighted), 400);
     }
   }
 
@@ -286,13 +287,18 @@ async function renderSystemMessageBanner() {
   banner.style.borderColor = cfg.border;
   banner.style.color       = cfg.text;
 
-  // Banner: kein 'Gültig bis' – nur Icon, Titel und Nachrichtentext
+  // Banner: Icon + Titel + Text + optionales 'Gültig bis' + Schließen
+  const untilHtml = main.endAt
+    ? `<span class="smb-until">bis ${_formatMsgDate(main.endAt)}</span>`
+    : '';
+
   banner.innerHTML = `
     <span class="material-icons smb-icon">${cfg.icon}</span>
     <div class="smb-text">
       ${main.title ? `<span class="smb-title">${main.title}:</span>` : ''}
       ${main.message || ''}
     </div>
+    ${untilHtml}
     ${rest.length ? `<button class="smb-more">${rest.length} weitere</button>` : ''}
     <button class="smb-dismiss" title="Schließen" aria-label="Schließen">
       <span class="material-icons" style="font-size:18px;">close</span>
@@ -313,7 +319,6 @@ async function renderSystemMessageBanner() {
 
 /* ─── Alle Nachrichten Modal ─────────────────────────────────────────────────── */
 function showAllMessagesModal(msgs) {
-  // Im Modal: Gültig-bis wird angezeigt
   const cards = msgs.map(m => {
     const cfg = MSG_TYPES[m.type] || MSG_TYPES.info;
     const until = m.endAt ? `<div class="smc-meta">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : '';
@@ -366,7 +371,6 @@ async function renderDismissedMessagesSection(containerEl) {
     return;
   }
 
-  // In der Profil-Sektion: Gültig-bis wird angezeigt
   containerEl.innerHTML = msgs.map(m => {
     const cfg = MSG_TYPES[m.type] || MSG_TYPES.info;
     return `
@@ -444,6 +448,9 @@ function _renderMsgTable(msgs) {
     const recip = m.recipients === 'groups' ? 'Gruppen'
                 : m.recipients === 'users'  ? 'Benutzer'
                 : 'Alle';
+    const highlightBadge = m.highlight
+      ? `<span class="chip" style="font-size:0.72rem;margin-left:4px;background:var(--color-warning-highlight);color:var(--color-warning);border:1px solid var(--color-warning);">Hervorgehoben</span>`
+      : '';
     return `
       <tr>
         <td>
@@ -451,6 +458,7 @@ function _renderMsgTable(msgs) {
             <span class="material-icons" style="font-size:13px;vertical-align:middle;">${cfg.icon}</span>
             ${cfg.label}
           </span>
+          ${highlightBadge}
         </td>
         <td>
           <strong>${m.title || '–'}</strong>
@@ -600,6 +608,16 @@ async function showMsgForm(msg, allGroups, parentEl) {
         </div>
       </div>
 
+      <div style="margin-top:14px;padding:10px 12px;background:var(--color-warning-highlight);border:1px solid var(--color-warning);border-radius:var(--radius-md);">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+          <input type="checkbox" id="sm-highlight" style="margin-top:2px;flex-shrink:0;" ${msg?.highlight?'checked':''}/>
+          <div>
+            <div style="font-weight:600;color:var(--color-warning);font-size:0.88rem;">Hervorheben</div>
+            <div style="font-size:0.8rem;color:var(--color-text-muted);margin-top:2px;">Nachricht wird beim ersten Aufruf (1× pro 30 Min.) als großes Popup angezeigt.</div>
+          </div>
+        </label>
+      </div>
+
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px;">
         <input type="checkbox" id="sm-active" ${(msg?.active!==false)?'checked':''}/>
         Sofort aktiv
@@ -607,16 +625,17 @@ async function showMsgForm(msg, allGroups, parentEl) {
     `,
     confirmLabel: isNew ? 'Erstellen' : 'Speichern',
     onConfirm: async () => {
-      const type    = document.getElementById('sm-type').value;
-      const title   = document.getElementById('sm-title').value.trim();
-      const message = document.getElementById('sm-message').value.trim();
-      const recip   = document.querySelector('input[name="sm-recip"]:checked')?.value || 'all';
-      const period  = document.querySelector('input[name="sm-period"]:checked')?.value || 'permanent';
-      const active  = document.getElementById('sm-active').checked;
+      const type      = document.getElementById('sm-type').value;
+      const title     = document.getElementById('sm-title').value.trim();
+      const message   = document.getElementById('sm-message').value.trim();
+      const recip     = document.querySelector('input[name="sm-recip"]:checked')?.value || 'all';
+      const period    = document.querySelector('input[name="sm-period"]:checked')?.value || 'permanent';
+      const active    = document.getElementById('sm-active').checked;
+      const highlight = document.getElementById('sm-highlight').checked;
 
       if (!message) { showToast('Bitte Nachrichtentext eingeben.', 'error'); return false; }
 
-      const payload = { type, title, message, recipients: recip, active };
+      const payload = { type, title, message, recipients: recip, active, highlight };
 
       if (recip === 'groups') {
         payload.recipientGroups = [...document.querySelectorAll('input[name="sm-group"]:checked')].map(i=>i.value);
@@ -633,10 +652,12 @@ async function showMsgForm(msg, allGroups, parentEl) {
         if (startStr) payload.startAt = new Date(startStr);
         if (endStr)   payload.endAt   = new Date(endStr);
       }
+      // Bei 'permanent' + update: startAt/endAt löschen
       if (period === 'permanent' && !isNew) {
         payload.startAt = firebase.firestore.FieldValue.delete();
         payload.endAt   = firebase.firestore.FieldValue.delete();
       }
+      // Bei 'permanent' + neu: Felder einfach weglassen (kein FieldValue.delete() bei add()!)
 
       try {
         if (isNew) {
