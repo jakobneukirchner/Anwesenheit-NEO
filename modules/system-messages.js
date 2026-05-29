@@ -96,13 +96,12 @@ function _formatMsgDate(ts) {
 
 /* ─── Banner rendern ─────────────────────────────────────────────────────────── */
 async function renderSystemMessageBanner() {
-  // Alten Banner entfernen
   const old = document.getElementById('sys-msg-banner');
   if (old) old.remove();
 
   let msgs = [];
   try {
-    const snap = await firestore.collection('systemMessages').orderBy('createdAt', 'desc').get();
+    const snap = await firestore.collection('systemMessages').get();
     snap.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
   } catch (e) { return; }
 
@@ -184,9 +183,15 @@ function showAllMessagesModal(msgs) {
 async function renderSystemMessagesTab(el) {
   el.innerHTML = `<div class="loading-center">Lade Nachrichten...</div>`;
   try {
-    const snap = await firestore.collection('systemMessages').orderBy('createdAt', 'desc').get();
+    const snap = await firestore.collection('systemMessages').get();
     const msgs = [];
     snap.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
+    // Sortierung im Client: neueste zuerst
+    msgs.sort((a, b) => {
+      const ta = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+      const tb = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+      return tb - ta;
+    });
 
     const gSnap = await firestore.collection('groups').orderBy('name').get();
     const allGroups = [];
@@ -214,7 +219,7 @@ async function renderSystemMessagesTab(el) {
     });
   } catch (e) {
     console.error(e);
-    el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>';
+    el.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
   }
 }
 
