@@ -9,16 +9,15 @@ async function getUserData(uid) {
 
 firebaseAuth.onAuthStateChanged(async (fbUser) => {
   const loginScreen  = document.getElementById('login-screen');
+  const appRoot      = document.getElementById('app-root');
   const appContent   = document.getElementById('app-content');
-  const appBar       = document.getElementById('app-bar');
-  const mobileMenuBtn = document.getElementById('mobile-menu-btn');
   const mobileProfile = document.getElementById('mobile-profile-btn');
 
   if (!fbUser) {
     window.currentUser = null;
     if (appContent)  appContent.innerHTML = '';
     if (loginScreen) loginScreen.hidden = false;
-    if (appBar)      appBar.hidden = true;
+    if (appRoot)     appRoot.hidden = true;
     removeDashboardSwitcher();
     const old = document.getElementById('sys-msg-banner');
     if (old) old.remove();
@@ -26,7 +25,7 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
   }
 
   if (loginScreen) loginScreen.hidden = true;
-  if (appBar)      appBar.hidden = false;
+  if (appRoot)     appRoot.hidden = false;
   if (appContent)  appContent.innerHTML = '<div class="loading-center">Lade...</div>';
 
   const userData = await getUserData(fbUser.uid);
@@ -136,6 +135,7 @@ function _makeSeparator() {
   return s;
 }
 function _updateSwitcherActive(wrapper, role) {
+  if (!wrapper) return;
   wrapper.querySelectorAll('.role-switch-btn').forEach(b => _applyActive(b, b.dataset.role === role));
 }
 function _updateMobileActive(role) {
@@ -221,7 +221,7 @@ function removeDashboardSwitcher() {
   if (rs) rs.remove();
 }
 
-// ── Login-Formular ────────────────────────────────────────────────────────────
+// ── Login-Formular ────────────────────────────────────────────
 const loginForm     = document.getElementById('login-form');
 const emailInput    = document.getElementById('login-email');
 const passwordInput = document.getElementById('login-password');
@@ -288,7 +288,7 @@ if (loginForm) {
       return;
     }
 
-    btnText.textContent = 'Anmelden...';
+    btnText.textContent = 'Anmelden…';
     spinner.hidden = false;
     submitBtn.disabled = true;
     errorEl.innerHTML = '';
@@ -308,11 +308,47 @@ if (loginForm) {
       } else if (err.code === 'auth/invalid-email') {
         msg = 'Ungültige E-Mail-Adresse.';
       } else if (err.code === 'auth/too-many-requests') {
-        msg = 'Konto vorläufig gesperrt. Bitte warte oder setze das Passwort zurück.';
+        msg = 'Konto voräufig gesperrt. Bitte warte oder setze das Passwort zurück.';
       } else if (err.code === 'auth/network-request-failed') {
         msg = 'Netzwerkfehler. Bitte überprüfe deine Internetverbindung.';
       }
       errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+    }
+  });
+}
+
+// ── Passwort vergessen ─────────────────────────────────────────
+const forgotBtn = document.getElementById('forgot-pw-btn');
+if (forgotBtn) {
+  forgotBtn.addEventListener('click', async () => {
+    const email = emailInput ? emailInput.value.trim() : '';
+    if (!email) {
+      errorEl.innerHTML = `
+        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">info</span>
+          Bitte trag zuerst deine E-Mail-Adresse ein.
+        </div>`;
+      emailInput && emailInput.focus();
+      return;
+    }
+    forgotBtn.disabled = true;
+    forgotBtn.textContent = 'Sende…';
+    try {
+      await firebaseAuth.sendPasswordResetEmail(email);
+      errorEl.innerHTML = `
+        <div class="login-error-box" style="background:rgba(67,122,34,0.08);border-color:var(--color-success,#437a22);color:var(--color-success,#437a22);">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">mark_email_read</span>
+          E-Mail gesendet! Bitte prüfe dein Postfach.
+        </div>`;
+    } catch (err) {
+      let msg = 'Fehler beim Senden.';
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
+        msg = 'Keine Konto mit dieser E-Mail-Adresse gefunden.';
+      }
+      errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+    } finally {
+      forgotBtn.disabled = false;
+      forgotBtn.textContent = 'Passwort vergessen?';
     }
   });
 }
