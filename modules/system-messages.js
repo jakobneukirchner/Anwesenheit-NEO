@@ -3,10 +3,10 @@
 
 /* ─── Typen & visuelle Konfiguration ─────────────────────────────────────────── */
 const MSG_TYPES = {
-  info:    { icon: 'info',          label: 'Info',    bg: 'var(--color-blue-highlight)',         border: 'var(--color-blue)',         text: 'var(--color-blue)' },
-  warning: { icon: 'warning',       label: 'Warnung', bg: 'var(--color-warning-highlight)',      border: 'var(--color-warning)',      text: 'var(--color-warning)' },
-  danger:  { icon: 'error',         label: 'Achtung', bg: 'var(--color-error-highlight)',        border: 'var(--color-error)',        text: 'var(--color-error)' },
-  success: { icon: 'check_circle',  label: 'Erfolg',  bg: 'var(--color-success-highlight)',     border: 'var(--color-success)',      text: 'var(--color-success)' },
+  info:    { icon: 'info',          label: 'Info',    bg: 'var(--color-blue-highlight)',     border: 'var(--color-blue)',     text: 'var(--color-blue)',    critical: false },
+  warning: { icon: 'warning',       label: 'Warnung', bg: 'var(--color-warning-highlight)',  border: 'var(--color-warning)', text: 'var(--color-warning)', critical: true  },
+  danger:  { icon: 'error',         label: 'Achtung', bg: 'var(--color-error-highlight)',    border: 'var(--color-error)',   text: 'var(--color-error)',   critical: true  },
+  success: { icon: 'check_circle',  label: 'Erfolg',  bg: 'var(--color-success-highlight)', border: 'var(--color-success)', text: 'var(--color-success)', critical: false },
 };
 
 /* ─── Banner CSS (injiziert einmalig) ────────────────────────────────────────── */
@@ -53,12 +53,96 @@ const MSG_TYPES = {
     .sys-msg-card .smc-icon { font-size: 18px; flex-shrink: 0; }
     .sys-msg-card .smc-title { font-weight: 600; }
     .sys-msg-card .smc-meta { font-size: 0.78rem; margin-top: 6px; opacity: 0.7; }
+
+    /* Kritisches Nachrichten-Modal */
+    .sys-critical-modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 9000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+      animation: sysMsgFadeIn 0.2s ease;
+    }
+    @keyframes sysMsgFadeIn { from { opacity:0; } to { opacity:1; } }
+    .sys-critical-modal {
+      background: var(--color-surface);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.22);
+      max-width: 520px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+      padding: 0;
+      animation: sysMsgSlideIn 0.25s cubic-bezier(0.16,1,0.3,1);
+    }
+    @keyframes sysMsgSlideIn { from { transform: translateY(24px); opacity:0; } to { transform: translateY(0); opacity:1; } }
+    .sys-critical-modal-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .sys-critical-modal-header .scm-icon { font-size: 26px; flex-shrink: 0; }
+    .sys-critical-modal-header h3 { margin: 0; font-size: 1rem; }
+    .sys-critical-modal-body { padding: 16px 20px; }
+    .sys-critical-modal-footer {
+      padding: 12px 20px 18px;
+      display: flex; justify-content: flex-end;
+    }
   `;
   document.head.appendChild(s);
 })();
 
-/* ─── Session-Cache für dismisste Nachrichten ────────────────────────────────── */
-const _dismissedIds = new Set();
+/* ─── Dismiss-State (sessionStorage, 30min TTL) ──────────────────────────────── */
+const _DISMISS_KEY  = 'neo_dismissed_msgs';
+const _DISMISS_TTL  = 30 * 60 * 1000;
+const _FIRST_LOAD_KEY = 'neo_first_load_ts';
+
+function _loadDismissed() {
+  try {
+    const raw = sessionStorage.getItem(_DISMISS_KEY);
+    if (!raw) return {};
+    const data = JSON.parse(raw);
+    const now = Date.now();
+    Object.keys(data).forEach(k => { if (now - data[k] > _DISMISS_TTL) delete data[k]; });
+    return data;
+  } catch { return {}; }
+}
+
+function _saveDismissed(data) {
+  try { sessionStorage.setItem(_DISMISS_KEY, JSON.stringify(data)); } catch {}
+}
+
+let _dismissedMap = _loadDismissed();
+
+function _isDismissed(id) {
+  const ts = _dismissedMap[id];
+  if (!ts) return false;
+  if (Date.now() - ts > _DISMISS_TTL) { delete _dismissedMap[id]; _saveDismissed(_dismissedMap); return false; }
+  return true;
+}
+
+function _dismiss(id) {
+  _dismissedMap[id] = Date.now();
+  _saveDismissed(_dismissedMap);
+}
+
+function _undismiss(id) {
+  delete _dismissedMap[id];
+  _saveDismissed(_dismissedMap);
+}
+
+/* ─── Erstes-Laden-Marker (30min TTL) ───────────────────────────────────────── */
+function _isFirstLoad() {
+  try {
+    const ts = parseInt(sessionStorage.getItem(_FIRST_LOAD_KEY) || '0', 10);
+    const now = Date.now();
+    if (!ts || now - ts > _DISMISS_TTL) {
+      sessionStorage.setItem(_FIRST_LOAD_KEY, String(now));
+      return true;
+    }
+    return false;
+  } catch { return true; }
+}
 
 /* ─── Hilfsfunktionen ────────────────────────────────────────────────────────── */
 function _msgIsActive(msg) {
@@ -94,6 +178,42 @@ function _formatMsgDate(ts) {
   return d.toLocaleString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
+/* ─── Kritische Nachrichten als Vollbild-Modal ───────────────────────────────── */
+function _showCriticalModal(criticalMsgs) {
+  const overlay = document.createElement('div');
+  overlay.className = 'sys-critical-modal-overlay';
+
+  const cards = criticalMsgs.map(m => {
+    const cfg   = MSG_TYPES[m.type] || MSG_TYPES.warning;
+    const until = m.endAt ? `<div class="smc-meta">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : '';
+    return `
+      <div class="sys-msg-card" style="background:${cfg.bg};border-color:${cfg.border};color:${cfg.text};">
+        <div class="smc-header">
+          <span class="material-icons smc-icon">${cfg.icon}</span>
+          <span class="smc-title">${m.title || cfg.label}</span>
+        </div>
+        <div>${m.message || ''}</div>
+        ${until}
+      </div>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="sys-critical-modal">
+      <div class="sys-critical-modal-header" style="color:var(--color-error);">
+        <span class="material-icons scm-icon">notification_important</span>
+        <h3>Wichtige Hinweise</h3>
+      </div>
+      <div class="sys-critical-modal-body">${cards}</div>
+      <div class="sys-critical-modal-footer">
+        <button class="btn-primary" id="sys-critical-close">Verstanden</button>
+      </div>
+    </div>`;
+
+  overlay.querySelector('#sys-critical-close').onclick = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
 /* ─── Banner rendern ─────────────────────────────────────────────────────────── */
 async function renderSystemMessageBanner() {
   const old = document.getElementById('sys-msg-banner');
@@ -105,27 +225,39 @@ async function renderSystemMessageBanner() {
     snap.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
   } catch (e) { return; }
 
-  const active = msgs
-    .filter(m => _msgIsActive(m) && _msgMatchesUser(m) && !_dismissedIds.has(m.id))
+  const isFirst = _isFirstLoad();
+
+  const allActive = msgs
+    .filter(m => _msgIsActive(m) && _msgMatchesUser(m))
     .sort((a, b) => {
       const order = { danger:0, warning:1, info:2, success:3 };
       return (order[a.type]??2) - (order[b.type]??2);
     });
 
-  if (!active.length) return;
+  // Beim ersten Laden (innerhalb 30min): kritische Nachrichten als Modal
+  if (isFirst) {
+    const criticals = allActive.filter(m => (MSG_TYPES[m.type]||{}).critical);
+    if (criticals.length) {
+      setTimeout(() => _showCriticalModal(criticals), 400);
+    }
+  }
+
+  // Banner: nicht-dismisste Nachrichten
+  const bannerMsgs = allActive.filter(m => !_isDismissed(m.id));
+  if (!bannerMsgs.length) return;
 
   const appBar = document.getElementById('app-bar');
   if (!appBar) return;
 
-  const main  = active[0];
-  const rest  = active.slice(1);
-  const cfg   = MSG_TYPES[main.type] || MSG_TYPES.info;
+  const main = bannerMsgs[0];
+  const rest = bannerMsgs.slice(1);
+  const cfg  = MSG_TYPES[main.type] || MSG_TYPES.info;
 
   const banner = document.createElement('div');
   banner.id = 'sys-msg-banner';
-  banner.style.background   = cfg.bg;
-  banner.style.borderColor  = cfg.border;
-  banner.style.color        = cfg.text;
+  banner.style.background  = cfg.bg;
+  banner.style.borderColor = cfg.border;
+  banner.style.color       = cfg.text;
 
   banner.innerHTML = `
     <span class="material-icons smb-icon">${cfg.icon}</span>
@@ -139,12 +271,14 @@ async function renderSystemMessageBanner() {
     </button>`;
 
   banner.querySelector('.smb-dismiss').onclick = () => {
-    _dismissedIds.add(main.id);
+    _dismiss(main.id);
     banner.remove();
+    // Nächste Nachricht anzeigen, falls vorhanden
+    if (rest.length) renderSystemMessageBanner();
   };
 
   if (rest.length) {
-    banner.querySelector('.smb-more').onclick = () => showAllMessagesModal(active);
+    banner.querySelector('.smb-more').onclick = () => showAllMessagesModal(bannerMsgs);
   }
 
   appBar.insertAdjacentElement('afterend', banner);
@@ -175,6 +309,27 @@ function showAllMessagesModal(msgs) {
   });
 }
 
+/* ─── Weggeklickte Nachrichten: für Profil-Seite ─────────────────────────────── */
+async function getDismissedMessagesData() {
+  const activeIds = Object.keys(_dismissedMap).filter(id => _isDismissed(id));
+  if (!activeIds.length) return [];
+
+  let msgs = [];
+  try {
+    const snap = await firestore.collection('systemMessages').get();
+    snap.forEach(doc => {
+      const d = { id: doc.id, ...doc.data() };
+      if (activeIds.includes(d.id) && _msgIsActive(d) && _msgMatchesUser(d)) msgs.push(d);
+    });
+  } catch { return []; }
+  return msgs;
+}
+
+function undismissMessage(id) {
+  _undismiss(id);
+  renderSystemMessageBanner();
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════════
    KOORDINATOR-VERWALTUNG
    Wird aus coordinator-dashboard.js aufgerufen: renderSystemMessagesTab(el)
@@ -186,16 +341,17 @@ async function renderSystemMessagesTab(el) {
     const snap = await firestore.collection('systemMessages').get();
     const msgs = [];
     snap.forEach(doc => msgs.push({ id: doc.id, ...doc.data() }));
-    // Sortierung im Client: neueste zuerst
     msgs.sort((a, b) => {
       const ta = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
       const tb = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
       return tb - ta;
     });
 
-    const gSnap = await firestore.collection('groups').orderBy('name').get();
+    // Gruppen ohne orderBy (vermeidet fehlenden Firestore-Index), client-seitig sortieren
+    const gSnap = await firestore.collection('groups').get();
     const allGroups = [];
     gSnap.forEach(doc => allGroups.push({ id: doc.id, ...doc.data() }));
+    allGroups.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'de'));
 
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
@@ -225,12 +381,12 @@ async function renderSystemMessagesTab(el) {
 
 function _renderMsgTable(msgs) {
   const rows = msgs.map(m => {
-    const cfg     = MSG_TYPES[m.type] || MSG_TYPES.info;
-    const start   = m.startAt ? _formatMsgDate(m.startAt) : '–';
-    const end     = m.endAt   ? _formatMsgDate(m.endAt)   : '∞';
-    const recip   = m.recipients === 'groups' ? 'Gruppen'
-                  : m.recipients === 'users'  ? 'Benutzer'
-                  : 'Alle';
+    const cfg   = MSG_TYPES[m.type] || MSG_TYPES.info;
+    const start = m.startAt ? _formatMsgDate(m.startAt) : '–';
+    const end   = m.endAt   ? _formatMsgDate(m.endAt)   : '∞';
+    const recip = m.recipients === 'groups' ? 'Gruppen'
+                : m.recipients === 'users'  ? 'Benutzer'
+                : 'Alle';
     return `
       <tr>
         <td>
@@ -349,14 +505,17 @@ async function showMsgForm(msg, allGroups, parentEl) {
       </div>
 
       <div id="sm-groups-section" style="margin-top:8px;display:${msg?.recipients==='groups'?'block':'none'};">
-        <div style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow-y:auto;">
-          ${allGroups.map(g => `
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;">
-              <input type="checkbox" name="sm-group" value="${g.id}"
-                ${(msg?.recipientGroups||[]).includes(g.id)?'checked':''}/>
-              ${g.name}
-            </label>`).join('')}
-        </div>
+        ${allGroups.length
+          ? `<div style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:8px;">
+              ${allGroups.map(g => `
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;">
+                  <input type="checkbox" name="sm-group" value="${g.id}"
+                    ${(msg?.recipientGroups||[]).includes(g.id)?'checked':''}/>
+                  ${g.name}
+                </label>`).join('')}
+            </div>`
+          : `<p style="font-size:0.85rem;color:var(--color-text-muted);">Keine Gruppen vorhanden.</p>`
+        }
       </div>
 
       <div id="sm-users-section" style="margin-top:8px;display:${msg?.recipients==='users'?'block':'none'};">
@@ -447,7 +606,6 @@ async function showMsgForm(msg, allGroups, parentEl) {
     }
   });
 
-  // Empfänger-Radios: Sections ein-/ausblenden
   requestAnimationFrame(() => {
     document.querySelectorAll('input[name="sm-recip"]').forEach(radio => {
       radio.addEventListener('change', () => {
@@ -460,7 +618,6 @@ async function showMsgForm(msg, allGroups, parentEl) {
         document.getElementById('sm-period-section').style.display = radio.value==='range' ? 'grid' : 'none';
       });
     });
-
     _loadUsersForMsgForm(msg?.recipientUsers || []);
   });
 }
@@ -472,8 +629,9 @@ async function _loadUsersForMsgForm(selected) {
 
   let allUsers = [];
   try {
-    const snap = await firestore.collection('users').orderBy('displayName').get();
+    const snap = await firestore.collection('users').get();
     snap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
+    allUsers.sort((a, b) => (a.displayName || a.email || '').localeCompare(b.displayName || b.email || '', 'de'));
   } catch (e) {
     listEl.innerHTML = '<span style="font-size:0.82rem;color:var(--color-error);">Fehler beim Laden.</span>';
     return;
