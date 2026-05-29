@@ -1,138 +1,318 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8" />
-  <title>Anwesenheit-NEO</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="stylesheet" href="/css/theme.css" />
-  <link rel="icon" href="/favicon.ico" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" />
+// js/auth.js
 
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+async function getUserData(uid) {
+  try {
+    const doc = await firestore.collection('users').doc(uid).get();
+    return doc.exists ? { id: doc.id, ...doc.data() } : null;
+  } catch (e) { console.error('getUserData:', e); return null; }
+}
 
-  <script>
-    window.FIREBASE_API_KEY             = "{{FIREBASE_API_KEY}}";
-    window.FIREBASE_AUTH_DOMAIN         = "{{FIREBASE_AUTH_DOMAIN}}";
-    window.FIREBASE_PROJECT_ID          = "{{FIREBASE_PROJECT_ID}}";
-    window.FIREBASE_STORAGE_BUCKET      = "{{FIREBASE_STORAGE_BUCKET}}";
-    window.FIREBASE_MESSAGING_SENDER_ID = "{{FIREBASE_MESSAGING_SENDER_ID}}";
-    window.FIREBASE_APP_ID              = "{{FIREBASE_APP_ID}}";
-    window.FIREBASE_MEASUREMENT_ID      = "{{FIREBASE_MEASUREMENT_ID}}";
-  </script>
-</head>
-<body>
-  <div id="app-root">
-    <div class="app-shell">
-      <header class="app-bar">
-        <div class="app-brand">
-          <div id="app-logo" class="app-logo"></div>
-          <span id="app-title">Anwesenheit-NEO</span>
-        </div>
+firebaseAuth.onAuthStateChanged(async (fbUser) => {
+  const loginScreen  = document.getElementById('login-screen');
+  const appContent   = document.getElementById('app-content');
+  const appBar       = document.getElementById('app-bar');
+  const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+  const mobileProfile = document.getElementById('mobile-profile-btn');
 
-        <div class="app-actions desktop-only" id="app-actions-desktop">
-          <span id="app-user-name"
-            style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
-            title="Mein Konto"></span>
-          <button id="profile-btn" class="btn-text btn-icon" hidden title="Konto">
-            <span class="material-icons">manage_accounts</span>
-            <span class="btn-label">Konto</span>
-          </button>
-          <button id="logout-btn" class="btn-text btn-icon" hidden title="Abmelden">
-            <span class="material-icons">logout</span>
-            <span class="btn-label">Abmelden</span>
-          </button>
-        </div>
+  if (!fbUser) {
+    window.currentUser = null;
+    if (appContent)  appContent.innerHTML = '';
+    if (loginScreen) loginScreen.hidden = false;
+    if (appBar)      appBar.hidden = true;
+    removeDashboardSwitcher();
+    const old = document.getElementById('sys-msg-banner');
+    if (old) old.remove();
+    return;
+  }
 
-        <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menü" aria-label="Menü">
-          <span class="material-icons">menu</span>
-        </button>
-      </header>
+  if (loginScreen) loginScreen.hidden = true;
+  if (appBar)      appBar.hidden = false;
+  if (appContent)  appContent.innerHTML = '<div class="loading-center">Lade...</div>';
 
-      <div id="mobile-drawer-overlay" class="mobile-drawer-overlay" hidden></div>
-      <aside id="mobile-drawer" class="mobile-drawer" hidden>
-        <div class="mobile-drawer-header">
-          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-            <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
-            <div style="min-width:0;">
-              <div id="mobile-user-name" style="font-weight:600;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
-              <div style="font-size:0.8rem;color:var(--color-text-muted);">Angemeldet</div>
-            </div>
-          </div>
-          <button id="mobile-drawer-close" class="mobile-drawer-close" aria-label="Schließen" title="Schließen">
-            <span class="material-icons">close</span>
-          </button>
-        </div>
-        <div id="mobile-role-switcher" class="mobile-drawer-section"></div>
-        <div class="mobile-drawer-section">
-          <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
-            <span class="material-icons">manage_accounts</span>
-            <span>Konto</span>
-          </button>
-          <button id="mobile-logout-btn" class="mobile-drawer-btn" hidden>
-            <span class="material-icons">logout</span>
-            <span>Abmelden</span>
-          </button>
-        </div>
-      </aside>
+  const userData = await getUserData(fbUser.uid);
+  if (!userData) {
+    firebaseAuth.signOut();
+    return;
+  }
 
-      <main id="app-content" class="app-content">
-        <div class="loading-center">Laden...</div>
-      </main>
-    </div>
-  </div>
+  window.currentUser = {
+    firebaseUser: fbUser,
+    ...userData,
+    roles: userData.roles || ['member'],
+    groups: userData.groups || []
+  };
 
-  <script src="/js/firebase-init.js"></script>
-  <script src="/js/utils.js"></script>
-  <script src="/js/rate-limit.js"></script>
-  <script src="/modules/settings.js"></script>
-  <script src="/modules/profile.js"></script>
-  <script src="/modules/member-dashboard.js"></script>
-  <script src="/modules/trainer-dashboard.js"></script>
-  <script src="/modules/coordinator-dashboard.js"></script>
-  <script src="/modules/admin-dashboard.js"></script>
-  <script src="/modules/statistics.js"></script>
-  <script src="/modules/member-report.js"></script>
-  <script src="/js/auth.js"></script>
+  // Desktop: Profil-Button / Abmelden
+  const desktopBar = document.querySelector('#app-actions-desktop');
+  if (desktopBar) {
+    let profileBtn = desktopBar.querySelector('#profile-btn');
+    if (!profileBtn) {
+      profileBtn = document.createElement('button');
+      profileBtn.id = 'profile-btn';
+      profileBtn.className = 'icon-btn';
+      profileBtn.setAttribute('aria-label', 'Profil');
+      profileBtn.innerHTML = '<span class="material-icons">account_circle</span>';
+      desktopBar.appendChild(profileBtn);
+    }
+    profileBtn.onclick = () => loadProfilePage();
 
-  <script>
-    (function() {
-      const menuBtn   = document.getElementById('mobile-menu-btn');
-      const drawer    = document.getElementById('mobile-drawer');
-      const overlay   = document.getElementById('mobile-drawer-overlay');
-      const closeBtn  = document.getElementById('mobile-drawer-close');
+    let signOutBtn = desktopBar.querySelector('#signout-btn');
+    if (!signOutBtn) {
+      signOutBtn = document.createElement('button');
+      signOutBtn.id = 'signout-btn';
+      signOutBtn.className = 'icon-btn';
+      signOutBtn.setAttribute('aria-label', 'Abmelden');
+      signOutBtn.title = 'Abmelden';
+      signOutBtn.innerHTML = '<span class="material-icons">logout</span>';
+      desktopBar.appendChild(signOutBtn);
+    }
+    signOutBtn.onclick = () => {
+      firebaseAuth.signOut();
+    };
+  }
+  if (mobileProfile) {
+    mobileProfile.hidden = false;
+    mobileProfile.onclick = () => {
+      if (window._mobileDrawerClose) window._mobileDrawerClose();
+      loadProfilePage();
+    };
+  }
 
-      function isMobile() {
-        return window.matchMedia('(max-width: 639px)').matches;
+  await applyBranding();
+  routeToDashboard(window.currentUser.roles);
+  if (typeof renderSystemMessageBanner === 'function') renderSystemMessageBanner();
+});
+
+const ROLE_ORDER = ['admin', 'coordinator', 'teacher', 'member'];
+function getPrimaryRole(roles) {
+  for (const r of ROLE_ORDER) if (roles.includes(r)) return r;
+  return 'member';
+}
+
+const DASHBOARD_LOADERS = {
+  admin:       () => loadAdminDashboard(),
+  coordinator: () => loadCoordinatorDashboard(),
+  teacher:     () => loadTrainerDashboard(),
+  member:      () => loadMemberDashboard(),
+  statistics:  () => loadStatisticsDashboard(),
+  myMembers:   () => loadMemberReportDashboard()
+};
+
+const ROLE_LABELS_SWITCHER = {
+  admin:       'Admin',
+  coordinator: 'Koordinator',
+  teacher:     getRoleLabel ? getRoleLabel('teacher') : 'Trainer',
+  member:      getRoleLabel ? getRoleLabel('member') : 'Mitglieder',
+  myMembers:   'Meine Mitglieder'
+};
+
+const ROLE_ICONS = {
+  admin:       'admin_panel_settings',
+  coordinator: 'supervisor_account',
+  teacher:     'sports',
+  member:      'group',
+  statistics:  'bar_chart',
+  myMembers:   'people_alt'
+};
+
+const STATS_ROLES      = ['admin', 'coordinator', 'teacher'];
+const MY_MEMBERS_ROLES = ['admin', 'coordinator', 'teacher'];
+
+function routeToDashboard(roles, forceRole) {
+  const role = forceRole || getPrimaryRole(roles);
+  window.currentDashboardRole = role;
+  renderDashboardSwitcher(roles);
+  (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
+}
+
+function _applyActive(btn, isActive) {
+  btn.style.fontWeight    = isActive ? '600' : '400';
+  btn.style.color         = isActive ? 'var(--color-primary)' : '';
+  btn.style.borderBottom  = isActive ? '2px solid var(--color-primary)' : '2px solid transparent';
+}
+function _makeSeparator() {
+  const s = document.createElement('div');
+  Object.assign(s.style, { width:'1px', height:'20px', background:'var(--color-border)', margin:'0 4px', flexShrink:'0' });
+  return s;
+}
+function _updateSwitcherActive(wrapper, role) {
+  wrapper.querySelectorAll('.role-switch-btn').forEach(b => _applyActive(b, b.dataset.role === role));
+}
+function _updateMobileActive(role) {
+  const mc = document.getElementById('mobile-role-switcher');
+  if (mc) mc.querySelectorAll('.role-switch-btn').forEach(b => _applyActive(b, b.dataset.role === role));
+}
+
+function renderDashboardSwitcher(roles) {
+  removeDashboardSwitcher();
+  const available    = ROLE_ORDER.filter(r => roles.includes(r));
+  const hasStats     = STATS_ROLES.some(r => roles.includes(r));
+  const hasMyMembers = MY_MEMBERS_ROLES.some(r => roles.includes(r));
+
+  if (available.length <= 1 && !hasStats && !hasMyMembers) return;
+
+  const desktopBar = document.querySelector('#app-actions-desktop');
+  if (desktopBar) {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'role-switcher';
+    Object.assign(wrapper.style, { display:'flex', alignItems:'center', gap:'2px', marginRight:'6px' });
+
+    const makeBtn = (role, label) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn-text role-switch-btn';
+      btn.dataset.role = role;
+      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role] || 'dashboard'}</span><span class="btn-label">${label}</span>`;
+      _applyActive(btn, role === window.currentDashboardRole);
+      btn.onclick = () => {
+        window.currentDashboardRole = role;
+        _updateSwitcherActive(wrapper, role);
+        _updateMobileActive(role);
+        (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
+      };
+      return btn;
+    };
+
+    if (available.length > 1) available.forEach(r => {
+      const label = typeof getRoleLabel === 'function' ? getRoleLabel(r) : (ROLE_LABELS_SWITCHER[r] || r);
+      wrapper.appendChild(makeBtn(r, label));
+    });
+
+    if (hasStats) {
+      if (available.length > 1) wrapper.appendChild(_makeSeparator());
+      wrapper.appendChild(makeBtn('statistics', 'Statistiken'));
+    }
+    if (hasMyMembers) {
+      wrapper.appendChild(_makeSeparator());
+      wrapper.appendChild(makeBtn('myMembers', 'Meine Mitglieder'));
+    }
+
+    desktopBar.insertBefore(wrapper, desktopBar.firstChild);
+  }
+
+  const mobileContainer = document.getElementById('mobile-role-switcher');
+  if (mobileContainer) {
+    mobileContainer.innerHTML = '';
+    const allRoles = [
+      ...(available.length > 1 ? available : []),
+      ...(hasStats      ? ['statistics'] : []),
+      ...(hasMyMembers  ? ['myMembers']  : [])
+    ];
+    allRoles.forEach(role => {
+      const btn = document.createElement('button');
+      btn.className = 'icon-btn role-switch-btn';
+      btn.dataset.role = role;
+      btn.setAttribute('aria-label', ROLE_LABELS_SWITCHER[role] || role);
+      btn.title = ROLE_LABELS_SWITCHER[role] || role;
+      btn.innerHTML = `<span class="material-icons">${ROLE_ICONS[role] || 'dashboard'}</span>`;
+      _applyActive(btn, role === window.currentDashboardRole);
+      btn.onclick = () => {
+        window.currentDashboardRole = role;
+        _updateMobileActive(role);
+        _updateSwitcherActive(document.getElementById('role-switcher'), role);
+        (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
+      };
+      mobileContainer.appendChild(btn);
+    });
+  }
+}
+
+function removeDashboardSwitcher() {
+  const rs = document.getElementById('role-switcher');
+  if (rs) rs.remove();
+}
+
+// ── Login-Formular ────────────────────────────────────────────────────────────
+const loginForm     = document.getElementById('login-form');
+const emailInput    = document.getElementById('login-email');
+const passwordInput = document.getElementById('login-password');
+const errorEl       = document.getElementById('login-error');
+const submitBtn     = document.getElementById('login-submit-btn');
+const btnText       = document.getElementById('login-btn-text');
+const spinner       = document.getElementById('login-spinner');
+const togglePw      = document.getElementById('toggle-pw');
+
+if (togglePw) {
+  togglePw.addEventListener('click', () => {
+    const isText = passwordInput.type === 'text';
+    passwordInput.type = isText ? 'password' : 'text';
+    togglePw.querySelector('.material-icons').textContent = isText ? 'visibility' : 'visibility_off';
+  });
+}
+
+// Echtzeit-Hinweis wenn E-Mail leer bleibt und Fokus verlassen wird
+if (emailInput) {
+  emailInput.addEventListener('blur', () => {
+    if (!emailInput.value.trim()) {
+      errorEl.innerHTML = `
+        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">info</span>
+          Bitte gib deine E-Mail-Adresse ein.
+        </div>`;
+    } else {
+      errorEl.innerHTML = '';
+    }
+  });
+}
+
+if (loginForm) {
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email    = emailInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!email) {
+      errorEl.innerHTML = `
+        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">warning</span>
+          Bitte gib deine E-Mail-Adresse ein.
+        </div>`;
+      emailInput.focus();
+      return;
+    }
+    if (!password) {
+      errorEl.innerHTML = `
+        <div class="login-error-box">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">lock</span>
+          Bitte gib dein Passwort ein.
+        </div>`;
+      passwordInput.focus();
+      return;
+    }
+
+    if (!checkLoginRateLimit()) {
+      errorEl.innerHTML = `
+        <div class="login-error-box">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">timer</span>
+          Zu viele Versuche. Bitte warte kurz.
+        </div>`;
+      return;
+    }
+
+    btnText.textContent = 'Anmelden...';
+    spinner.hidden = false;
+    submitBtn.disabled = true;
+    errorEl.innerHTML = '';
+
+    try {
+      await firebaseAuth.signInWithEmailAndPassword(email, password);
+      recordLoginSuccess();
+    } catch (err) {
+      recordLoginFailure();
+      btnText.textContent = 'Anmelden';
+      spinner.hidden = true;
+      submitBtn.disabled = false;
+
+      let msg = 'Anmeldung fehlgeschlagen.';
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        msg = 'E-Mail oder Passwort falsch.';
+      } else if (err.code === 'auth/invalid-email') {
+        msg = 'Ungültige E-Mail-Adresse.';
+      } else if (err.code === 'auth/too-many-requests') {
+        msg = 'Konto vorläufig gesperrt. Bitte warte oder setze das Passwort zurück.';
+      } else if (err.code === 'auth/network-request-failed') {
+        msg = 'Netzwerkfehler. Bitte überprüfe deine Internetverbindung.';
       }
-
-      function openDrawer() {
-        if (!isMobile()) return;
-        drawer.hidden = false;
-        overlay.hidden = false;
-        document.body.style.overflow = 'hidden';
-      }
-
-      function closeDrawer() {
-        drawer.hidden = true;
-        overlay.hidden = true;
-        document.body.style.overflow = '';
-      }
-
-      function syncDrawerState() {
-        if (!isMobile()) closeDrawer();
-      }
-
-      menuBtn?.addEventListener('click', openDrawer);
-      closeBtn?.addEventListener('click', closeDrawer);
-      overlay?.addEventListener('click', closeDrawer);
-      window.addEventListener('resize', syncDrawerState);
-      window._mobileDrawerClose = closeDrawer;
-      syncDrawerState();
-    })();
-  </script>
-</body>
-</html>// js/auth.js placeholder - will be restored
+      errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+    }
+  });
+}
