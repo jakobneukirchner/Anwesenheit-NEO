@@ -12,6 +12,9 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
   const appRoot       = document.getElementById('app-root');
   const appContent    = document.getElementById('app-content');
   const mobileProfile = document.getElementById('mobile-profile-btn');
+  const mobileLogout  = document.getElementById('mobile-logout-btn');
+  const profileBtn    = document.getElementById('profile-btn');
+  const logoutBtn     = document.getElementById('logout-btn');
 
   if (!fbUser) {
     window.currentUser = null;
@@ -24,6 +27,7 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
     return;
   }
 
+  // Eingeloggt: Login-Screen weg, App anzeigen
   if (loginScreen) loginScreen.hidden = true;
   if (appRoot)     appRoot.hidden = false;
   if (appContent)  appContent.innerHTML = '<div class="loading-center">Lade...</div>';
@@ -37,36 +41,21 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
   window.currentUser = {
     firebaseUser: fbUser,
     ...userData,
-    roles: userData.roles || ['member'],
+    roles:  userData.roles  || ['member'],
     groups: userData.groups || []
   };
 
-  const desktopBar = document.querySelector('#app-actions-desktop');
-  if (desktopBar) {
-    let profileBtn = desktopBar.querySelector('#profile-btn');
-    if (!profileBtn) {
-      profileBtn = document.createElement('button');
-      profileBtn.id = 'profile-btn';
-      profileBtn.className = 'icon-btn';
-      profileBtn.setAttribute('aria-label', 'Profil');
-      profileBtn.innerHTML = '<span class="material-icons">account_circle</span>';
-      desktopBar.appendChild(profileBtn);
-    }
+  // Desktop-Buttons verdrahten
+  if (profileBtn) {
+    profileBtn.hidden = false;
     profileBtn.onclick = () => loadProfilePage();
-
-    let signOutBtn = desktopBar.querySelector('#signout-btn');
-    if (!signOutBtn) {
-      signOutBtn = document.createElement('button');
-      signOutBtn.id = 'signout-btn';
-      signOutBtn.className = 'icon-btn';
-      signOutBtn.setAttribute('aria-label', 'Abmelden');
-      signOutBtn.title = 'Abmelden';
-      signOutBtn.innerHTML = '<span class="material-icons">logout</span>';
-      desktopBar.appendChild(signOutBtn);
-    }
-    signOutBtn.onclick = () => firebaseAuth.signOut();
+  }
+  if (logoutBtn) {
+    logoutBtn.hidden = false;
+    logoutBtn.onclick = () => firebaseAuth.signOut();
   }
 
+  // Mobile-Drawer-Buttons verdrahten
   if (mobileProfile) {
     mobileProfile.hidden = false;
     mobileProfile.onclick = () => {
@@ -74,6 +63,16 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
       loadProfilePage();
     };
   }
+  if (mobileLogout) {
+    mobileLogout.hidden = false;
+    mobileLogout.onclick = () => firebaseAuth.signOut();
+  }
+
+  // Benutzername anzeigen
+  const nameEl = document.getElementById('app-user-name');
+  if (nameEl) nameEl.textContent = userData.name || fbUser.email || '';
+  const mobileNameEl = document.getElementById('mobile-user-name');
+  if (mobileNameEl) mobileNameEl.textContent = userData.name || fbUser.email || '';
 
   await applyBranding();
   routeToDashboard(window.currentUser.roles);
@@ -228,7 +227,6 @@ const btnText       = document.getElementById('login-btn-text');
 const spinner       = document.getElementById('login-spinner');
 const togglePw      = document.getElementById('toggle-pw');
 
-// Spinner ist per HTML already hidden – diese Funktion toggelt ihn nur bei Klick
 function setLoginLoading(loading) {
   if (submitBtn) submitBtn.disabled = loading;
   if (btnText)   btnText.textContent = loading ? 'Anmelden…' : 'Anmelden';
@@ -243,20 +241,6 @@ if (togglePw && passwordInput) {
   });
 }
 
-if (emailInput) {
-  emailInput.addEventListener('blur', () => {
-    if (!emailInput.value.trim() && errorEl) {
-      errorEl.innerHTML = `
-        <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">info</span>
-          Bitte gib deine E-Mail-Adresse ein.
-        </div>`;
-    } else if (errorEl) {
-      errorEl.innerHTML = '';
-    }
-  });
-}
-
 if (loginForm) {
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -264,7 +248,6 @@ if (loginForm) {
     const email    = emailInput    ? emailInput.value.trim() : '';
     const password = passwordInput ? passwordInput.value     : '';
 
-    // Validierung (noch kein Spinner)
     if (!email) {
       if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
@@ -284,13 +267,11 @@ if (loginForm) {
       return;
     }
 
-    // Ab hier: Spinner an, Firebase-Request starten
     if (errorEl) errorEl.innerHTML = '';
     setLoginLoading(true);
 
     try {
       await firebaseAuth.signInWithEmailAndPassword(email, password);
-      // Erfolg: onAuthStateChanged übernimmt – Login-Screen wird ausgeblendet
     } catch (err) {
       let msg = 'Anmeldung fehlgeschlagen.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
@@ -307,7 +288,6 @@ if (loginForm) {
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}
         </div>`;
     } finally {
-      // Spinner immer zurücksetzen – auch bei Erfolg (Login-Screen wird sowieso ausgeblendet)
       setLoginLoading(false);
     }
   });

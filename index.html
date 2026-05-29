@@ -34,6 +34,11 @@
       padding: 24px 16px;
       background: var(--color-bg);
     }
+    /* WICHTIG: display:flex wird durch hidden-Attribut NICHT überschrieben –
+       deshalb explizit display:none setzen wenn hidden gesetzt ist */
+    #login-screen[hidden] { display: none !important; }
+    #app-root[hidden]     { display: none !important; }
+
     .login-card {
       width: 100%;
       max-width: 400px;
@@ -227,11 +232,11 @@
           <span id="app-user-name"
             style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
             title="Mein Konto"></span>
-          <button id="profile-btn" class="btn-text btn-icon" hidden title="Konto">
+          <button id="profile-btn" class="btn-text btn-icon" title="Konto">
             <span class="material-icons">manage_accounts</span>
             <span class="btn-label">Konto</span>
           </button>
-          <button id="logout-btn" class="btn-text btn-icon" hidden title="Abmelden">
+          <button id="logout-btn" class="btn-text btn-icon" title="Abmelden">
             <span class="material-icons">logout</span>
             <span class="btn-label">Abmelden</span>
           </button>
@@ -291,32 +296,28 @@
 
   <script>
     (function() {
-      const menuBtn   = document.getElementById('mobile-menu-btn');
-      const drawer    = document.getElementById('mobile-drawer');
-      const overlay   = document.getElementById('mobile-drawer-overlay');
-      const closeBtn  = document.getElementById('mobile-drawer-close');
+      const menuBtn  = document.getElementById('mobile-menu-btn');
+      const drawer   = document.getElementById('mobile-drawer');
+      const overlay  = document.getElementById('mobile-drawer-overlay');
+      const closeBtn = document.getElementById('mobile-drawer-close');
 
       function isMobile() {
         return window.matchMedia('(max-width: 639px)').matches;
       }
-
       function openDrawer() {
         if (!isMobile()) return;
         drawer.hidden = false;
         overlay.hidden = false;
         document.body.style.overflow = 'hidden';
       }
-
       function closeDrawer() {
         drawer.hidden = true;
         overlay.hidden = true;
         document.body.style.overflow = '';
       }
-
       function syncDrawerState() {
         if (!isMobile()) closeDrawer();
       }
-
       menuBtn?.addEventListener('click', openDrawer);
       closeBtn?.addEventListener('click', closeDrawer);
       overlay?.addEventListener('click', closeDrawer);
