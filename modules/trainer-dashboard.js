@@ -4,10 +4,8 @@
 async function loadTrainerDashboard() {
   const container = document.getElementById('app-content');
 
-  // Fokus-Schutz: Wenn der Nutzer gerade tippt, Refresh überspringen
   if (window._silentRefresh && container.contains(document.activeElement)) return;
 
-  // Loading-Spinner nur beim ersten (nicht-stillen) Laden anzeigen
   if (!window._silentRefresh) {
     container.innerHTML = `<div class="loading-center">Lade Dashboard…</div>`;
   }
@@ -49,8 +47,6 @@ async function loadTrainerDashboard() {
       .sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
 
     const untilText = formatDateGerman(futureEnd);
-
-    // ── Aktiven Tab merken für stillen Refresh
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
     const newHtml = `
@@ -77,12 +73,10 @@ async function loadTrainerDashboard() {
       </div>
     `;
 
-    // Swap: erst jetzt DOM aktualisieren
     const scrollY = container.scrollTop;
     container.innerHTML = newHtml;
     container.scrollTop = scrollY;
 
-    // Tab-Wechsel-Logik
     container.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -173,7 +167,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const attendances = [];
     attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
-    const userIds = new Set([...(event.trainers || []), ...attendances.map(a => a.userId)]);
+    // FIX: Trainer-IDs aus userIds entfernen, damit Trainer nicht in der Anwesenheitsliste erscheinen
+    const trainerUids = new Set(event.trainers || []);
+    const userIds = new Set([...trainerUids, ...attendances.map(a => a.userId)]);
     const userMap = {};
     await Promise.all([...userIds].map(async uid => {
       const uDoc = await firestore.collection('users').doc(uid).get();
@@ -206,6 +202,12 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </div>
         <div style="color:var(--color-text);">${escapeHtml(location)}</div>
       </div>` : '';
+
+    // FIX: Aktions-Buttons je nach Status anpassen
+    const myUid = window.currentUser?.firebaseUser?.uid;
+    const iAmCancelled = (event.trainerCancellations || []).includes(myUid);
+    const iAmTrainer   = trainerUids.has(myUid);
+    const myLateStatus = event.trainerLateMinutes?.[myUid];
 
     container.innerHTML = `
       <style>
@@ -258,10 +260,14 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           ${(event.trainers || []).map(uid => {
             const u = userMap[uid] || { displayName: uid };
             const cancelled = (event.trainerCancellations || []).includes(uid);
+            const lateMin   = event.trainerLateMinutes?.[uid];
             return `
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--color-border);">
                 <span>${u.displayName || u.email || uid}</span>
-                <span class="chip ${cancelled ? 'chip-error' : 'chip-success'}">${cancelled ? 'Abgemeldet' : 'Eingeplant'}</span>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                  ${lateMin ? `<span class="chip chip-warning">~${lateMin} Min. verspätet</span>` : ''}
+                  <span class="chip ${cancelled ? 'chip-error' : 'chip-success'}">${cancelled ? 'Abgemeldet' : 'Eingeplant'}</span>
+                </div>
               </div>`;
           }).join('') || `<span class="text-muted">Keine Betreuer eingetragen.</span>`}
         </div>
@@ -275,8 +281,8 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${window.currentUser?.profile?.displayName || 'Betreuer'}" angezeigt.</p>
-        <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${event.trainerBroadcast || ''}</textarea>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
+        <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
 
@@ -314,12 +320,19 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">settings</span>Aktionen
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button class="btn-danger" id="trainer-cancel-self-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
-            <span class="material-icons" style="font-size:16px;">event_busy</span>Abmelden / Termin absagen
-          </button>
-          <button class="btn-secondary" id="trainer-late-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
-            <span class="material-icons" style="font-size:16px;">schedule</span>Verspätung melden
-          </button>
+          ${iAmTrainer ? `
+            <button class="btn-danger" id="trainer-cancel-self-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">${iAmCancelled ? 'event_available' : 'event_busy'}</span>
+              ${iAmCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden'}
+            </button>
+            <button class="btn-secondary" id="trainer-cancel-event-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">cancel</span>Termin absagen
+            </button>
+            <button class="btn-secondary" id="trainer-late-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">schedule</span>
+              ${myLateStatus ? `Verspätung: ~${myLateStatus} Min.` : 'Verspätung melden'}
+            </button>
+          ` : ''}
         </div>
       </div>
     `;
@@ -329,14 +342,21 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       else loadTrainerDashboard();
     };
 
+    // FIX: Broadcast-Speichern – liest jetzt korrekt aus dem textarea
     document.getElementById('trainer-save-broadcast').onclick = async () => {
+      const btn = document.getElementById('trainer-save-broadcast');
       const msg = document.getElementById('trainer-broadcast-input').value.trim();
+      btn.disabled = true;
       try {
         await firestore.collection('events').doc(event.id).update({
           trainerBroadcast: msg || firebase.firestore.FieldValue.delete()
         });
         showToast('Nachricht gespeichert.', 'success');
-      } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
     };
 
     document.getElementById('trainer-add-person').onclick = () => _showAddMemberModal(event, null, async () => {
@@ -347,10 +367,13 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       container.querySelectorAll('.trainer-present-check').forEach(cb => { if (!cb.disabled) cb.checked = true; });
     };
 
+    // FIX: Speichern-Button – korrekte Selektor-Logik
     document.getElementById('trainer-save-attendance').onclick = async () => {
+      const btn = document.getElementById('trainer-save-attendance');
+      btn.disabled = true;
       try {
         const updates = [];
-        container.querySelectorAll('[data-att-id]').forEach(row => {
+        document.getElementById('trainer-attendance-body').querySelectorAll('tr[data-att-id]').forEach(row => {
           updates.push(firestore.collection('eventAttendance').doc(row.dataset.attId).update({
             status: row.querySelector('.trainer-status-select').value,
             trainerNoteInternal: row.querySelector('.trainer-internal-note').value.trim(),
@@ -361,12 +384,24 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         await Promise.all(updates);
         showToast('Anwesenheit gespeichert.', 'success');
         await renderTrainerDetailView(event.id, container, options);
-      } catch (e) { showToast('Fehler: ' + e.message, 'error'); }
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+        btn.disabled = false;
+      }
     };
 
-    document.getElementById('trainer-cancel-self-btn').onclick = () => _cancelTrainerSelf(event, window.currentUser?.firebaseUser?.uid);
-    document.getElementById('trainer-late-btn').onclick = () => showToast('Verspätungsfunktion kann als Nächstes ergänzt werden.', 'info');
+    if (iAmTrainer) {
+      // FIX: Abmelden / Wieder einplanen
+      document.getElementById('trainer-cancel-self-btn').onclick = () => _toggleTrainerSelf(event, myUid, iAmCancelled, container, options);
 
+      // FIX: Termin absagen (event.status = cancelled)
+      document.getElementById('trainer-cancel-event-btn').onclick = () => _cancelEvent(event, container, options);
+
+      // FIX: Verspätung melden – echtes Modal
+      document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateStatus, container, options);
+    }
+
+    // Tooltip
     let tooltipEl = document.getElementById('trainer-member-note-tooltip');
     if (!tooltipEl) {
       tooltipEl = document.createElement('div');
@@ -374,7 +409,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       tooltipEl.className = 'member-note-tooltip-popup';
       document.body.appendChild(tooltipEl);
     }
-
     let tooltipHideTimer = null;
 
     function showMemberNoteTooltip(anchorEl, noteText) {
@@ -392,13 +426,15 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       tooltipEl.style.top  = top  + 'px';
       tooltipEl.style.maxWidth = tooltipW + 'px';
     }
-
     function hideMemberNoteTooltip() {
       tooltipHideTimer = setTimeout(() => tooltipEl.classList.remove('visible'), 100);
     }
 
+    // FIX: Anwesenheitsliste filtert Trainer-UIDs heraus
     const tbody = document.getElementById('trainer-attendance-body');
-    for (const att of attendances) {
+    const memberAttendances = attendances.filter(a => !trainerUids.has(a.userId));
+
+    for (const att of memberAttendances) {
       const user = userMap[att.userId] || { displayName: att.userId };
       const tr   = document.createElement('tr');
       tr.dataset.attId = att.id;
@@ -409,9 +445,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         ['late_excused','Verspätet (entsch.)'],['late_unexcused','Verspätet (unentsch.)'],['cancelled','Termin abgesagt']
       ];
 
-      const generalNote   = (user.generalNote || '').trim();
-      const noteIconHtml  = generalNote
-        ? `<button class="member-note-icon" aria-label="Notiz anzeigen" data-general-note="${escapeHtml(generalNote)}" tabindex="0" style="background:none;border:none;cursor:pointer;"><span class="material-icons" style="font-size:18px;">info</span></button>`
+      const generalNote  = (user.generalNote || '').trim();
+      const noteIconHtml = generalNote
+        ? `<button class="member-note-icon" aria-label="Notiz anzeigen" tabindex="0" style="background:none;border:none;cursor:pointer;"><span class="material-icons" style="font-size:18px;">info</span></button>`
         : '';
 
       tr.innerHTML = `
@@ -444,8 +480,8 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         });
       }
 
-      const selectEl      = tr.querySelector('.trainer-status-select');
-      const presentCheck  = tr.querySelector('.trainer-present-check');
+      const selectEl     = tr.querySelector('.trainer-status-select');
+      const presentCheck = tr.querySelector('.trainer-present-check');
       presentCheck.onchange = () => { if (presentCheck.checked) selectEl.value = 'present'; };
       selectEl.onchange     = () => {
         presentCheck.checked = ['present','late_excused','late_unexcused'].includes(selectEl.value);
@@ -454,14 +490,14 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       tr.querySelector('.trainer-remove-person').onclick = () => {
         showModal({
           title: 'Person entfernen',
-          body: `<p>Soll <strong>${user.displayName || user.email || att.userId}</strong> entfernt werden?</p>`,
+          body: `<p>Soll <strong>${escapeHtml(user.displayName || user.email || att.userId)}</strong> entfernt werden?</p>`,
           confirmLabel: 'Entfernen',
           onConfirm: async () => {
             try {
               await firestore.collection('eventAttendance').doc(att.id).delete();
               showToast('Person entfernt.', 'success');
               await renderTrainerDetailView(event.id, container, options);
-            } catch (e) { showToast('Fehler: ' + e.message, 'error'); return false; }
+            } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
           }
         });
       };
@@ -474,6 +510,107 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     console.error(e);
     container.innerHTML = `<p class="text-error">Fehler beim Laden der Detailansicht: ${e.message}</p>`;
   }
+}
+
+// FIX: Abmelden / Wieder einplanen als Trainer
+async function _toggleTrainerSelf(event, trainerUid, isCancelled, container, options) {
+  const action = isCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden';
+  const body   = isCancelled
+    ? `<p>Möchtest du dich wieder für <strong>${escapeHtml(event.title || 'Termin')}</strong> einplanen?</p>`
+    : `<p>Möchtest du dich als ${getRoleLabel('teacher')} für <strong>${escapeHtml(event.title || 'Termin')}</strong> abmelden?</p>`;
+  showModal({
+    title: action,
+    body,
+    confirmLabel: action,
+    onConfirm: async () => {
+      try {
+        if (isCancelled) {
+          await firestore.collection('events').doc(event.id).update({
+            trainerCancellations: firebase.firestore.FieldValue.arrayRemove(trainerUid)
+          });
+          showToast('Du bist wieder eingeplant.', 'success');
+        } else {
+          await firestore.collection('events').doc(event.id).update({
+            trainerCancellations: firebase.firestore.FieldValue.arrayUnion(trainerUid)
+          });
+          showToast('Du wurdest abgemeldet.', 'success');
+        }
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
+    }
+  });
+}
+
+// FIX: Termin absagen (setzt event.status = 'cancelled')
+async function _cancelEvent(event, container, options) {
+  if (event.status === 'cancelled') {
+    showModal({
+      title: 'Absage rückgängig machen',
+      body: `<p>Soll <strong>${escapeHtml(event.title || 'Termin')}</strong> wieder aktiviert werden?</p>`,
+      confirmLabel: 'Reaktivieren',
+      onConfirm: async () => {
+        try {
+          await firestore.collection('events').doc(event.id).update({ status: 'active' });
+          showToast('Termin reaktiviert.', 'success');
+          await renderTrainerDetailView(event.id, container, options);
+        } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
+      }
+    });
+    return;
+  }
+  showModal({
+    title: 'Termin absagen',
+    body: `
+      <p>Soll <strong>${escapeHtml(event.title || 'Termin')}</strong> abgesagt werden?</p>
+      <p class="text-muted" style="font-size:0.88rem;">Alle angemeldeten Mitglieder werden benachrichtigt.</p>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+        <input type="checkbox" id="cancel-notify-members" checked/>
+        Mitglieder per Push benachrichtigen
+      </label>`,
+    confirmLabel: 'Termin absagen',
+    onConfirm: async () => {
+      try {
+        await firestore.collection('events').doc(event.id).update({ status: 'cancelled' });
+        showToast('Termin wurde abgesagt.', 'success');
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
+    }
+  });
+}
+
+// FIX: Verspätung melden als Trainer
+async function _reportTrainerLate(event, trainerUid, currentLateMin, container, options) {
+  showModal({
+    title: 'Verspätung melden',
+    body: `
+      <p class="text-muted" style="margin-top:0;font-size:0.88rem;">Wie viele Minuten wirst du voraussichtlich verspätet sein?</p>
+      <input type="number" id="trainer-late-minutes" min="1" max="120" value="${currentLateMin || 15}"
+        style="width:100%;font-size:1.1rem;text-align:center;" placeholder="Minuten"/>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+        ${[5,10,15,20,30,45].map(m => `<button class="btn-secondary trainer-late-preset" data-min="${m}" style="padding:5px 12px;">${m} Min.</button>`).join('')}
+      </div>`,
+    confirmLabel: 'Melden',
+    onConfirm: async () => {
+      const min = parseInt(document.getElementById('trainer-late-minutes').value);
+      if (!min || min < 1) { showToast('Bitte eine gültige Minutenanzahl eingeben.', 'error'); return false; }
+      try {
+        await firestore.collection('events').doc(event.id).update({
+          [`trainerLateMinutes.${trainerUid}`]: min
+        });
+        showToast(`Verspätung von ${min} Min. gemeldet.`, 'success');
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
+    }
+  });
+  // Preset-Buttons nach Modal-Render setzen
+  setTimeout(() => {
+    document.querySelectorAll('.trainer-late-preset').forEach(btn => {
+      btn.onclick = () => {
+        const inp = document.getElementById('trainer-late-minutes');
+        if (inp) inp.value = btn.dataset.min;
+      };
+    });
+  }, 60);
 }
 
 function renderTrainerStatCard(label, value, valueColor = 'var(--color-text)') {
@@ -524,7 +661,7 @@ async function _showAddMemberModal(event, _unused, onDone) {
         ${available.map(u => `
           <label style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:6px;background:var(--color-surface-offset);cursor:pointer;">
             <input type="checkbox" name="trainer-add-member" value="${u.id}"/>
-            <div><div style="font-weight:600;">${u.displayName || '(kein Name)'}</div><div class="text-muted" style="font-size:0.8rem;">${u.email || ''}</div></div>
+            <div><div style="font-weight:600;">${escapeHtml(u.displayName || '(kein Name)')}</div><div class="text-muted" style="font-size:0.8rem;">${escapeHtml(u.email || '')}</div></div>
           </label>`).join('')}
       </div>`,
     confirmLabel: 'Hinzufügen',
@@ -543,7 +680,7 @@ async function _showAddMemberModal(event, _unused, onDone) {
         await batch.commit();
         showToast('Person(en) hinzugefügt.', 'success');
         onDone && onDone();
-      } catch (e) { showToast('Fehler: ' + e.message, 'error'); return false; }
+      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
     }
   });
 
@@ -557,21 +694,6 @@ async function _showAddMemberModal(event, _unused, onDone) {
     };
     search.focus();
   }, 60);
-}
-
-async function _cancelTrainerSelf(event, trainerUid) {
-  showModal({
-    title: `Als ${getRoleLabel('teacher')} abmelden`,
-    body: `<p>Möchtest du dich für <strong>${event.title || 'Termin'}</strong> abmelden?</p>`,
-    confirmLabel: 'Abmelden',
-    onConfirm: async () => {
-      try {
-        await firestore.collection('events').doc(event.id).update({ trainerCancellations: firebase.firestore.FieldValue.arrayUnion(trainerUid) });
-        showToast('Du wurdest abgemeldet.', 'success');
-        loadTrainerDashboard();
-      } catch (e) { showToast('Fehler: ' + e.message, 'error'); return false; }
-    }
-  });
 }
 
 function formatDateGerman(date) {
