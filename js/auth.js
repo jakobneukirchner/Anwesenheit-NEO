@@ -8,9 +8,9 @@ async function getUserData(uid) {
 }
 
 firebaseAuth.onAuthStateChanged(async (fbUser) => {
-  const loginScreen  = document.getElementById('login-screen');
-  const appRoot      = document.getElementById('app-root');
-  const appContent   = document.getElementById('app-content');
+  const loginScreen   = document.getElementById('login-screen');
+  const appRoot       = document.getElementById('app-root');
+  const appContent    = document.getElementById('app-content');
   const mobileProfile = document.getElementById('mobile-profile-btn');
 
   if (!fbUser) {
@@ -41,7 +41,6 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
     groups: userData.groups || []
   };
 
-  // Desktop: Profil-Button / Abmelden
   const desktopBar = document.querySelector('#app-actions-desktop');
   if (desktopBar) {
     let profileBtn = desktopBar.querySelector('#profile-btn');
@@ -81,6 +80,7 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
   if (typeof renderSystemMessageBanner === 'function') renderSystemMessageBanner();
 });
 
+// ── Dashboard-Routing ──────────────────────────────────────────
 const ROLE_ORDER = ['admin', 'coordinator', 'teacher', 'member'];
 function getPrimaryRole(roles) {
   for (const r of ROLE_ORDER) if (roles.includes(r)) return r;
@@ -124,9 +124,9 @@ function routeToDashboard(roles, forceRole) {
 }
 
 function _applyActive(btn, isActive) {
-  btn.style.fontWeight    = isActive ? '600' : '400';
-  btn.style.color         = isActive ? 'var(--color-primary)' : '';
-  btn.style.borderBottom  = isActive ? '2px solid var(--color-primary)' : '2px solid transparent';
+  btn.style.fontWeight   = isActive ? '600' : '400';
+  btn.style.color        = isActive ? 'var(--color-primary)' : '';
+  btn.style.borderBottom = isActive ? '2px solid var(--color-primary)' : '2px solid transparent';
 }
 function _makeSeparator() {
   const s = document.createElement('div');
@@ -175,7 +175,6 @@ function renderDashboardSwitcher(roles) {
       const label = typeof getRoleLabel === 'function' ? getRoleLabel(r) : (ROLE_LABELS_SWITCHER[r] || r);
       wrapper.appendChild(makeBtn(r, label));
     });
-
     if (hasStats) {
       if (available.length > 1) wrapper.appendChild(_makeSeparator());
       wrapper.appendChild(makeBtn('statistics', 'Statistiken'));
@@ -184,7 +183,6 @@ function renderDashboardSwitcher(roles) {
       wrapper.appendChild(_makeSeparator());
       wrapper.appendChild(makeBtn('myMembers', 'Meine Mitglieder'));
     }
-
     desktopBar.insertBefore(wrapper, desktopBar.firstChild);
   }
 
@@ -193,8 +191,8 @@ function renderDashboardSwitcher(roles) {
     mobileContainer.innerHTML = '';
     const allRoles = [
       ...(available.length > 1 ? available : []),
-      ...(hasStats      ? ['statistics'] : []),
-      ...(hasMyMembers  ? ['myMembers']  : [])
+      ...(hasStats     ? ['statistics'] : []),
+      ...(hasMyMembers ? ['myMembers']  : [])
     ];
     allRoles.forEach(role => {
       const btn = document.createElement('button');
@@ -230,16 +228,12 @@ const btnText       = document.getElementById('login-btn-text');
 const spinner       = document.getElementById('login-spinner');
 const togglePw      = document.getElementById('toggle-pw');
 
-// Hilfsfunktion: Lade-Zustand des Buttons
+// Spinner ist per HTML already hidden – diese Funktion toggelt ihn nur bei Klick
 function setLoginLoading(loading) {
-  if (!submitBtn) return;
-  submitBtn.disabled = loading;
-  if (btnText)  btnText.textContent = loading ? 'Anmelden…' : 'Anmelden';
-  if (spinner)  spinner.hidden = !loading;
+  if (submitBtn) submitBtn.disabled = loading;
+  if (btnText)   btnText.textContent = loading ? 'Anmelden…' : 'Anmelden';
+  if (spinner)   spinner.hidden = !loading;
 }
-
-// Sicherstellen dass Button beim Laden der Seite immer klickbar ist
-setLoginLoading(false);
 
 if (togglePw && passwordInput) {
   togglePw.addEventListener('click', () => {
@@ -267,9 +261,10 @@ if (loginForm) {
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const email    = emailInput ? emailInput.value.trim() : '';
-    const password = passwordInput ? passwordInput.value : '';
+    const email    = emailInput    ? emailInput.value.trim() : '';
+    const password = passwordInput ? passwordInput.value     : '';
 
+    // Validierung (noch kein Spinner)
     if (!email) {
       if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
@@ -289,38 +284,30 @@ if (loginForm) {
       return;
     }
 
-    if (typeof checkLoginRateLimit === 'function' && !checkLoginRateLimit()) {
-      if (errorEl) errorEl.innerHTML = `
-        <div class="login-error-box">
-          <span class="material-icons" style="font-size:16px;vertical-align:middle;">timer</span>
-          Zu viele Versuche. Bitte warte kurz.
-        </div>`;
-      return;
-    }
-
+    // Ab hier: Spinner an, Firebase-Request starten
     if (errorEl) errorEl.innerHTML = '';
     setLoginLoading(true);
 
     try {
       await firebaseAuth.signInWithEmailAndPassword(email, password);
-      if (typeof recordLoginSuccess === 'function') recordLoginSuccess();
-      // Button bleibt disabled – onAuthStateChanged blendet Login-Screen aus
+      // Erfolg: onAuthStateChanged übernimmt – Login-Screen wird ausgeblendet
     } catch (err) {
-      if (typeof recordLoginFailure === 'function') recordLoginFailure();
-
       let msg = 'Anmeldung fehlgeschlagen.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
         msg = 'E-Mail oder Passwort falsch.';
       } else if (err.code === 'auth/invalid-email') {
         msg = 'Ungültige E-Mail-Adresse.';
       } else if (err.code === 'auth/too-many-requests') {
-        msg = 'Konto voräufig gesperrt. Bitte warte oder setze das Passwort zurück.';
+        msg = 'Konto vorübergehend gesperrt. Bitte warte oder setze das Passwort zurück.';
       } else if (err.code === 'auth/network-request-failed') {
         msg = 'Netzwerkfehler. Bitte überprüfe deine Internetverbindung.';
       }
-      if (errorEl) errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+      if (errorEl) errorEl.innerHTML = `
+        <div class="login-error-box">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}
+        </div>`;
     } finally {
-      // Immer zurücksetzen – egal ob Fehler oder nicht (außer bei Erfolg wird login-screen eh ausgeblendet)
+      // Spinner immer zurücksetzen – auch bei Erfolg (Login-Screen wird sowieso ausgeblendet)
       setLoginLoading(false);
     }
   });
@@ -354,7 +341,10 @@ if (forgotBtn) {
       if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
         msg = 'Kein Konto mit dieser E-Mail-Adresse gefunden.';
       }
-      if (errorEl) errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+      if (errorEl) errorEl.innerHTML = `
+        <div class="login-error-box">
+          <span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}
+        </div>`;
     } finally {
       forgotBtn.disabled = false;
       forgotBtn.textContent = 'Passwort vergessen?';
