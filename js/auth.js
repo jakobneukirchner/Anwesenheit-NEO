@@ -22,9 +22,32 @@ function showApp() {
   document.getElementById('app-root').classList.remove('hidden');
 }
 
+/* ─── Auto-Refresh ──────────────────────────────────────────────────────────── */
+let _autoRefreshTimer = null;
+
+function startAutoRefresh(seconds) {
+  stopAutoRefresh();
+  const ms = parseInt(seconds) * 1000;
+  if (!ms || ms < 5000) return;  // 0 oder < 5 s → deaktiviert
+  _autoRefreshTimer = setInterval(() => {
+    if (!window.currentUser) return;
+    // Nur aktiven Dashboard-Inhalt neu laden – Shell bleibt unangetastet
+    routeToDashboard(window.currentUser.roles, window.currentDashboardRole);
+  }, ms);
+}
+
+function stopAutoRefresh() {
+  if (_autoRefreshTimer) {
+    clearInterval(_autoRefreshTimer);
+    _autoRefreshTimer = null;
+  }
+}
+/* ─────────────────────────────────────────────────────────────────────────── */
+
 firebaseAuth.onAuthStateChanged(async (fbUser) => {
   if (!fbUser) {
     window.currentUser = null;
+    stopAutoRefresh();
     const appContent = document.getElementById('app-content');
     if (appContent) appContent.innerHTML = '';
     showLogin();
@@ -71,11 +94,14 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
 
   try { await applyBranding(); } catch(e) { console.warn('applyBranding Fehler:', e); }
 
+  // Auto-Refresh mit gespeichertem Wert starten
+  startAutoRefresh(window.appSettings?.autoRefreshSeconds ?? 0);
+
   routeToDashboard(window.currentUser.roles);
   if (typeof renderSystemMessageBanner === 'function') renderSystemMessageBanner();
 });
 
-// ── Dashboard-Routing ──────────────────────────────────────────
+// ── Dashboard-Routing ──────────────────────────────────────────────────────────
 const ROLE_ORDER = ['admin', 'coordinator', 'teacher', 'member'];
 function getPrimaryRole(roles) {
   for (const r of ROLE_ORDER) if (roles.includes(r)) return r;
@@ -191,7 +217,7 @@ function removeDashboardSwitcher() {
   if (rs) rs.remove();
 }
 
-// ── Login-Formular ────────────────────────────────────────────
+// ── Login-Formular ────────────────────────────────────────────────────────────
 const loginForm     = document.getElementById('login-form');
 const emailInput    = document.getElementById('login-email');
 const passwordInput = document.getElementById('login-password');

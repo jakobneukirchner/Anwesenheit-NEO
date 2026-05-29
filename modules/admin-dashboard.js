@@ -21,7 +21,6 @@ async function loadAdminDashboard() {
     <div id="tab-system"   hidden></div>
   `;
 
-  // DOM ist jetzt sicher gesetzt – Tab-Initialisierung kann starten
   const loaded = {};
   const loaders = {
     users:    () => renderUsersTab(document.getElementById('tab-users')),
@@ -50,12 +49,11 @@ async function loadAdminDashboard() {
     btn.onclick = () => switchTab(btn.dataset.tab);
   });
 
-  // Ersten Tab aktivieren – nach aktuellem Event-Loop-Tick damit DOM stabil ist
   setTimeout(() => switchTab('users'), 0);
 }
 
 /* ====================================================================
-   SYSTEM TAB – nur im Admin sichtbar
+   SYSTEM TAB
    ==================================================================== */
 async function renderAdminSystemTab(el) {
   el.innerHTML = `<div class="loading-center">Lade System-Einstellungen...</div>`;
@@ -63,11 +61,13 @@ async function renderAdminSystemTab(el) {
     const doc  = await firestore.collection('settings').doc('global').get();
     const data = doc.exists ? doc.data() : {};
 
+    const autoRefreshVal = data.autoRefreshSeconds ?? 0;
+
     el.innerHTML = `
       <div class="card">
         <h3 style="margin-top:0;">Branding</h3>
         <label>App-Titel / Vereinsname</label>
-        <input type="text" id="as-title" value="${data.brandingTitle || ''}" placeholder="z.B. Verein XY" />
+        <input type="text" id="as-title"   value="${data.brandingTitle || ''}" placeholder="z.B. Verein XY" />
         <label>Logo-URL</label>
         <input type="url"  id="as-logo"    value="${data.logoUrl    || ''}" placeholder="https://..." />
         <label>Favicon-URL</label>
@@ -75,6 +75,20 @@ async function renderAdminSystemTab(el) {
         <button class="btn-primary" id="as-save-branding" style="display:inline-flex;align-items:center;gap:6px;margin-bottom:0;">
           <span class="material-icons" style="font-size:18px;">save</span> Branding speichern
         </button>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">Auto-Refresh</h3>
+        <p class="text-muted" style="margin-top:0;">
+          Daten werden automatisch neu geladen, ohne die Seite neu zu starten oder offene Menüs zu schließen.
+          <strong>0 = deaktiviert.</strong> Empfohlen: 30–120 Sekunden.
+        </p>
+        <label>Intervall (Sekunden, 0 = aus)</label>
+        <input type="number" id="as-auto-refresh" value="${autoRefreshVal}" min="0" step="5" style="max-width:160px;" />
+        <button class="btn-primary" id="as-save-refresh" style="display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">save</span> Speichern &amp; anwenden
+        </button>
+        <p id="as-refresh-status" class="text-muted" style="margin-top:8px;font-size:0.85rem;"></p>
       </div>
 
       <div class="card">
@@ -91,7 +105,7 @@ async function renderAdminSystemTab(el) {
 
       <div class="card">
         <h3 style="margin-top:0;">Authentifizierung</h3>
-        <p class="text-muted" style="margin-top:0;">Auth-Methoden werden in der Firebase Console verwaltet. Hier kannst du interne Optionen steuern.</p>
+        <p class="text-muted" style="margin-top:0;">Auth-Methoden werden in der Firebase Console verwaltet.</p>
         <label style="display:flex;align-items:center;gap:8px;color:var(--color-text);cursor:pointer;">
           <input type="checkbox" id="as-allow-pw" ${data.authAllowPassword !== false ? 'checked' : ''} />
           E-Mail / Passwort-Anmeldung aktiviert
@@ -102,6 +116,7 @@ async function renderAdminSystemTab(el) {
       </div>
     `;
 
+    // Branding
     el.querySelector('#as-save-branding').onclick = async () => {
       await firestore.collection('settings').doc('global').set({
         brandingTitle: document.getElementById('as-title').value.trim(),
@@ -112,6 +127,24 @@ async function renderAdminSystemTab(el) {
       showToast('Branding gespeichert.', 'success');
     };
 
+    // Auto-Refresh
+    el.querySelector('#as-save-refresh').onclick = async () => {
+      const seconds = parseInt(document.getElementById('as-auto-refresh').value) || 0;
+      await firestore.collection('settings').doc('global').set(
+        { autoRefreshSeconds: seconds }, { merge: true }
+      );
+      window.appSettings = { ...window.appSettings, autoRefreshSeconds: seconds };
+      if (typeof startAutoRefresh === 'function') startAutoRefresh(seconds);
+      const statusEl = document.getElementById('as-refresh-status');
+      if (statusEl) {
+        statusEl.textContent = seconds > 0
+          ? `✓ Aktiv – Daten werden alle ${seconds} Sekunden aktualisiert.`
+          : '✓ Deaktiviert.';
+      }
+      showToast('Auto-Refresh gespeichert.', 'success');
+    };
+
+    // Rate-Limit
     el.querySelector('#as-save-rl').onclick = async () => {
       await firestore.collection('settings').doc('global').set({
         rateLimitMaxActions:    parseInt(document.getElementById('as-rl-max').value) || 100,
@@ -120,12 +153,19 @@ async function renderAdminSystemTab(el) {
       showToast('Rate-Limit gespeichert.', 'success');
     };
 
+    // Auth
     el.querySelector('#as-save-auth').onclick = async () => {
       await firestore.collection('settings').doc('global').set({
         authAllowPassword: document.getElementById('as-allow-pw').checked
       }, { merge: true });
       showToast('Auth-Einstellungen gespeichert.', 'success');
     };
+
+    // Aktuellen Status anzeigen
+    const statusEl = document.getElementById('as-refresh-status');
+    if (statusEl && autoRefreshVal > 0) {
+      statusEl.textContent = `Aktuell aktiv – alle ${autoRefreshVal} Sekunden.`;
+    }
 
   } catch (e) {
     console.error('Admin System Tab Fehler:', e);
