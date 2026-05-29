@@ -19,8 +19,6 @@ service cloud.firestore {
     }
 
     // USERS
-    // Jeder eingeloggte User darf User-Dokumente lesen (z.B. Trainernamen, Teilnehmernamen).
-    // Schreiben bleibt weiterhin eingeschränkt.
     match /users/{uid} {
       allow read:   if isSignedIn();
       allow create: if hasRole('admin') || hasRole('coordinator');
@@ -88,6 +86,16 @@ service cloud.firestore {
       allow read:  if isSignedIn();
       allow write: if (docId == 'global' && (hasRole('admin') || hasRole('coordinator'))) ||
                       hasRole('admin');
+    }
+
+    // SYSTEM MESSAGES
+    // Lesen: alle eingeloggten User (für Banner)
+    // Schreiben: nur Admin und Koordinator
+    match /systemMessages/{msgId} {
+      allow read:   if isSignedIn();
+      allow create: if hasRole('admin') || hasRole('coordinator');
+      allow update: if hasRole('admin') || hasRole('coordinator');
+      allow delete: if hasRole('admin') || hasRole('coordinator');
     }
   }
 }
