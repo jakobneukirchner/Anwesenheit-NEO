@@ -8,68 +8,57 @@
   <link rel="icon" href="/favicon.ico" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
 
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-
-  <script>
-    // Firebase-Konfiguration wird aus /js/firebase-init.js geladen
-  </script>
 </head>
 <body>
 
   <div id="app-bar">
     <div id="app-bar-left">
-      <button id="mobile-menu-btn" class="icon-btn" aria-label="Menü">
+      <button id="mobile-menu-btn" class="icon-btn" hidden>
         <span class="material-icons">menu</span>
       </button>
-      <span id="app-logo" class="app-logo">Anwesenheit</span>
+      <span id="app-logo" class="app-logo"></span>
     </div>
     <div id="app-actions-desktop"></div>
     <div id="app-actions-mobile">
       <div id="mobile-role-switcher"></div>
-      <button id="mobile-profile-btn" class="icon-btn" hidden aria-label="Profil">
+      <button id="mobile-profile-btn" class="icon-btn" hidden>
         <span class="material-icons">account_circle</span>
       </button>
     </div>
   </div>
 
-  <div id="app-content"></div>
-
-  <div id="login-screen" hidden>
-    <div class="login-card">
-      <div class="login-logo">
-        <span class="material-icons" style="font-size:48px;color:var(--color-primary);">sports</span>
-      </div>
-      <h1 class="login-title">Anwesenheit</h1>
-      <p class="login-subtitle">Bitte melde dich an</p>
-      <form id="login-form" autocomplete="on" novalidate>
-        <div class="form-group">
-          <label for="login-email">E-Mail</label>
-          <input type="email" id="login-email" name="email" placeholder="deine@email.de"
-            autocomplete="email" inputmode="email" required />
-        </div>
-        <div class="form-group">
-          <label for="login-password">Passwort</label>
-          <div class="password-wrapper">
-            <input type="password" id="login-password" name="password" placeholder="••••••••"
-              autocomplete="current-password" required />
-            <button type="button" id="toggle-pw" class="icon-btn pw-toggle" aria-label="Passwort anzeigen">
-              <span class="material-icons">visibility</span>
-            </button>
-          </div>
-        </div>
-        <div id="login-error"></div>
-        <button type="submit" class="btn-primary login-btn" id="login-submit-btn">
-          <span id="login-btn-text">Anmelden</span>
-          <span id="login-spinner" class="spinner" hidden></span>
-        </button>
-      </form>
+  <div id="mobile-drawer" hidden>
+    <div id="drawer-overlay"></div>
+    <div id="drawer-panel">
+      <button id="drawer-close-btn" class="icon-btn">
+        <span class="material-icons">close</span>
+      </button>
+      <div id="drawer-content"></div>
     </div>
   </div>
+
+  <div id="app-content"></div>
+
+  <div id="modal-overlay" hidden>
+    <div id="modal-box">
+      <div id="modal-header">
+        <span id="modal-title"></span>
+        <button id="modal-close" class="icon-btn"><span class="material-icons">close</span></button>
+      </div>
+      <div id="modal-body"></div>
+      <div id="modal-footer">
+        <button id="modal-cancel" class="btn-secondary">Abbrechen</button>
+        <button id="modal-confirm" class="btn-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
 
   <script src="/js/firebase-init.js"></script>
   <script src="/js/utils.js"></script>
@@ -86,11 +75,35 @@
   <script src="/js/auth.js"></script>
 
   <script>
-    (function(){
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    (() => {
+      const menuBtn  = document.getElementById('mobile-menu-btn');
+      const drawer   = document.getElementById('mobile-drawer');
+      const overlay  = document.getElementById('drawer-overlay');
+      const closeBtn = document.getElementById('drawer-close-btn');
+
+      function isMobile() { return window.innerWidth < 768; }
+
+      function openDrawer() {
+        drawer.hidden = false;
+        document.body.style.overflow = 'hidden';
+      }
+
+      function closeDrawer() {
+        drawer.hidden = true;
+        document.body.style.overflow = '';
+      }
+
+      function syncDrawerState() {
+        if (!isMobile()) closeDrawer();
+      }
+
+      menuBtn?.addEventListener('click', openDrawer);
+      closeBtn?.addEventListener('click', closeDrawer);
+      overlay?.addEventListener('click', closeDrawer);
+      window.addEventListener('resize', syncDrawerState);
+      window._mobileDrawerClose = closeDrawer;
+      syncDrawerState();
     })();
   </script>
-
 </body>
 </html>
