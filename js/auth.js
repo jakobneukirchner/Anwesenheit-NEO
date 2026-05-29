@@ -1,1 +1,138 @@
-// js/auth.js placeholder - will be restored
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Anwesenheit-NEO</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" />
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <script>
+    window.FIREBASE_API_KEY             = "{{FIREBASE_API_KEY}}";
+    window.FIREBASE_AUTH_DOMAIN         = "{{FIREBASE_AUTH_DOMAIN}}";
+    window.FIREBASE_PROJECT_ID          = "{{FIREBASE_PROJECT_ID}}";
+    window.FIREBASE_STORAGE_BUCKET      = "{{FIREBASE_STORAGE_BUCKET}}";
+    window.FIREBASE_MESSAGING_SENDER_ID = "{{FIREBASE_MESSAGING_SENDER_ID}}";
+    window.FIREBASE_APP_ID              = "{{FIREBASE_APP_ID}}";
+    window.FIREBASE_MEASUREMENT_ID      = "{{FIREBASE_MEASUREMENT_ID}}";
+  </script>
+</head>
+<body>
+  <div id="app-root">
+    <div class="app-shell">
+      <header class="app-bar">
+        <div class="app-brand">
+          <div id="app-logo" class="app-logo"></div>
+          <span id="app-title">Anwesenheit-NEO</span>
+        </div>
+
+        <div class="app-actions desktop-only" id="app-actions-desktop">
+          <span id="app-user-name"
+            style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
+            title="Mein Konto"></span>
+          <button id="profile-btn" class="btn-text btn-icon" hidden title="Konto">
+            <span class="material-icons">manage_accounts</span>
+            <span class="btn-label">Konto</span>
+          </button>
+          <button id="logout-btn" class="btn-text btn-icon" hidden title="Abmelden">
+            <span class="material-icons">logout</span>
+            <span class="btn-label">Abmelden</span>
+          </button>
+        </div>
+
+        <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menü" aria-label="Menü">
+          <span class="material-icons">menu</span>
+        </button>
+      </header>
+
+      <div id="mobile-drawer-overlay" class="mobile-drawer-overlay" hidden></div>
+      <aside id="mobile-drawer" class="mobile-drawer" hidden>
+        <div class="mobile-drawer-header">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
+            <div style="min-width:0;">
+              <div id="mobile-user-name" style="font-weight:600;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+              <div style="font-size:0.8rem;color:var(--color-text-muted);">Angemeldet</div>
+            </div>
+          </div>
+          <button id="mobile-drawer-close" class="mobile-drawer-close" aria-label="Schließen" title="Schließen">
+            <span class="material-icons">close</span>
+          </button>
+        </div>
+        <div id="mobile-role-switcher" class="mobile-drawer-section"></div>
+        <div class="mobile-drawer-section">
+          <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
+            <span class="material-icons">manage_accounts</span>
+            <span>Konto</span>
+          </button>
+          <button id="mobile-logout-btn" class="mobile-drawer-btn" hidden>
+            <span class="material-icons">logout</span>
+            <span>Abmelden</span>
+          </button>
+        </div>
+      </aside>
+
+      <main id="app-content" class="app-content">
+        <div class="loading-center">Laden...</div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/firebase-init.js"></script>
+  <script src="/js/utils.js"></script>
+  <script src="/js/rate-limit.js"></script>
+  <script src="/modules/settings.js"></script>
+  <script src="/modules/profile.js"></script>
+  <script src="/modules/member-dashboard.js"></script>
+  <script src="/modules/trainer-dashboard.js"></script>
+  <script src="/modules/coordinator-dashboard.js"></script>
+  <script src="/modules/admin-dashboard.js"></script>
+  <script src="/modules/statistics.js"></script>
+  <script src="/modules/member-report.js"></script>
+  <script src="/js/auth.js"></script>
+
+  <script>
+    (function() {
+      const menuBtn   = document.getElementById('mobile-menu-btn');
+      const drawer    = document.getElementById('mobile-drawer');
+      const overlay   = document.getElementById('mobile-drawer-overlay');
+      const closeBtn  = document.getElementById('mobile-drawer-close');
+
+      function isMobile() {
+        return window.matchMedia('(max-width: 639px)').matches;
+      }
+
+      function openDrawer() {
+        if (!isMobile()) return;
+        drawer.hidden = false;
+        overlay.hidden = false;
+        document.body.style.overflow = 'hidden';
+      }
+
+      function closeDrawer() {
+        drawer.hidden = true;
+        overlay.hidden = true;
+        document.body.style.overflow = '';
+      }
+
+      function syncDrawerState() {
+        if (!isMobile()) closeDrawer();
+      }
+
+      menuBtn?.addEventListener('click', openDrawer);
+      closeBtn?.addEventListener('click', closeDrawer);
+      overlay?.addEventListener('click', closeDrawer);
+      window.addEventListener('resize', syncDrawerState);
+      window._mobileDrawerClose = closeDrawer;
+      syncDrawerState();
+    })();
+  </script>
+</body>
+</html>// js/auth.js placeholder - will be restored
