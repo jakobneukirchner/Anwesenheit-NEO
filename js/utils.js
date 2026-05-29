@@ -11,13 +11,10 @@
  */
 function silentSwap(container, newHtml) {
   if (!container) return;
-  // Scrollposition merken
   const scrollY = container.scrollTop;
   container.innerHTML = newHtml;
   container.scrollTop = scrollY;
 }
-
-// --- alle anderen utils-Funktionen bleiben unverändert ---
 
 function createElement(tag, className, text) {
   const el = document.createElement(tag);
@@ -60,6 +57,11 @@ function showToast(message, type = 'info') {
   _toastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
+/**
+ * showModal – FIX: Confirm-Button wartet jetzt auf onConfirm() bevor das Modal schließt.
+ * Wenn onConfirm() false zurückgibt (sync oder async), bleibt das Modal offen.
+ * Während onConfirm läuft, ist der Button deaktiviert (verhindert Doppelklick).
+ */
 function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen', onConfirm, onCancel, danger = false }) {
   let overlay = document.getElementById('modal-overlay');
   if (!overlay) {
@@ -81,10 +83,30 @@ function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen'
     </div>
   `;
   overlay.classList.add('active');
+
   const close = () => overlay.classList.remove('active');
+
   overlay.querySelector('.modal-close').onclick = () => { close(); onCancel?.(); };
   overlay.querySelector('#modal-cancel').onclick  = () => { close(); onCancel?.(); };
-  overlay.querySelector('#modal-confirm').onclick = async () => { close(); await onConfirm?.(); };
+
+  overlay.querySelector('#modal-confirm').onclick = async () => {
+    const btn = overlay.querySelector('#modal-confirm');
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = '…';
+    try {
+      const result = await onConfirm?.();
+      // Nur schließen wenn onConfirm NICHT false zurückgibt
+      if (result !== false) {
+        close();
+      }
+    } catch (err) {
+      showToast('Fehler: ' + (err.message || err), 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  };
 }
 
 let _rateLimitActions = [];
