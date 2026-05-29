@@ -40,11 +40,25 @@ async function loadProfilePage() {
         <button class="btn-primary" id="pw-save" style="margin-top:4px;">Passwort ändern</button>
         <div id="pw-error" class="text-error" style="margin-top:6px;"></div>
       </div>
+
+      <!-- Weggeklickte Nachrichten -->
+      <div class="card" style="margin-top:16px;">
+        <h3 style="margin-top:0;">Weggeklickte Nachrichten</h3>
+        <p style="font-size:0.85rem;color:var(--color-text-muted);margin-bottom:12px;">
+          Nachrichten die du weggeklickt hast, aber noch aktiv sind.
+        </p>
+        <div id="dismissed-msgs-container"></div>
+      </div>
     `;
 
     document.getElementById('profile-back').onclick = () => {
       routeToDashboard(window.currentUser.roles);
     };
+
+    // Weggeklickte Nachrichten laden
+    if (typeof renderDismissedMessagesSection === 'function') {
+      renderDismissedMessagesSection(document.getElementById('dismissed-msgs-container'));
+    }
 
     // --- Profil speichern
     document.getElementById('prof-save').onclick = async () => {

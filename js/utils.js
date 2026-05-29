@@ -60,6 +60,7 @@ function showToast(message, type = 'info') {
  * damit getElementById/querySelector innerhalb von onConfirm funktionieren.
  * Das Modal schliesst sich erst nach erfolgreichem onConfirm automatisch,
  * ODER wenn onConfirm explizit false zurueckgibt (z.B. bei Validierungsfehler).
+ * confirmLabel = null → Confirm-Button wird ausgeblendet.
  */
 function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen', onConfirm, onCancel }) {
   const overlay = createElement('div', '');
@@ -79,7 +80,7 @@ function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen'
     <div id="modal-body-content">${body}</div>
     <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
       <button class="btn-secondary" id="modal-cancel">${cancelLabel}</button>
-      <button class="btn-primary"   id="modal-confirm">${confirmLabel}</button>
+      ${confirmLabel !== null ? `<button class="btn-primary" id="modal-confirm">${confirmLabel}</button>` : ''}
     </div>
   `;
   overlay.appendChild(modal);
@@ -90,15 +91,18 @@ function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen'
     if (onCancel) onCancel();
   };
 
-  modal.querySelector('#modal-confirm').onclick = async () => {
-    // FIX: onConfirm ZUERST ausfuehren (Felder sind noch im DOM),
-    // dann erst Modal entfernen. Bei Validierungsfehler (return false) bleibt Modal offen.
-    if (onConfirm) {
-      const result = await onConfirm();
-      if (result === false) return; // Modal offen lassen bei Validierungsfehler
-    }
-    overlay.remove();
-  };
+  const confirmBtn = modal.querySelector('#modal-confirm');
+  if (confirmBtn) {
+    confirmBtn.onclick = async () => {
+      // FIX: onConfirm ZUERST ausfuehren (Felder sind noch im DOM),
+      // dann erst Modal entfernen. Bei Validierungsfehler (return false) bleibt Modal offen.
+      if (onConfirm) {
+        const result = await onConfirm();
+        if (result === false) return; // Modal offen lassen bei Validierungsfehler
+      }
+      overlay.remove();
+    };
+  }
 
   // ESC zum Schliessen
   const onKeyDown = (e) => {
@@ -108,6 +112,8 @@ function showModal({ title, body, confirmLabel = 'OK', cancelLabel = 'Abbrechen'
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) { overlay.remove(); document.removeEventListener('keydown', onKeyDown); }
   });
+
+  return overlay;
 }
 
 function getRoleLabel(roleKey) {

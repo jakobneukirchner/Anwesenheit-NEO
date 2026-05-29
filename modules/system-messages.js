@@ -88,6 +88,27 @@ const MSG_TYPES = {
       padding: 12px 20px 18px;
       display: flex; justify-content: flex-end;
     }
+
+    /* Weggeklickte Nachrichten in Profil */
+    .dismissed-msg-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--color-border);
+      margin-bottom: 8px;
+      font-size: 0.88rem;
+    }
+    .dismissed-msg-card:last-child { margin-bottom: 0; }
+    .dismissed-msg-card .dmc-body { flex: 1; }
+    .dismissed-msg-card .dmc-title { font-weight: 600; margin-bottom: 2px; }
+    .dismissed-msg-card .dmc-restore {
+      background: none; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+      cursor: pointer; font-size: 0.78rem; padding: 2px 8px; white-space: nowrap;
+      color: var(--color-text-muted);
+    }
+    .dismissed-msg-card .dmc-restore:hover { color: var(--color-text); border-color: var(--color-text-muted); }
   `;
   document.head.appendChild(s);
 })();
@@ -236,13 +257,14 @@ async function renderSystemMessageBanner() {
 
   // Beim ersten Laden (innerhalb 30min): kritische Nachrichten als Modal
   if (isFirst) {
-    const criticals = allActive.filter(m => (MSG_TYPES[m.type]||{}).critical);
+    const criticals = allActive.filter(m => (MSG_TYPES[m.type]||{}).critical && !_isDismissed(m.id));
     if (criticals.length) {
       setTimeout(() => _showCriticalModal(criticals), 400);
     }
   }
 
-  // Banner: nicht-dismisste Nachrichten
+  // Banner: nicht-dismisste nicht-kritische Nachrichten (info/success)
+  // Kritische werden nur im Modal gezeigt, können aber auch als Banner bleiben
   const bannerMsgs = allActive.filter(m => !_isDismissed(m.id));
   if (!bannerMsgs.length) return;
 
@@ -273,8 +295,7 @@ async function renderSystemMessageBanner() {
   banner.querySelector('.smb-dismiss').onclick = () => {
     _dismiss(main.id);
     banner.remove();
-    // Nächste Nachricht anzeigen, falls vorhanden
-    if (rest.length) renderSystemMessageBanner();
+    renderSystemMessageBanner();
   };
 
   if (rest.length) {
@@ -330,6 +351,41 @@ function undismissMessage(id) {
   renderSystemMessageBanner();
 }
 
+/**
+ * renderDismissedMessagesSection
+ * Rendert eine Sektion "Weggeklickte Nachrichten" in einem Container-Element.
+ * Wird aus profile.js aufgerufen.
+ */
+async function renderDismissedMessagesSection(containerEl) {
+  const msgs = await getDismissedMessagesData();
+
+  if (!msgs.length) {
+    containerEl.innerHTML = '<p style="font-size:0.85rem;color:var(--color-text-muted);margin:0;">Keine weggeklickten Nachrichten vorhanden.</p>';
+    return;
+  }
+
+  containerEl.innerHTML = msgs.map(m => {
+    const cfg = MSG_TYPES[m.type] || MSG_TYPES.info;
+    return `
+      <div class="dismissed-msg-card" style="background:${cfg.bg};border-color:${cfg.border};">
+        <span class="material-icons" style="font-size:18px;color:${cfg.text};flex-shrink:0;">${cfg.icon}</span>
+        <div class="dmc-body">
+          <div class="dmc-title" style="color:${cfg.text};">${m.title || cfg.label}</div>
+          <div style="color:var(--color-text);">${m.message || ''}</div>
+          ${m.endAt ? `<div style="font-size:0.75rem;color:var(--color-text-muted);margin-top:3px;">Gültig bis ${_formatMsgDate(m.endAt)}</div>` : ''}
+        </div>
+        <button class="dmc-restore" data-msg-id="${m.id}">Wieder anzeigen</button>
+      </div>`;
+  }).join('');
+
+  containerEl.querySelectorAll('.dmc-restore').forEach(btn => {
+    btn.onclick = () => {
+      undismissMessage(btn.dataset.msgId);
+      renderDismissedMessagesSection(containerEl);
+    };
+  });
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════════
    KOORDINATOR-VERWALTUNG
    Wird aus coordinator-dashboard.js aufgerufen: renderSystemMessagesTab(el)
@@ -347,7 +403,6 @@ async function renderSystemMessagesTab(el) {
       return tb - ta;
     });
 
-    // Gruppen ohne orderBy (vermeidet fehlenden Firestore-Index), client-seitig sortieren
     const gSnap = await firestore.collection('groups').get();
     const allGroups = [];
     gSnap.forEach(doc => allGroups.push({ id: doc.id, ...doc.data() }));
@@ -505,17 +560,9 @@ async function showMsgForm(msg, allGroups, parentEl) {
       </div>
 
       <div id="sm-groups-section" style="margin-top:8px;display:${msg?.recipients==='groups'?'block':'none'};">
-        ${allGroups.length
-          ? `<div style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:8px;">
-              ${allGroups.map(g => `
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;">
-                  <input type="checkbox" name="sm-group" value="${g.id}"
-                    ${(msg?.recipientGroups||[]).includes(g.id)?'checked':''}/>
-                  ${g.name}
-                </label>`).join('')}
-            </div>`
-          : `<p style="font-size:0.85rem;color:var(--color-text-muted);">Keine Gruppen vorhanden.</p>`
-        }
+        <div id="sm-groups-list" style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow-y:auto;border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:8px;">
+          <!-- Wird per JS befüllt -->
+        </div>
       </div>
 
       <div id="sm-users-section" style="margin-top:8px;display:${msg?.recipients==='users'?'block':'none'};">
@@ -606,7 +653,23 @@ async function showMsgForm(msg, allGroups, parentEl) {
     }
   });
 
+  // Gruppen und Event-Listener NACH dem Modal-Öffnen per JS befüllen
   requestAnimationFrame(() => {
+    // Gruppen-Checkboxen per JS rendern (zuverlässiger als HTML-String)
+    const groupsList = document.getElementById('sm-groups-list');
+    if (groupsList) {
+      if (allGroups.length) {
+        groupsList.innerHTML = allGroups.map(g => `
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;">
+            <input type="checkbox" name="sm-group" value="${g.id}"
+              ${(msg?.recipientGroups||[]).includes(g.id)?'checked':''}/>
+            ${g.name || g.id}
+          </label>`).join('');
+      } else {
+        groupsList.innerHTML = '<p style="font-size:0.85rem;color:var(--color-text-muted);margin:0;">Keine Gruppen vorhanden.</p>';
+      }
+    }
+
     document.querySelectorAll('input[name="sm-recip"]').forEach(radio => {
       radio.addEventListener('change', () => {
         document.getElementById('sm-groups-section').style.display = radio.value==='groups' ? 'block' : 'none';
