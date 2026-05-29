@@ -65,10 +65,9 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
       signOutBtn.innerHTML = '<span class="material-icons">logout</span>';
       desktopBar.appendChild(signOutBtn);
     }
-    signOutBtn.onclick = () => {
-      firebaseAuth.signOut();
-    };
+    signOutBtn.onclick = () => firebaseAuth.signOut();
   }
+
   if (mobileProfile) {
     mobileProfile.hidden = false;
     mobileProfile.onclick = () => {
@@ -100,8 +99,8 @@ const DASHBOARD_LOADERS = {
 const ROLE_LABELS_SWITCHER = {
   admin:       'Admin',
   coordinator: 'Koordinator',
-  teacher:     getRoleLabel ? getRoleLabel('teacher') : 'Trainer',
-  member:      getRoleLabel ? getRoleLabel('member') : 'Mitglieder',
+  teacher:     'Trainer',
+  member:      'Mitglieder',
   myMembers:   'Meine Mitglieder'
 };
 
@@ -231,7 +230,18 @@ const btnText       = document.getElementById('login-btn-text');
 const spinner       = document.getElementById('login-spinner');
 const togglePw      = document.getElementById('toggle-pw');
 
-if (togglePw) {
+// Hilfsfunktion: Lade-Zustand des Buttons
+function setLoginLoading(loading) {
+  if (!submitBtn) return;
+  submitBtn.disabled = loading;
+  if (btnText)  btnText.textContent = loading ? 'Anmelden…' : 'Anmelden';
+  if (spinner)  spinner.hidden = !loading;
+}
+
+// Sicherstellen dass Button beim Laden der Seite immer klickbar ist
+setLoginLoading(false);
+
+if (togglePw && passwordInput) {
   togglePw.addEventListener('click', () => {
     const isText = passwordInput.type === 'text';
     passwordInput.type = isText ? 'password' : 'text';
@@ -239,16 +249,15 @@ if (togglePw) {
   });
 }
 
-// Echtzeit-Hinweis wenn E-Mail leer bleibt und Fokus verlassen wird
 if (emailInput) {
   emailInput.addEventListener('blur', () => {
-    if (!emailInput.value.trim()) {
+    if (!emailInput.value.trim() && errorEl) {
       errorEl.innerHTML = `
         <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">info</span>
           Bitte gib deine E-Mail-Adresse ein.
         </div>`;
-    } else {
+    } else if (errorEl) {
       errorEl.innerHTML = '';
     }
   });
@@ -257,30 +266,31 @@ if (emailInput) {
 if (loginForm) {
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const email    = emailInput.value.trim();
-    const password = passwordInput.value;
+
+    const email    = emailInput ? emailInput.value.trim() : '';
+    const password = passwordInput ? passwordInput.value : '';
 
     if (!email) {
-      errorEl.innerHTML = `
+      if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">warning</span>
           Bitte gib deine E-Mail-Adresse ein.
         </div>`;
-      emailInput.focus();
+      emailInput && emailInput.focus();
       return;
     }
     if (!password) {
-      errorEl.innerHTML = `
+      if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box">
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">lock</span>
           Bitte gib dein Passwort ein.
         </div>`;
-      passwordInput.focus();
+      passwordInput && passwordInput.focus();
       return;
     }
 
-    if (!checkLoginRateLimit()) {
-      errorEl.innerHTML = `
+    if (typeof checkLoginRateLimit === 'function' && !checkLoginRateLimit()) {
+      if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box">
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">timer</span>
           Zu viele Versuche. Bitte warte kurz.
@@ -288,19 +298,15 @@ if (loginForm) {
       return;
     }
 
-    btnText.textContent = 'Anmelden…';
-    spinner.hidden = false;
-    submitBtn.disabled = true;
-    errorEl.innerHTML = '';
+    if (errorEl) errorEl.innerHTML = '';
+    setLoginLoading(true);
 
     try {
       await firebaseAuth.signInWithEmailAndPassword(email, password);
-      recordLoginSuccess();
+      if (typeof recordLoginSuccess === 'function') recordLoginSuccess();
+      // Button bleibt disabled – onAuthStateChanged blendet Login-Screen aus
     } catch (err) {
-      recordLoginFailure();
-      btnText.textContent = 'Anmelden';
-      spinner.hidden = true;
-      submitBtn.disabled = false;
+      if (typeof recordLoginFailure === 'function') recordLoginFailure();
 
       let msg = 'Anmeldung fehlgeschlagen.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
@@ -312,7 +318,10 @@ if (loginForm) {
       } else if (err.code === 'auth/network-request-failed') {
         msg = 'Netzwerkfehler. Bitte überprüfe deine Internetverbindung.';
       }
-      errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+      if (errorEl) errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+    } finally {
+      // Immer zurücksetzen – egal ob Fehler oder nicht (außer bei Erfolg wird login-screen eh ausgeblendet)
+      setLoginLoading(false);
     }
   });
 }
@@ -323,7 +332,7 @@ if (forgotBtn) {
   forgotBtn.addEventListener('click', async () => {
     const email = emailInput ? emailInput.value.trim() : '';
     if (!email) {
-      errorEl.innerHTML = `
+      if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box" style="background:rgba(245,124,0,0.08);border-color:var(--color-warning,#e65100);color:var(--color-warning,#e65100);">
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">info</span>
           Bitte trag zuerst deine E-Mail-Adresse ein.
@@ -335,7 +344,7 @@ if (forgotBtn) {
     forgotBtn.textContent = 'Sende…';
     try {
       await firebaseAuth.sendPasswordResetEmail(email);
-      errorEl.innerHTML = `
+      if (errorEl) errorEl.innerHTML = `
         <div class="login-error-box" style="background:rgba(67,122,34,0.08);border-color:var(--color-success,#437a22);color:var(--color-success,#437a22);">
           <span class="material-icons" style="font-size:16px;vertical-align:middle;">mark_email_read</span>
           E-Mail gesendet! Bitte prüfe dein Postfach.
@@ -343,9 +352,9 @@ if (forgotBtn) {
     } catch (err) {
       let msg = 'Fehler beim Senden.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-        msg = 'Keine Konto mit dieser E-Mail-Adresse gefunden.';
+        msg = 'Kein Konto mit dieser E-Mail-Adresse gefunden.';
       }
-      errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
+      if (errorEl) errorEl.innerHTML = `<div class="login-error-box"><span class="material-icons" style="font-size:16px;vertical-align:middle;">error_outline</span> ${msg}</div>`;
     } finally {
       forgotBtn.disabled = false;
       forgotBtn.textContent = 'Passwort vergessen?';
