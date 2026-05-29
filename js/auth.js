@@ -7,11 +7,17 @@ async function getUserData(uid) {
   } catch (e) { console.error('getUserData:', e); return null; }
 }
 
+function hideAuthLoading() {
+  const el = document.getElementById('auth-loading');
+  if (el) el.classList.add('hidden');
+}
 function showLogin() {
+  hideAuthLoading();
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('app-root').classList.add('hidden');
 }
 function showApp() {
+  hideAuthLoading();
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('app-root').classList.remove('hidden');
 }
@@ -42,7 +48,6 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
     groups: userData.groups || []
   };
 
-  // Buttons verdrahten
   const profileBtn = document.getElementById('profile-btn');
   const logoutBtn  = document.getElementById('logout-btn');
   if (profileBtn) { profileBtn.hidden = false; profileBtn.onclick = () => loadProfilePage(); }
@@ -206,10 +211,8 @@ if (loginForm) {
     e.preventDefault();
     const email    = emailInput    ? emailInput.value.trim() : '';
     const password = passwordInput ? passwordInput.value     : '';
-
     if (!email)    { if (errorEl) errorEl.textContent = 'Bitte E-Mail eingeben.';    emailInput?.focus();    return; }
     if (!password) { if (errorEl) errorEl.textContent = 'Bitte Passwort eingeben.'; passwordInput?.focus(); return; }
-
     if (errorEl) errorEl.textContent = '';
     setLoginLoading(true);
     try {
@@ -217,9 +220,9 @@ if (loginForm) {
     } catch (err) {
       let msg = 'Anmeldung fehlgeschlagen.';
       if (['auth/user-not-found','auth/wrong-password','auth/invalid-credential'].includes(err.code)) msg = 'E-Mail oder Passwort falsch.';
-      else if (err.code === 'auth/invalid-email')           msg = 'Ungültige E-Mail-Adresse.';
-      else if (err.code === 'auth/too-many-requests')       msg = 'Zu viele Versuche. Bitte kurz warten.';
-      else if (err.code === 'auth/network-request-failed')  msg = 'Kein Netzwerk.';
+      else if (err.code === 'auth/invalid-email')          msg = 'Ungültige E-Mail-Adresse.';
+      else if (err.code === 'auth/too-many-requests')      msg = 'Zu viele Versuche. Bitte kurz warten.';
+      else if (err.code === 'auth/network-request-failed') msg = 'Kein Netzwerk.';
       if (errorEl) errorEl.textContent = msg;
     } finally {
       setLoginLoading(false);
@@ -237,7 +240,7 @@ if (forgotBtn) {
     try {
       await firebaseAuth.sendPasswordResetEmail(email);
       if (errorEl) { errorEl.style.color = 'var(--color-success)'; errorEl.textContent = 'E-Mail gesendet! Bitte Postfach prüfen.'; }
-    } catch (err) {
+    } catch {
       if (errorEl) { errorEl.style.color = ''; errorEl.textContent = 'Kein Konto mit dieser E-Mail gefunden.'; }
     } finally {
       forgotBtn.disabled = false;
