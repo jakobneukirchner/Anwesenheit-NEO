@@ -3,7 +3,14 @@
 async function loadMemberDashboard() {
   const container = document.getElementById('app-content');
   const user      = window.currentUser.firebaseUser;
-  container.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
+
+  // Fokus-Schutz: Wenn der Nutzer gerade tippt, Refresh überspringen
+  if (window._silentRefresh && container.contains(document.activeElement)) return;
+
+  // Loading-Spinner nur beim ersten (nicht-stillen) Laden anzeigen
+  if (!window._silentRefresh) {
+    container.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
+  }
 
   try {
     const settingsDoc = await firestore.collection('settings').doc('global').get();
@@ -90,22 +97,31 @@ async function loadMemberDashboard() {
 
     events.sort((a, b) => (a.startTime?.toMillis?.() || 0) - (b.startTime?.toMillis?.() || 0));
 
-    // Laufende Termine (startTime <= now) erscheinen unter "Vergangen"
     const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
     const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
 
-    container.innerHTML = `
+    // ── Stiller Refresh: aktiven Tab merken, dann Inhalt swap ohne Flackern
+    const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
+
+    // Neuen HTML-String aufbauen (noch NICHT in den DOM schreiben)
+    const newHtml = `
       <p class="text-muted" style="margin-bottom:12px;font-size:0.85rem;">
         Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong> (${lookAheadDays} Tage im Voraus)
       </p>
       <div class="tabs">
-        <button class="tab-btn active" data-tab="upcoming">Kommende Termine (${upcoming.length})</button>
-        <button class="tab-btn"        data-tab="past">Vergangene Termine (${past.length})</button>
+        <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">Kommende Termine (${upcoming.length})</button>
+        <button class="tab-btn${activeTab === 'past'     ? ' active' : ''}" data-tab="past">Vergangene Termine (${past.length})</button>
       </div>
-      <div id="tab-upcoming"></div>
-      <div id="tab-past" hidden></div>
+      <div id="tab-upcoming"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
+      <div id="tab-past"${activeTab !== 'past' ? ' hidden' : ''}></div>
     `;
 
+    // Swap: jetzt erst den DOM aktualisieren
+    const scrollY = container.scrollTop;
+    container.innerHTML = newHtml;
+    container.scrollTop = scrollY;
+
+    // Tab-Wechsel-Logik
     container.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -126,7 +142,9 @@ async function loadMemberDashboard() {
 
   } catch (e) {
     console.error(e);
-    container.innerHTML = '<p class="text-error">Fehler beim Laden: ' + e.message + '</p>';
+    if (!window._silentRefresh) {
+      container.innerHTML = '<p class="text-error">Fehler beim Laden: ' + e.message + '</p>';
+    }
   }
 }
 
@@ -190,17 +208,12 @@ function renderMemberEventCard(event, attendance, isPast) {
   const mode       = event.mode || settings.defaultMode || 'opt_in';
   const isConfMode = mode === 'confirmation';
 
-  // ── Bestätigungsfenster: relativ zu Terminbeginn (startTime)
-  // Wert in Minuten: negativ = X Min VOR Terminbeginn, positiv = X Min NACH Terminbeginn.
-  // Standard: 60 Min nach Terminbeginn (Mitglieder können bis 60 Min nach Start bestätigen).
   const confWindowMinutes = settings.confirmationWindowMinutes ?? 60;
   const start       = event.startTime?.toDate ? event.startTime.toDate() : null;
   const end         = event.endTime?.toDate   ? event.endTime.toDate()   : null;
   const now         = new Date();
 
-  // Deadline für Bestätigung = startTime + confWindowMinutes (kann negativ sein = vor Start)
-  const confDeadline = start ? new Date(start.getTime() + confWindowMinutes * 60 * 1000) : null;
-  // Fenster abgelaufen wenn confDeadline in der Vergangenheit liegt
+  const confDeadline      = start ? new Date(start.getTime() + confWindowMinutes * 60 * 1000) : null;
   const confWindowExpired = isConfMode && confDeadline && now > confDeadline;
 
   const deadline       = start ? new Date(start.getTime() - signupMins * 60000) : null;
@@ -239,7 +252,7 @@ function renderMemberEventCard(event, attendance, isPast) {
         </span>
       </div>
       ${event.cancellationReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>` : ''}
-      ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}“</p>` : ''}
+      ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}"</p>` : ''}
     `;
     return card;
   }
@@ -332,9 +345,6 @@ function renderMemberEventCard(event, attendance, isPast) {
         Anmeldefrist abgelaufen
        </p>` : '';
 
-  // ── Bestätigungsmodus-Banner
-  // Zeige Banner wenn: Modus=confirmation, Termin nicht in Vergangenheit (aus Sicht isPast),
-  // nicht durch Trainer gesperrt, Status ausstehend, Fenster NICHT abgelaufen
   let confirmBannerHtml = '';
   if (isConfMode && !locked && isPending && !confWindowExpired) {
     confirmBannerHtml = `
