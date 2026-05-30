@@ -65,7 +65,6 @@ async function loadMemberDashboard() {
       const trainerIds    = ev.trainers || [];
       const cancelledIds  = ev.trainerCancellations || [];
       const activeTrainerIds    = trainerIds.filter(tid => !cancelledIds.includes(tid));
-      const allUniqueTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
 
       return {
         ...ev,
@@ -243,7 +242,7 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       </div>`
     : '';
 
-  // Bestätigungsmodus-Banner (wie Original, aber Abmelden-Button triggert Grund-Popup)
+  // Bestätigungsmodus-Banner
   let confirmBannerHtml = '';
   if (isConfMode && !isPast && !locked && isPending_ && !confWindowExpired && withinDeadline) {
     confirmBannerHtml = `
@@ -266,7 +265,7 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     confirmBannerHtml = `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">lock_clock</span> Bestätigungsfenster abgelaufen.</p>`;
   }
 
-  // Toggle-Button nur anzeigen wenn NICHT im Confirmation-Pending-Banner (hat eigene Buttons)
+  // Toggle-Button nur anzeigen wenn NICHT im Confirmation-Pending-Banner
   const showToggle = withinDeadline && !locked
     && !(isConfMode && isPending_ && !confWindowExpired)
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
@@ -417,7 +416,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     });
 
-    // Alle toggle-Buttons (Banner + normale Buttons) durchsuchen
     card.querySelectorAll('[data-action="toggle"]').forEach(btn => {
       btn.onclick = () => guardedAction(async () => {
         try { await memberToggleAttendance(event, attendance, mode, deadline); }
@@ -493,7 +491,6 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
       : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
   }
 
-  // Bei Abmeldung: Abmeldegrund abfragen (alle Modi inkl. confirmation)
   if (newStatus === 'cancelled') {
     showModal({
       title: 'Abmelden',
