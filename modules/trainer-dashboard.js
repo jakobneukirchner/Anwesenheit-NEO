@@ -16,15 +16,17 @@ async function loadTrainerDashboard() {
 
     const settings = window.appSettings || {};
 
-    // Alle Events die diesem Betreuer zugeordnet sind
+    // Nur array-contains – kein orderBy, um keinen zusammengesetzten Index zu benötigen
     const eventsSnap = await firestore.collection('events')
       .where('trainers', 'array-contains', uid)
-      .orderBy('startTime', 'desc')
-      .limit(50)
       .get();
 
     const events = [];
     eventsSnap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
+
+    // Clientseitig nach startTime absteigend sortieren, auf 50 begrenzen
+    events.sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
+    const recentEvents = events.slice(0, 50);
 
     if (!window._silentRefresh) {
       const newHtml = `
@@ -43,12 +45,12 @@ async function loadTrainerDashboard() {
 
     listEl.innerHTML = '';
 
-    if (!events.length) {
+    if (!recentEvents.length) {
       listEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine Trainings gefunden.</p></div>`;
       return;
     }
 
-    for (const event of events) {
+    for (const event of recentEvents) {
       const card = await renderTrainerEventCard(event, uid, settings);
       listEl.appendChild(card);
     }
@@ -91,7 +93,6 @@ async function renderTrainerEventCard(event, myUid, settings) {
   container.style.marginBottom = '0';
   container.innerHTML = `<div class="loading-center" style="padding:20px;">Lade…</div>`;
 
-  // Lazy-load detail
   setTimeout(async () => {
     try {
       await _renderTrainerEventCardContent(container, event, myUid, settings);
@@ -112,7 +113,7 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
   const isSkipped   = event.status === 'skipped';
   const isPast      = start && start <= now;
 
-  // Anwesenheiten laden
+  // Anwesenheiten laden – nur ein where-Feld, kein Index nötig
   const attSnap = await firestore.collection('eventAttendance')
     .where('eventId', '==', event.id)
     .get();
@@ -127,14 +128,12 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
     userMap[uid2] = uDoc.exists ? uDoc.data() : { displayName: uid2 };
   }));
 
-  const mode = event.registrationMode || event.mode || 'opt_in';
   const registered = attendances.filter(a => ['registered','present','confirmation_pending','late_excused','late_unexcused'].includes(a.status)).length;
   const present    = attendances.filter(a => ['present','late_excused','late_unexcused'].includes(a.status)).length;
   const cancelled  = attendances.filter(a => a.status === 'cancelled').length;
   const minMembers = event.minMembers || 0;
   const needsBadge = minMembers > 0 && registered < minMembers;
 
-  // Eigene Verspätung
   const myLateMinutes = event.trainerLateMinutes?.[myUid] || 0;
   const myLateNote    = event.trainerLateNotes?.[myUid] || '';
 
@@ -188,7 +187,6 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
 
     <div id="trainer-att-section">
       <h3 style="font-size:1rem;margin-bottom:10px;">Anwesenheit</h3>
-
       <div style="overflow-x:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
           <thead>
@@ -207,7 +205,6 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
           <tbody id="trainer-att-body"></tbody>
         </table>
       </div>
-
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn-primary" id="trainer-save-att-btn" style="display:inline-flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:16px;">save</span> Anwesenheit speichern
@@ -230,13 +227,12 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
     <div data-role="error" class="text-error" style="margin-top:8px;"></div>
   `;
 
-  const errorEl    = container.querySelector('[data-role="error"]');
-  const attBody    = container.querySelector('#trainer-att-body');
-  const tooltipEl  = container.querySelector('.member-note-tooltip-popup');
+  const errorEl   = container.querySelector('[data-role="error"]');
+  const attBody   = container.querySelector('#trainer-att-body');
+  const tooltipEl = container.querySelector('.member-note-tooltip-popup');
 
   function showMemberNoteTooltip(anchor, text) {
     tooltipEl.textContent = text;
-    tooltipEl.classList.add('visible');
     tooltipEl.style.opacity = '1';
     tooltipEl.style.pointerEvents = 'auto';
     tooltipEl.style.transform = 'translateY(0)';
@@ -247,7 +243,6 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
     tooltipEl.style.transform = 'translateY(4px)';
   }
 
-  // Betreuer-Verspätung melden
   const trainerLateBtn = container.querySelector('#trainer-late-btn');
   if (trainerLateBtn) trainerLateBtn.onclick = () =>
     _reportTrainerLate(event, myUid, myLateMinutes, myLateNote, container, settings);
@@ -255,7 +250,7 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
   const revokeBtn = container.querySelector('#trainer-revoke-late-btn');
   if (revokeBtn) revokeBtn.onclick = () => showModal({
     title: 'Verspätung widerrufen',
-    body: `<p>Möchtest du deine gemeldete Verspätung wirklich widerrufen? Die Mitglieder sehen dann keine Verspätungsmeldung mehr von dir.</p>`,
+    body: `<p>Möchtest du deine gemeldete Verspätung wirklich widerrufen?</p>`,
     confirmLabel: 'Ja, widerrufen',
     onConfirm: async () => {
       try {
@@ -269,12 +264,11 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
     }
   });
 
-  // Broadcast
   const broadcastBtn = container.querySelector('#trainer-broadcast-btn');
   if (broadcastBtn) broadcastBtn.onclick = () => showModal({
     title: 'Nachricht an alle Angemeldeten',
     body: `
-      <p>Diese Nachricht wird allen angemeldeten Mitgliedern in ihrer Terminansicht angezeigt.</p>
+      <p>Diese Nachricht wird allen angemeldeten Mitgliedern angezeigt.</p>
       <label>Nachricht</label>
       <textarea id="broadcast-input" rows="3" placeholder="z.B. Bitte Hallenschuhe mitbringen…">${escapeHtml(event.trainerBroadcast || '')}</textarea>
     `,
@@ -282,14 +276,15 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
     onConfirm: async () => {
       const msg = document.getElementById('broadcast-input')?.value.trim() || '';
       try {
-        await firestore.collection('events').doc(event.id).update({ trainerBroadcast: msg || firebase.firestore.FieldValue.delete() });
+        await firestore.collection('events').doc(event.id).update({
+          trainerBroadcast: msg || firebase.firestore.FieldValue.delete()
+        });
         showToast('Nachricht gespeichert.', 'success');
         loadTrainerDashboard();
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     }
   });
 
-  // Anwesenheits-Tabelle befüllen
   const memberAttendances = attendances.filter(a => a.userId !== myUid);
 
   const statusOptions = [
@@ -304,27 +299,24 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
   ];
 
   for (const att of memberAttendances) {
-    const u = userMap[att.userId] || { displayName: att.userId };
+    const u  = userMap[att.userId] || { displayName: att.userId };
     const tr = document.createElement('tr');
     tr.dataset.attId = att.id;
 
-    // Hinweis-Icon (memberNote)
     const noteIconHtml = att.memberNote
-      ? `<span class="member-note-icon" tabindex="0" data-note="${escapeHtml(att.memberNote)}" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
+      ? `<span class="member-note-icon" tabindex="0" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
       : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>';
 
-    // Verspätungsgrund des Mitglieds (memberLateReason) – eigenes Feld
-    const isLateStatus = ['late_excused','late_unexcused'].includes(att.status);
+    const isLateStatus   = ['late_excused','late_unexcused'].includes(att.status);
     const lateReasonHtml = isLateStatus && att.memberLateReason
-      ? `<span class="member-late-reason-icon" tabindex="0" data-reason="${escapeHtml(att.memberLateReason)}" title="Verspätungsgrund" style="color:var(--color-warning,#e65100);cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+      ? `<span class="member-late-reason-icon" tabindex="0" style="color:var(--color-warning,#e65100);cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
           <span class="material-icons" style="font-size:16px;">schedule</span>
           <span style="font-size:0.82rem;">${escapeHtml(att.memberLateReason)}</span>
         </span>`
       : (isLateStatus
-          ? `<span style="color:var(--color-text-faint);font-size:0.8rem;">kein Grund</span>`
+          ? '<span style="color:var(--color-text-faint);font-size:0.8rem;">kein Grund</span>'
           : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>');
 
-    // Status-Chip + Setter-Hinweis
     const statusChip = getAttendanceStatusChip(att.status);
     const setterHint = att.trainerSet
       ? `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">vom Betreuer</div>`
@@ -332,10 +324,7 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
 
     tr.innerHTML = `
       <td style="font-weight:500;padding:6px 8px;">${u.displayName || u.email || att.userId}</td>
-      <td style="padding:6px 8px;">
-        ${statusChip}
-        ${setterHint}
-      </td>
+      <td style="padding:6px 8px;">${statusChip}${setterHint}</td>
       <td style="padding:6px 8px;">
         <input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}
           style="width:18px;height:18px;cursor:pointer;" />
@@ -352,76 +341,62 @@ async function _renderTrainerEventCardContent(container, event, myUid, settings)
       <td style="padding:6px 8px;"></td>
     `;
 
-    const presentCheck  = tr.querySelector('.trainer-present-check');
-    const statusSelect  = tr.querySelector('.trainer-status-select');
-    presentCheck.onchange = () => {
-      statusSelect.value = presentCheck.checked ? 'present' : 'registered';
+    tr.querySelector('.trainer-present-check').onchange = function() {
+      tr.querySelector('.trainer-status-select').value = this.checked ? 'present' : 'registered';
     };
-    statusSelect.onchange = () => {
-      presentCheck.checked = ['present','late_excused','late_unexcused'].includes(statusSelect.value);
+    tr.querySelector('.trainer-status-select').onchange = function() {
+      tr.querySelector('.trainer-present-check').checked = ['present','late_excused','late_unexcused'].includes(this.value);
     };
 
     if (att.memberNote) {
       const noteIcon = tr.querySelector('.member-note-icon');
       if (noteIcon) {
         noteIcon.addEventListener('mouseenter', () => showMemberNoteTooltip(noteIcon, att.memberNote));
-        noteIcon.addEventListener('mouseleave', () => hideMemberNoteTooltip());
+        noteIcon.addEventListener('mouseleave', hideMemberNoteTooltip);
         noteIcon.addEventListener('focus',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
-        noteIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
+        noteIcon.addEventListener('blur',       hideMemberNoteTooltip);
         noteIcon.addEventListener('click',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
       }
     }
-
     if (isLateStatus && att.memberLateReason) {
-      const lateReasonIcon = tr.querySelector('.member-late-reason-icon');
-      if (lateReasonIcon) {
-        const showTip = () => showMemberNoteTooltip(lateReasonIcon, `Verspätungsgrund: ${att.memberLateReason}`);
-        lateReasonIcon.addEventListener('mouseenter', showTip);
-        lateReasonIcon.addEventListener('mouseleave', () => hideMemberNoteTooltip());
-        lateReasonIcon.addEventListener('focus',      showTip);
-        lateReasonIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
-        lateReasonIcon.addEventListener('click',      showTip);
+      const lateIcon = tr.querySelector('.member-late-reason-icon');
+      if (lateIcon) {
+        const tip = `Verspätungsgrund: ${att.memberLateReason}`;
+        lateIcon.addEventListener('mouseenter', () => showMemberNoteTooltip(lateIcon, tip));
+        lateIcon.addEventListener('mouseleave', hideMemberNoteTooltip);
+        lateIcon.addEventListener('focus',      () => showMemberNoteTooltip(lateIcon, tip));
+        lateIcon.addEventListener('blur',       hideMemberNoteTooltip);
+        lateIcon.addEventListener('click',      () => showMemberNoteTooltip(lateIcon, tip));
       }
     }
 
     attBody.appendChild(tr);
   }
 
-  // Anwesenheit speichern
   const saveAttBtn = container.querySelector('#trainer-save-att-btn');
   if (saveAttBtn) saveAttBtn.onclick = () => guardedAction(async () => {
     try {
-      const rows = attBody.querySelectorAll('tr');
+      const rows  = attBody.querySelectorAll('tr');
       const batch = firestore.batch();
-
       rows.forEach(row => {
         const attId        = row.dataset.attId;
         const newStatus    = row.querySelector('.trainer-status-select')?.value;
         const internalNote = row.querySelector('.trainer-internal-note')?.value.trim() || '';
         const memberNote   = row.querySelector('.trainer-member-note')?.value.trim()   || '';
         if (!attId || !newStatus) return;
-
         batch.set(
           firestore.collection('eventAttendance').doc(attId),
-          {
-            status: newStatus,
-            trainerSet: true,
-            trainerNoteInternal: internalNote,
-            trainerNoteMember:   memberNote,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          },
+          { status: newStatus, trainerSet: true, trainerNoteInternal: internalNote,
+            trainerNoteMember: memberNote, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         );
       });
-
       await batch.commit();
       showToast('Anwesenheit gespeichert.', 'success');
       window._silentRefresh = true;
       await loadTrainerDashboard();
       window._silentRefresh = false;
-    } catch (e) {
-      errorEl.textContent = 'Fehler beim Speichern: ' + e.message;
-    }
+    } catch (e) { errorEl.textContent = 'Fehler beim Speichern: ' + e.message; }
   });
 }
 
@@ -448,8 +423,8 @@ async function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateN
         showToast(`Verspätung von ~${minutes} Min. gemeldet.`, 'success');
         loadTrainerDashboard();
       } catch (e) {
-        const errorEl = container.querySelector('[data-role="error"]');
-        if (errorEl) errorEl.textContent = 'Fehler: ' + e.message;
+        const errEl = container.querySelector('[data-role="error"]');
+        if (errEl) errEl.textContent = 'Fehler: ' + e.message;
       }
     }
   });
