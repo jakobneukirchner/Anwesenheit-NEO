@@ -305,7 +305,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}“ angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
@@ -380,6 +380,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     `;
 
     document.getElementById('trainer-back-btn').onclick = () => {
+      // Tooltip aufräumen bevor wir zurücknavigieren
+      const tip = container.querySelector('.member-note-tooltip-popup');
+      if (tip) tip.remove();
       if (options.backFn) options.backFn();
       else loadTrainerDashboard();
     };
@@ -457,14 +460,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       };
     }
 
-    // Tooltip
-    let tooltipEl = document.getElementById('trainer-member-note-tooltip');
-    if (!tooltipEl) {
-      tooltipEl = document.createElement('div');
-      tooltipEl.id = 'trainer-member-note-tooltip';
-      tooltipEl.className = 'member-note-tooltip-popup';
-      document.body.appendChild(tooltipEl);
-    }
+    // Tooltip – an container hängen (nicht body), wird automatisch entfernt beim Seitenwechsel
+    let tooltipEl = document.createElement('div');
+    tooltipEl.className = 'member-note-tooltip-popup';
+    container.appendChild(tooltipEl);
     let tooltipHideTimer = null;
 
     function showMemberNoteTooltip(anchorEl, noteText) {
@@ -506,7 +505,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         ? `<span class="member-note-icon" tabindex="0" data-note="${escapeHtml(att.memberNote)}" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
         : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>';
 
-      // Verspätungsgrund (neu)
+      // Verspätungsgrund
       const isLateStatus = ['late_excused', 'late_unexcused'].includes(att.status);
       const lateReasonHtml = isLateStatus && att.memberLateReason
         ? `<span class="member-late-reason-icon" tabindex="0" title="Verspätungsgrund: ${escapeHtml(att.memberLateReason)}">
@@ -517,8 +516,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             ? '<span style="color:var(--color-text-faint);font-size:0.8rem;">kein Grund</span>'
             : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>');
 
-      // Status-Spalte: echter Anwesenheitsstatus als Chip
-      // + kleiner Hinweis ob vom Betreuer oder selbst gesetzt
       const statusChip = getAttendanceStatusChip(att.status);
       const setterHint = att.trainerSet
         ? `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">vom Betreuer</div>`
