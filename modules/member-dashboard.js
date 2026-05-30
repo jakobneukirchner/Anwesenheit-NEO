@@ -176,8 +176,24 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
   const canWithdraw       = !!(firstRegTime && (Date.now() - firstRegTime.getTime()) < WITHDRAW_WINDOW_MS && memberStatus !== 'cancelled' && !locked);
 
   const isRegistered = ['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(memberStatus);
-  const trainerLate  = event.trainerLateMinutes
-    ? Object.values(event.trainerLateMinutes).some(m => m > 0) : false;
+
+  // ── Betreuer-Verspätung: Minuten + Grund anzeigen ──────────
+  let trainerLateHtml = '';
+  if (event.trainerLateMinutes && typeof event.trainerLateMinutes === 'object') {
+    const lateEntries = Object.values(event.trainerLateMinutes).filter(m => m > 0);
+    if (lateEntries.length > 0) {
+      const maxMins = Math.max(...lateEntries);
+      const reason  = event.trainerLateReason ? escapeHtml(event.trainerLateReason) : null;
+      trainerLateHtml = `
+        <div style="background:rgba(245,124,0,0.07);border-left:3px solid var(--color-warning,#e65100);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:flex-start;gap:8px;">
+          <span class="material-icons" style="font-size:18px;color:var(--color-warning,#e65100);flex-shrink:0;margin-top:1px;">schedule</span>
+          <div>
+            <strong style="font-size:0.9rem;">${tLabel} verspätet sich um ca. ${maxMins} Min.</strong>
+            ${reason ? `<p style="margin:3px 0 0;font-size:0.85rem;color:var(--color-text-muted);">Grund: ${reason}</p>` : ''}
+          </div>
+        </div>`;
+    }
+  }
 
   const btnLabel = isConfMode
     ? (memberStatus === 'cancelled' ? 'Wieder anmelden' : 'Abmelden')
@@ -198,10 +214,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
   };
 
   const isPending_ = memberStatus === 'confirmation_pending';
-
-  const trainerLateHtml = trainerLate
-    ? `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">schedule</span> ${tLabel} meldet Verspätung.</p>`
-    : '';
 
   // ── Betreuer-Broadcast: groß & prominent ─────────────────────────────
   const broadcastHtml = event.trainerBroadcast
@@ -250,19 +262,17 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
 
   let confirmBannerHtml = '';
   if (isConfMode && !isPast && !locked && isPending_ && !confWindowExpired && withinDeadline) {
+    // Im Bestätigungsmodus: nur "Bestätigen"-Button, kein Abmelden
     confirmBannerHtml = `
       <div style="background:rgba(245,124,0,0.09);border-left:3px solid var(--color-warning,#e65100);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
         <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#e65100);display:flex;align-items:center;gap:6px;">
           <span class="material-icons" style="font-size:16px;">pending</span>
           Bestätigung ausstehend
         </p>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Du bist vorläufig angemeldet. Bitte bestätige deine Teilnahme oder melde dich ab.</p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Du bist vorläufig angemeldet. Bitte bestätige deine Teilnahme.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn-primary" data-action="confirm-attendance" style="display:inline-flex;align-items:center;gap:4px;">
             <span class="material-icons" style="font-size:16px;">check_circle</span> Teilnahme bestätigen
-          </button>
-          <button class="btn-danger" data-action="toggle" style="display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:16px;">cancel</span> Abmelden
           </button>
         </div>
       </div>`;
@@ -270,9 +280,9 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     confirmBannerHtml = `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">lock_clock</span> Bestätigungsfenster abgelaufen.</p>`;
   }
 
-  const showToggle = withinDeadline && !locked
-    && !(isConfMode && isPending_ && !confWindowExpired)
-    && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
+  // Im Bestätigungsmodus ist Abmelden generell gesperrt
+  const showToggle = withinDeadline && !locked && !isConfMode
+    && !(confWindowExpired && memberStatus !== 'cancelled');
 
   const card = createElement('div', 'card');
   card.style.marginBottom = '0';
@@ -481,19 +491,16 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
   const user = window.currentUser.firebaseUser;
   if (deadline && new Date() > deadline) { showToast('Anmeldefrist abgelaufen.', 'warning'); return; }
   const isConfMode = mode === 'confirmation';
+  // Im Bestätigungsmodus ist Toggle gesperrt (wird über confirmBannerHtml / showToggle verhindert)
+  if (isConfMode) return;
+
   const currentStatus = attendance?.status || (
-    isConfMode ? 'confirmation_pending' :
     mode === 'opt_out' ? 'registered' : 'none'
   );
 
-  let newStatus;
-  if (isConfMode) {
-    newStatus = currentStatus === 'cancelled' ? 'confirmation_pending' : 'cancelled';
-  } else {
-    newStatus = mode === 'opt_in'
-      ? (currentStatus === 'registered' ? 'cancelled' : 'registered')
-      : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
-  }
+  const newStatus = mode === 'opt_in'
+    ? (currentStatus === 'registered' ? 'cancelled' : 'registered')
+    : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
 
   if (newStatus === 'cancelled') {
     showModal({
@@ -520,7 +527,7 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
     return;
   }
 
-  const isFirstReg = (newStatus === 'registered' || newStatus === 'confirmation_pending') && !attendance?.firstRegisteredAt;
+  const isFirstReg = newStatus === 'registered' && !attendance?.firstRegisteredAt;
   const updateData = {
     eventId: event.id, userId: user.uid,
     status: newStatus, trainerSet: false,
@@ -529,10 +536,7 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
   if (isFirstReg) updateData.firstRegisteredAt = firebase.firestore.FieldValue.serverTimestamp();
 
   await firestore.collection('eventAttendance').doc(`${event.id}_${user.uid}`).set(updateData, { merge: true });
-
-  const msg = newStatus === 'confirmation_pending' ? 'Wieder vorgemerkt – bitte Teilnahme bestätigen.'
-    : 'Erfolgreich angemeldet.';
-  showToast(msg, 'success');
+  showToast('Erfolgreich angemeldet.', 'success');
   loadMemberDashboard();
 }
 
