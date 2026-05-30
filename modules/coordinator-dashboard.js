@@ -377,6 +377,9 @@ function confirmDeleteGroup(group, parentEl) {
 async function renderScheduleTab(el) {
   el.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
   try {
+    // Auto-Cancel-Check: offene Anfragen prüfen bevor wir rendern
+    await _checkAutoCancelRequests();
+
     const snap = await firestore.collection('events').orderBy('startTime','desc').limit(200).get();
     const events = [];
     snap.forEach(doc => events.push({ id: doc.id, ...doc.data() }));
@@ -554,7 +557,7 @@ async function confirmDeleteEvents(selectedIds, events, parentEl) {
   });
 }
 
-/* ── Terminliste ──────────────────────────────────────────────────────────────── */
+/* ── Terminliste ──────────────────────────────────────────────────────────── */
 function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn) {
   const selected = new Set();
 
