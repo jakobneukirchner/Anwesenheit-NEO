@@ -61,20 +61,37 @@ async function loadMemberDashboard() {
 
     const visibilityMode = settings.visibilityMode || 'count';
     await Promise.all(events.map(async ev => {
-      const trainerIds    = ev.trainers || [];
-      const cancelledIds  = ev.trainerCancellations || [];
-      const allTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
-      if (allTrainerIds.length) {
+      const trainerIds   = ev.trainers || [];
+      const cancelledIds = ev.trainerCancellations || [];
+
+      // FIX: Nur Betreuer die NICHT abgemeldet sind als aktiv anzeigen
+      const activeTrainerIds    = trainerIds.filter(tid => !cancelledIds.includes(tid));
+      const allUniqueTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
+
+      if (allUniqueTrainerIds.length) {
         const trainerNames = {};
-        await Promise.all(allTrainerIds.map(async tid => {
+        await Promise.all(allUniqueTrainerIds.map(async tid => {
           const uDoc = await firestore.collection('users').doc(tid).get();
           trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
         }));
-        ev._trainerNames     = trainerIds.map(tid => trainerNames[tid] || tid);
+        ev._trainerNames     = activeTrainerIds.map(tid => trainerNames[tid] || tid);
         ev._trainerCancelled = cancelledIds.map(tid => trainerNames[tid] || tid);
       }
 
       if (ev.status === 'cancelled' || ev.status === 'skipped') return;
+
+      // FIX: trainerLateNote aus trainerAttendance laden
+      if (trainerIds.length) {
+        const lateSnap = await firestore.collection('trainerAttendance')
+          .where('eventId', '==', ev.id)
+          .where('status', '==', 'late')
+          .get();
+        if (!lateSnap.empty) {
+          const lateDoc = lateSnap.docs[0].data();
+          ev.trainerLateNote = lateDoc.lateNote || lateDoc.note || 'Verspätung gemeldet';
+          ev.trainerLateMinutes = lateDoc.lateMinutes || null;
+        }
+      }
 
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
       let count = 0;
@@ -235,6 +252,14 @@ function renderMemberEventCard(event, attendance, isPast) {
     && attendance?.status === 'registered' && !attendance?.trainerSet
     && firstRegTime && (now - firstRegTime) < WITHDRAW_WINDOW_MS;
 
+  // FIX: Absage widerrufen möglich wenn status === 'cancelled' und nicht locked
+  const isMemberCancelled = memberStatus === 'cancelled' && !locked && !isPast;
+
+  // FIX: Verspätung widerrufen möglich wenn status === 'late_excused' und nicht vom Trainer gesetzt
+  const canRevokeLate = !locked && !isPast
+    && attendance?.status === 'late_excused'
+    && !attendance?.trainerSet;
+
   const card = createElement('div', 'card');
 
   // --- Abgesagt ---
@@ -276,10 +301,12 @@ function renderMemberEventCard(event, attendance, isPast) {
     return card;
   }
 
+  // FIX: trainerLateNote mit Minuten anzeigen
+  const lateMinutesText = event.trainerLateMinutes ? ` (ca. ${event.trainerLateMinutes} Min.)` : '';
   const trainerLateHtml = event.trainerLateNote
     ? `<div class="chip chip-warning" style="margin-bottom:8px;display:inline-flex;align-items:center;gap:4px;">
         <span class="material-icons" style="font-size:15px;">schedule</span>
-        ${tLabel} meldet Verspätung: ${event.trainerLateNote}
+        ${tLabel} meldet Verspätung${lateMinutesText}: ${event.trainerLateNote}
        </div>` : '';
 
   const broadcastHtml = event.trainerBroadcast
@@ -371,8 +398,29 @@ function renderMemberEventCard(event, attendance, isPast) {
     && !(isConfMode && isPending)
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
 
+  // FIX: Banner für gemeldete Verspätung (mit Widerruf-Option)
+  const lateBannerHtml = (!isPast && !locked && attendance?.status === 'late_excused' && !attendance?.trainerSet)
+    ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.85rem;color:var(--color-warning,#f57c00);display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">schedule</span>
+          Verspätung gemeldet (entschuldigt)
+        </span>
+        <button class="btn-secondary" data-action="revoke-late" style="padding:4px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
+          <span class="material-icons" style="font-size:15px;">undo</span> Widerrufen
+        </button>
+       </div>` : '';
+
+  // FIX: Banner für Absage (mit Widerruf-Option)
+  const cancelledBannerHtml = isMemberCancelled && withinDeadline
+    ? `<div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.85rem;color:var(--color-error,#c62828);display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">cancel</span>
+          Du hast dich abgemeldet
+        </span>
+       </div>` : '';
+
   card.innerHTML = `
-    ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}${withdrawHtml}${confirmBannerHtml}
+    ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}${withdrawHtml}${lateBannerHtml}${cancelledBannerHtml}${confirmBannerHtml}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
       <div>
         <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
@@ -388,7 +436,7 @@ function renderMemberEventCard(event, attendance, isPast) {
     <hr class="divider" />
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       ${showToggle ? `<button class="btn-primary" data-action="toggle">${toggleLabel}</button>` : ''}
-      ${!isPast && !locked ? `<button class="btn-secondary" data-action="late" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">schedule</span> Verspätung melden</button>` : ''}
+      ${!isPast && !locked && attendance?.status !== 'late_excused' ? `<button class="btn-secondary" data-action="late" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">schedule</span> Verspätung melden</button>` : ''}
     </div>
     <div style="margin-top:12px;">
       <label>Mein Hinweis (für ${tLabel} sichtbar)</label>
@@ -426,6 +474,28 @@ function renderMemberEventCard(event, attendance, isPast) {
         }, 1000);
       }
     }
+
+    // FIX: Verspätung widerrufen
+    const revokeLateBtn = card.querySelector('[data-action="revoke-late"]');
+    if (revokeLateBtn) revokeLateBtn.onclick = () => guardedAction(async () => {
+      showModal({
+        title: 'Verspätung widerrufen',
+        body: `<p>Möchtest du deine gemeldete Verspätung widerrufen und wieder als <strong>angemeldet</strong> gelten?</p>`,
+        confirmLabel: 'Ja, widerrufen',
+        onConfirm: async () => {
+          try {
+            const prevStatus = mode === 'confirmation' ? 'confirmation_pending' : 'registered';
+            await firestore.collection('eventAttendance').doc(`${event.id}_${window.currentUser.firebaseUser.uid}`).set({
+              eventId: event.id, userId: window.currentUser.firebaseUser.uid,
+              status: prevStatus, trainerSet: false,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            showToast('Verspätung widerrufen.', 'success');
+            loadMemberDashboard();
+          } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
+        }
+      });
+    });
 
     const confirmBtn = card.querySelector('[data-action="confirm-attendance"]');
     if (confirmBtn) confirmBtn.onclick = () => guardedAction(async () => {
