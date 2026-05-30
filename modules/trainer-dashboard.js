@@ -247,6 +247,11 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         .member-note-icon:hover, .member-note-icon:focus {
           background: var(--color-primary-highlight); outline: none;
         }
+        .member-late-reason-icon {
+          display: inline-flex; align-items: center; gap: 4px;
+          cursor: pointer; color: var(--color-warning, #e65100);
+          font-size: 0.82rem; vertical-align: middle;
+        }
       </style>
 
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;">
@@ -300,7 +305,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}“ angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
@@ -323,7 +328,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             </button>
           </div>
         </div>
-        <table style="width:100%;min-width:1050px;">
+        <table style="width:100%;min-width:1100px;">
           <thead>
             <tr>
               <th>Name</th>
@@ -333,6 +338,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <th>Interne Notiz</th>
               <th>Notiz an Mitglied</th>
               <th>Hinweis v. Mitglied</th>
+              <th>Versp.-Grund</th>
               <th></th>
             </tr>
           </thead>
@@ -500,6 +506,17 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         ? `<span class="member-note-icon" tabindex="0" data-note="${escapeHtml(att.memberNote)}" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
         : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>';
 
+      // Verspätungsgrund (neu)
+      const isLateStatus = ['late_excused', 'late_unexcused'].includes(att.status);
+      const lateReasonHtml = isLateStatus && att.memberLateReason
+        ? `<span class="member-late-reason-icon" tabindex="0" title="Verspätungsgrund: ${escapeHtml(att.memberLateReason)}">
+            <span class="material-icons" style="font-size:16px;">schedule</span>
+            ${escapeHtml(att.memberLateReason)}
+          </span>`
+        : (isLateStatus
+            ? '<span style="color:var(--color-text-faint);font-size:0.8rem;">kein Grund</span>'
+            : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>');
+
       // Status-Spalte: echter Anwesenheitsstatus als Chip
       // + kleiner Hinweis ob vom Betreuer oder selbst gesetzt
       const statusChip = getAttendanceStatusChip(att.status);
@@ -525,6 +542,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <td><input type="text" class="trainer-internal-note" value="${escapeHtml(att.trainerNoteInternal || '')}" placeholder="Interne Notiz…" style="width:120px;" /></td>
         <td><input type="text" class="trainer-member-note" value="${escapeHtml(att.trainerNoteMember || '')}" placeholder="Notiz an Mitglied…" style="width:130px;" /></td>
         <td>${noteIconHtml}</td>
+        <td>${lateReasonHtml}</td>
         <td></td>
       `;
 
@@ -545,6 +563,18 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           noteIcon.addEventListener('focus',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
           noteIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
           noteIcon.addEventListener('click',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
+        }
+      }
+
+      if (isLateStatus && att.memberLateReason) {
+        const lateIcon = tr.querySelector('.member-late-reason-icon');
+        if (lateIcon) {
+          const tipText = `Verspätungsgrund: ${att.memberLateReason}`;
+          lateIcon.addEventListener('mouseenter', () => showMemberNoteTooltip(lateIcon, tipText));
+          lateIcon.addEventListener('mouseleave', () => hideMemberNoteTooltip());
+          lateIcon.addEventListener('focus',      () => showMemberNoteTooltip(lateIcon, tipText));
+          lateIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
+          lateIcon.addEventListener('click',      () => showMemberNoteTooltip(lateIcon, tipText));
         }
       }
 
