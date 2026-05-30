@@ -76,22 +76,20 @@ async function loadMemberDashboard() {
         }));
         ev._trainerNames     = activeTrainerIds.map(tid => trainerNames[tid] || tid);
         ev._trainerCancelled = cancelledIds.map(tid => trainerNames[tid] || tid);
+
+        // FIX: ALLE verspäteten aktiven Trainer sammeln (nicht nur den ersten)
+        if (activeTrainerIds.length && ev.trainerLateMinutes) {
+          ev._trainerLateList = activeTrainerIds
+            .filter(tid => ev.trainerLateMinutes[tid])
+            .map(tid => ({
+              name:    trainerNames[tid] || tid,
+              minutes: ev.trainerLateMinutes[tid],
+              note:    ev.trainerLateNotes?.[tid] || null
+            }));
+        }
       }
 
       if (ev.status === 'cancelled' || ev.status === 'skipped') return;
-
-      // FIX: Betreuer-Verspätung direkt aus event.trainerLateMinutes (Map-Feld) lesen
-      // Wir suchen den ersten aktiven Trainer, der eine Verspätung gemeldet hat
-      if (activeTrainerIds.length && ev.trainerLateMinutes) {
-        for (const tid of activeTrainerIds) {
-          const lateMin = ev.trainerLateMinutes[tid];
-          if (lateMin) {
-            ev._trainerLateMinutes = lateMin;
-            ev._trainerLateNote   = ev.trainerLateNotes?.[tid] || null;
-            break;
-          }
-        }
-      }
 
       const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
       let count = 0;
@@ -295,15 +293,16 @@ function renderMemberEventCard(event, attendance, isPast) {
     return card;
   }
 
-  // FIX: Betreuer-Verspätung aus _trainerLateMinutes (direkt aus event.trainerLateMinutes gelesen)
-  const trainerLateMinutes = event._trainerLateMinutes || null;
-  const trainerLateNote    = event._trainerLateNote    || null;
-  const lateMinutesText    = trainerLateMinutes ? ` (ca. ${trainerLateMinutes} Min.)` : '';
-  const trainerLateHtml    = trainerLateMinutes
-    ? `<div class="chip chip-warning" style="margin-bottom:8px;display:inline-flex;align-items:center;gap:4px;">
-        <span class="material-icons" style="font-size:15px;">schedule</span>
-        ${tLabel} meldet Verspätung${lateMinutesText}${trainerLateNote ? ': ' + escapeHtml(trainerLateNote) : ''}
-       </div>` : '';
+  // FIX: Alle verspäteten Betreuer anzeigen (je ein Chip mit Name, Minuten, Notiz)
+  const lateList = event._trainerLateList || [];
+  const trainerLateHtml = lateList.length
+    ? lateList.map(entry =>
+        `<div class="chip chip-warning" style="margin-bottom:6px;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;">
+          <span class="material-icons" style="font-size:15px;">schedule</span>
+          <strong>${escapeHtml(entry.name)}</strong> meldet Verspätung (ca. ${entry.minutes} Min.)${entry.note ? ': ' + escapeHtml(entry.note) : ''}
+         </div>`
+      ).join('')
+    : '';
 
   const broadcastHtml = event.trainerBroadcast
     ? `<div style="background:rgba(21,101,192,0.08);border-left:3px solid var(--color-primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
