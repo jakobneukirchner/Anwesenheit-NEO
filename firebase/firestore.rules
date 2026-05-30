@@ -71,6 +71,14 @@ service cloud.firestore {
                        request.auth.uid == resource.data.userId;
     }
 
+    // TRAINER ATTENDANCE (Verspätung, Abmeldung des Betreuers)
+    match /trainerAttendance/{docId} {
+      allow read:   if isSignedIn();
+      allow create: if hasRole('teacher') || isPrivileged();
+      allow update: if hasRole('teacher') || isPrivileged();
+      allow delete: if isPrivileged();
+    }
+
     // SUBSTITUTE REQUESTS
     match /substituteRequests/{docId} {
       allow read:   if isPrivileged();
@@ -89,8 +97,6 @@ service cloud.firestore {
     }
 
     // SYSTEM MESSAGES
-    // Lesen: alle eingeloggten User (für Banner)
-    // Schreiben: nur Admin und Koordinator
     match /systemMessages/{msgId} {
       allow read:   if isSignedIn();
       allow create: if hasRole('admin') || hasRole('coordinator');
