@@ -43,6 +43,21 @@ function getRoleLabel(role) {
   return (window.roleLabels && window.roleLabels[role]) || role;
 }
 
+/**
+ * Escaped HTML-Sonderzeichen in einem String, um XSS zu verhindern.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g,  '&amp;')
+    .replace(/</g,  '&lt;')
+    .replace(/>/g,  '&gt;')
+    .replace(/"/g,  '&quot;')
+    .replace(/'/g,  '&#039;');
+}
+
 let _toastTimer = null;
 function showToast(message, type = 'info') {
   let toast = document.getElementById('app-toast');
