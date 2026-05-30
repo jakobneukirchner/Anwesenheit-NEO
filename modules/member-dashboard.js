@@ -35,9 +35,11 @@ async function loadMemberDashboard() {
     const attMap = {};
     myAttSnap.forEach(doc => { attMap[doc.data().eventId] = { id: doc.id, ...doc.data() }; });
 
+    const getMode = ev => ev.registrationMode || ev.mode || 'opt_in';
+
     const skipEvent = ev => {
       if (ev.status === 'cancelled' || ev.status === 'skipped') return true;
-      const mode = ev.registrationMode || 'opt_in';
+      const mode = getMode(ev);
       if (mode === 'opt_out') return false;
       if (mode === 'confirmation') return false;
       const trainers = ev.trainers || [];
@@ -62,10 +64,9 @@ async function loadMemberDashboard() {
     }));
 
     const events = eventsRaw.map(ev => {
-      const trainerIds    = ev.trainers || [];
-      const cancelledIds  = ev.trainerCancellations || [];
-      const activeTrainerIds    = trainerIds.filter(tid => !cancelledIds.includes(tid));
-
+      const trainerIds       = ev.trainers || [];
+      const cancelledIds     = ev.trainerCancellations || [];
+      const activeTrainerIds = trainerIds.filter(tid => !cancelledIds.includes(tid));
       return {
         ...ev,
         _trainerActive:    activeTrainerIds.map(tid => trainerNames[tid] || tid),
@@ -80,7 +81,7 @@ async function loadMemberDashboard() {
     upcoming.forEach(ev => {
       if (ev.status === 'cancelled' || ev.status === 'skipped') return;
       const att  = attMap[ev.id];
-      const mode = ev.registrationMode || 'opt_in';
+      const mode = getMode(ev);
       const defaultStatus = mode === 'opt_out' ? 'registered' : mode === 'confirmation' ? 'confirmation_pending' : 'none';
       if (!att) {
         attMap[ev.id] = { status: defaultStatus, _virtual: true };
@@ -150,7 +151,7 @@ function renderTrainerPillRow(event) {
   const cancelled = event._trainerCancelled || [];
   if (!active.length && !cancelled.length) return '';
   const tLabel = getRoleLabel('teacher');
-  const activePills   = active.map(n =>
+  const activePills    = active.map(n =>
     `<span class="chip chip-success" style="font-size:0.78rem;">${n}</span>`).join('');
   const cancelledPills = cancelled.map(n =>
     `<span class="chip chip-error" style="font-size:0.78rem;text-decoration:line-through;">${n}</span>`).join('');
@@ -163,7 +164,7 @@ function renderTrainerPillRow(event) {
 const WITHDRAW_WINDOW_MS = 5 * 60 * 1000;
 
 async function renderMemberEventCard(event, attendance, settings, isPast) {
-  const mode             = event.registrationMode || 'opt_in';
+  const mode             = event.registrationMode || event.mode || 'opt_in';
   const isConfMode       = mode === 'confirmation';
   const deadline         = event.registrationDeadline?.toDate?.() ?? null;
   const confWindowMinutes = settings.confirmationWindowMinutes ?? 60;
@@ -185,9 +186,8 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
   const firstRegTime      = attendance?.firstRegisteredAt?.toDate?.();
   const canWithdraw       = !!(firstRegTime && (Date.now() - firstRegTime.getTime()) < WITHDRAW_WINDOW_MS && memberStatus !== 'cancelled' && !locked);
 
-  const isRegistered   = ['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(memberStatus);
-  const isPending      = memberStatus === 'confirmation_pending';
-  const trainerLate    = event.trainerLateMinutes
+  const isRegistered = ['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(memberStatus);
+  const trainerLate  = event.trainerLateMinutes
     ? Object.values(event.trainerLateMinutes).some(m => m > 0) : false;
 
   const btnLabel = isConfMode
@@ -208,7 +208,7 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     none:                 'chip-primary',
   };
 
-  const isPending_    = memberStatus === 'confirmation_pending';
+  const isPending_ = memberStatus === 'confirmation_pending';
 
   const trainerLateHtml = trainerLate
     ? `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">schedule</span> ${tLabel} meldet Verspätung.</p>`
@@ -242,7 +242,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       </div>`
     : '';
 
-  // Bestätigungsmodus-Banner
   let confirmBannerHtml = '';
   if (isConfMode && !isPast && !locked && isPending_ && !confWindowExpired && withinDeadline) {
     confirmBannerHtml = `
@@ -265,7 +264,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     confirmBannerHtml = `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">lock_clock</span> Bestätigungsfenster abgelaufen.</p>`;
   }
 
-  // Toggle-Button nur anzeigen wenn NICHT im Confirmation-Pending-Banner
   const showToggle = withinDeadline && !locked
     && !(isConfMode && isPending_ && !confWindowExpired)
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
@@ -307,7 +305,7 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
   const statusLabel     = translateMemberStatus(memberStatus, mode);
 
   const isRegisteredOrLate2 = ['registered','present','late_excused','late_unexcused'].includes(memberStatus);
-  const showLateBtn = isRegisteredOrLate2 && !isPast && !locked;
+  const showLateBtn  = isRegisteredOrLate2 && !isPast && !locked;
   const showNoteArea = isRegisteredOrLate2 && !isPast;
 
   card.innerHTML = `
