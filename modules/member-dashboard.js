@@ -2,131 +2,117 @@
 
 async function loadMemberDashboard() {
   const container = document.getElementById('app-content');
-  const user      = window.currentUser.firebaseUser;
 
-  // Fokus-Schutz: Wenn der Nutzer gerade tippt, Refresh überspringen
   if (window._silentRefresh && container.contains(document.activeElement)) return;
 
-  // Loading-Spinner nur beim ersten (nicht-stillen) Laden anzeigen
   if (!window._silentRefresh) {
-    container.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
+    container.innerHTML = `<div class="loading-center">Lade Dashboard…</div>`;
   }
 
   try {
+    const uid = window.currentUser?.firebaseUser?.uid;
+    if (!uid) throw new Error('Nicht eingeloggt.');
+
     const settingsDoc = await firestore.collection('settings').doc('global').get();
-    const settings    = settingsDoc.exists ? settingsDoc.data() : {};
-    window.appSettings = settings;
-    const defaultLimit = settings.defaultEventLookAhead ?? 30;
+    window.appSettings = settingsDoc.exists
+      ? { ...(window.appSettings || {}), ...settingsDoc.data() }
+      : (window.appSettings || {});
 
-    const userDoc  = await firestore.collection('users').doc(user.uid).get();
-    const userData = userDoc.data() || {};
-    const userGroups    = userData.groups || [];
-    const lookAheadDays = userData.eventLookAhead ?? defaultLimit;
+    const lookAheadDays = window.appSettings.defaultEventLookAhead ?? 30;
+    const now       = new Date();
+    const futureEnd = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
+    const pastStart = new Date(now.getTime() - 120   * 24 * 60 * 60 * 1000);
 
-    const now        = new Date();
-    const cutOff     = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
-    const pastCutOff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const [allEventsSnap, myAttSnap] = await Promise.all([
+      firestore.collection('events')
+        .where('startTime', '>=', firebase.firestore.Timestamp.fromDate(pastStart))
+        .where('startTime', '<=', firebase.firestore.Timestamp.fromDate(futureEnd))
+        .orderBy('startTime', 'asc')
+        .get(),
+      firestore.collection('eventAttendance').where('userId', '==', uid).get()
+    ]);
 
-    const attendanceSnap = await firestore.collection('eventAttendance').where('userId', '==', user.uid).get();
-    const attendanceByEvent = {};
-    attendanceSnap.forEach(doc => { attendanceByEvent[doc.data().eventId] = { id: doc.id, ...doc.data() }; });
+    const attMap = {};
+    myAttSnap.forEach(doc => { attMap[doc.data().eventId] = { id: doc.id, ...doc.data() }; });
 
-    let events = [];
-    const seen = new Set();
-    const addEvent = (doc) => {
-      if (!seen.has(doc.id)) { seen.add(doc.id); events.push({ id: doc.id, ...doc.data() }); }
+    const skipEvent = ev => {
+      if (ev.status === 'cancelled' || ev.status === 'skipped') return true;
+      const mode = ev.registrationMode || 'opt_in';
+      if (mode === 'opt_out') return false;
+      if (mode === 'confirmation') return false;
+      const trainers = ev.trainers || [];
+      const cancelledIds = ev.trainerCancellations || [];
+      const activeTrainers = trainers.filter(t => !cancelledIds.includes(t));
+      return trainers.length > 0 && activeTrainers.length === 0;
     };
 
-    const directSnap = await firestore.collection('events').where('directMembers', 'array-contains', user.uid).get();
-    directSnap.forEach(addEvent);
-    for (const groupId of userGroups) {
-      const groupSnap = await firestore.collection('events').where('groupId', '==', groupId).get();
-      groupSnap.forEach(addEvent);
-    }
-    for (const eventId of Object.keys(attendanceByEvent)) {
-      if (!seen.has(eventId)) {
-        const evDoc = await firestore.collection('events').doc(eventId).get();
-        if (evDoc.exists) addEvent(evDoc);
-      }
-    }
-
-    events = events.filter(e => {
-      const t = e.startTime?.toDate?.();
-      if (!t) return false;
-      if (t < pastCutOff || t > cutOff) return false;
-      if (e.status === 'cancelled' || e.status === 'skipped') return true;
-      if (t <= now) return !!attendanceByEvent[e.id];
-      return true;
+    const eventsRaw = [];
+    const trainerUids = new Set();
+    allEventsSnap.forEach(doc => {
+      const ev = { id: doc.id, ...doc.data() };
+      if (!skipEvent(ev)) eventsRaw.push(ev);
+      (ev.trainers || []).forEach(t => trainerUids.add(t));
+      (ev.trainerCancellations || []).forEach(t => trainerUids.add(t));
     });
 
-    const visibilityMode = settings.visibilityMode || 'count';
-    await Promise.all(events.map(async ev => {
-      const trainerIds   = ev.trainers || [];
-      const cancelledIds = ev.trainerCancellations || [];
+    const trainerNames = {};
+    await Promise.all([...trainerUids].map(async tUid => {
+      const uDoc = await firestore.collection('users').doc(tUid).get();
+      trainerNames[tUid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tUid) : tUid;
+    }));
 
-      // Nur Betreuer die NICHT abgemeldet sind als aktiv anzeigen
+    const events = eventsRaw.map(ev => {
+      const trainerIds    = ev.trainers || [];
+      const cancelledIds  = ev.trainerCancellations || [];
       const activeTrainerIds    = trainerIds.filter(tid => !cancelledIds.includes(tid));
       const allUniqueTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
 
-      if (allUniqueTrainerIds.length) {
-        const trainerNames = {};
-        await Promise.all(allUniqueTrainerIds.map(async tid => {
-          const uDoc = await firestore.collection('users').doc(tid).get();
-          trainerNames[tid] = uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || tid) : tid;
-        }));
-        ev._trainerNames     = activeTrainerIds.map(tid => trainerNames[tid] || tid);
-        ev._trainerCancelled = cancelledIds.map(tid => trainerNames[tid] || tid);
+      return {
+        ...ev,
+        _trainerActive:    activeTrainerIds.map(tid => trainerNames[tid] || tid),
+        _trainerCancelled: cancelledIds.map(tid => trainerNames[tid] || tid)
+      };
+    });
 
-        // FIX: ALLE verspäteten aktiven Trainer sammeln (nicht nur den ersten)
-        if (activeTrainerIds.length && ev.trainerLateMinutes) {
-          ev._trainerLateList = activeTrainerIds
-            .filter(tid => ev.trainerLateMinutes[tid])
-            .map(tid => ({
-              name:    trainerNames[tid] || tid,
-              minutes: ev.trainerLateMinutes[tid],
-              note:    ev.trainerLateNotes?.[tid] || null
-            }));
-        }
-      }
+    const upcoming = events.filter(ev => { const t = ev.startTime?.toDate?.(); return t && t >  now; });
+    const past     = events.filter(ev => { const t = ev.startTime?.toDate?.(); return t && t <= now; })
+                           .sort((a,b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
 
+    upcoming.forEach(ev => {
       if (ev.status === 'cancelled' || ev.status === 'skipped') return;
-
-      const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', ev.id).get();
-      let count = 0;
-      const uids = [];
-      attSnap.forEach(doc => {
-        const d = doc.data();
-        if (['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(d.status)) {
-          count++;
-          if (visibilityMode === 'names') uids.push(d.userId);
-        }
-      });
-      ev._participantCount = count;
-      if (visibilityMode === 'names' && uids.length) {
-        ev._participantNames = await Promise.all(uids.map(async uid => {
-          const uDoc = await firestore.collection('users').doc(uid).get();
-          return uDoc.exists ? (uDoc.data().displayName || uDoc.data().email || uid) : uid;
-        }));
+      const att  = attMap[ev.id];
+      const mode = ev.registrationMode || 'opt_in';
+      const defaultStatus = mode === 'opt_out' ? 'registered' : mode === 'confirmation' ? 'confirmation_pending' : 'none';
+      if (!att) {
+        attMap[ev.id] = { status: defaultStatus, _virtual: true };
       }
-    }));
-
-    events.sort((a, b) => (a.startTime?.toMillis?.() || 0) - (b.startTime?.toMillis?.() || 0));
-
-    const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
-    const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
+    });
 
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
+    const untilText = formatDate(futureEnd);
 
     const newHtml = `
-      <p class="text-muted" style="margin-bottom:12px;font-size:0.85rem;">
-        Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong> (${lookAheadDays} Tage im Voraus)
-      </p>
-      <div class="tabs">
-        <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">Kommende Termine (${upcoming.length})</button>
-        <button class="tab-btn${activeTab === 'past'     ? ' active' : ''}" data-tab="past">Vergangene Termine (${past.length})</button>
+      <div id="member-list-view">
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
+          <h2 style="margin:0;">Meine Termine</h2>
+          <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
+        </div>
+
+        <div class="tabs" style="margin-bottom:16px;">
+          <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">event</span>
+            Kommende Termine
+            <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
+          </button>
+          <button class="tab-btn${activeTab === 'past' ? ' active' : ''}" data-tab="past">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">history</span>
+            Vergangene Termine
+          </button>
+        </div>
+
+        <div id="member-upcoming" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
+        <div id="member-past"     style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'past'     ? ' hidden' : ''}></div>
       </div>
-      <div id="tab-upcoming"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
-      <div id="tab-past"${activeTab !== 'past' ? ' hidden' : ''}></div>
     `;
 
     const scrollY = container.scrollTop;
@@ -137,305 +123,221 @@ async function loadMemberDashboard() {
       btn.onclick = () => {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById('tab-upcoming').hidden = btn.dataset.tab !== 'upcoming';
-        document.getElementById('tab-past').hidden     = btn.dataset.tab !== 'past';
+        document.getElementById('member-upcoming').hidden = btn.dataset.tab !== 'upcoming';
+        document.getElementById('member-past').hidden     = btn.dataset.tab !== 'past';
       };
     });
 
-    const upcomingEl = document.getElementById('tab-upcoming');
-    const pastEl     = document.getElementById('tab-past');
+    const upEl = document.getElementById('member-upcoming');
+    const paEl = document.getElementById('member-past');
 
-    if (!upcoming.length) upcomingEl.innerHTML = '<p class="text-muted">Keine kommenden Termine.</p>';
-    else upcoming.forEach(ev => upcomingEl.appendChild(renderMemberEventCard(ev, attendanceByEvent[ev.id], false)));
+    if (!upcoming.length) upEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine kommenden Termine.</p></div>`;
+    if (!past.length)     paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
 
-    if (!past.length) pastEl.innerHTML = '<p class="text-muted">Keine vergangenen Termine.</p>';
-    else past.forEach(ev => pastEl.appendChild(renderMemberEventCard(ev, attendanceByEvent[ev.id], true)));
+    const settings = window.appSettings || {};
+    for (const ev of upcoming) upEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, false));
+    for (const ev of past)     paEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, true));
 
   } catch (e) {
     console.error(e);
     if (!window._silentRefresh) {
-      container.innerHTML = '<p class="text-error">Fehler beim Laden: ' + e.message + '</p>';
+      container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
     }
   }
 }
 
-function isLockedByTrainer(attendance) {
-  if (!attendance) return false;
-  const lockedStatuses = ['present', 'absent_excused', 'absent_unexcused', 'late_unexcused'];
-  if (lockedStatuses.includes(attendance.status)) return true;
-  if (attendance.status === 'late_excused' && attendance.trainerSet) return true;
-  return false;
-}
-
-function buildParticipantInfoHtml(event, isPast) {
-  if (isPast) return '';
-  const settings = window.appSettings || {};
-  const visMode  = settings.visibilityMode || 'count';
-  const minPart  = event.minParticipants ?? settings.defaultMinParticipants ?? 0;
-  const count    = event._participantCount ?? null;
-  if (visMode === 'none' || count === null) return '';
-  const missing  = minPart ? Math.max(0, minPart - count) : 0;
-  let content = (visMode === 'names' && event._participantNames?.length)
-    ? `<span class="pi-count">${count} angemeldet</span>: <span>${event._participantNames.join(', ')}</span>`
-    : `<span class="pi-count">${count} angemeldet</span>`;
-  if (minPart) {
-    content += missing > 0
-      ? ` &nbsp;&middot;&nbsp; <span class="pi-missing">noch ${missing} ben&ouml;tigt</span> <span class="text-muted">(mind. ${minPart})</span>`
-      : ` &nbsp;&middot;&nbsp; <span class="pi-ok"><span class="material-icons" style="font-size:14px;vertical-align:middle;">check</span> Mindestanzahl erreicht</span>`;
-  }
-  return `<div class="participant-info">${content}</div>`;
-}
-
-function buildTrainerInfoHtml(event, isPast) {
-  if (isPast) return '';
-  const tLabel    = getRoleLabel('teacher');
-  const active    = event._trainerNames    || [];
+function renderTrainerPillRow(event) {
+  const active    = event._trainerActive    || [];
   const cancelled = event._trainerCancelled || [];
   if (!active.length && !cancelled.length) return '';
-
-  const activePills = active.map(n =>
-    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(46,125,50,0.1);color:var(--color-success,#2e7d32);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;"><span class="material-icons" style="font-size:13px;">check</span>${n}</span>`
-  ).join(' ');
-
+  const tLabel = getRoleLabel('teacher');
+  const activePills   = active.map(n =>
+    `<span class="chip chip-success" style="font-size:0.78rem;">${n}</span>`).join('');
   const cancelledPills = cancelled.map(n =>
-    `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(198,40,40,0.1);color:var(--color-error,#c62828);border-radius:999px;padding:2px 10px;font-size:0.8rem;font-weight:500;text-decoration:line-through;"><span class="material-icons" style="font-size:13px;">close</span>${n}</span>`
-  ).join(' ');
-
+    `<span class="chip chip-error" style="font-size:0.78rem;text-decoration:line-through;">${n}</span>`).join('');
   const warning = cancelled.length && !active.length
-    ? `<span class="chip chip-error" style="font-size:0.78rem;margin-left:6px;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span> Kein ${tLabel}!</span>` : '';
-
-  return `
-    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0 2px;font-size:0.83rem;">
-      <span class="text-muted">${tLabel}:</span>
-      ${activePills}${cancelledPills}${warning}
-    </div>`;
+    ? `<span class="chip chip-warning" style="font-size:0.78rem;"><span class="material-icons" style="font-size:13px;vertical-align:middle;">warning</span> Kein ${tLabel} eingeplant</span>`
+    : '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center;">${activePills}${cancelledPills}${warning}</div>`;
 }
 
-function renderMemberEventCard(event, attendance, isPast) {
-  const settings   = window.appSettings || {};
-  const tLabel     = getRoleLabel('teacher');
-  const signupMins = event.signupDeadlineMinutes ?? settings.defaultSignupDeadlineMinutes ?? 60;
-  const WITHDRAW_WINDOW_MS = ((settings.withdrawWindowMinutes ?? 60) * 60 * 1000);
-  const mode       = event.mode || settings.defaultMode || 'opt_in';
-  const isConfMode = mode === 'confirmation';
+const WITHDRAW_WINDOW_MS = 5 * 60 * 1000;
 
+async function renderMemberEventCard(event, attendance, settings, isPast) {
+  const mode             = event.registrationMode || 'opt_in';
+  const isConfMode       = mode === 'confirmation';
+  const deadline         = event.registrationDeadline?.toDate?.() ?? null;
   const confWindowMinutes = settings.confirmationWindowMinutes ?? 60;
-  const start       = event.startTime?.toDate ? event.startTime.toDate() : null;
-  const end         = event.endTime?.toDate   ? event.endTime.toDate()   : null;
-  const now         = new Date();
+  const confWindowEnd    = event.startTime?.toDate
+    ? new Date(event.startTime.toDate().getTime() + confWindowMinutes * 60 * 1000)
+    : null;
+  const confWindowExpired = confWindowEnd ? new Date() > confWindowEnd : false;
+  const tLabel = getRoleLabel('teacher');
 
-  const confDeadline      = start ? new Date(start.getTime() + confWindowMinutes * 60 * 1000) : null;
-  const confWindowExpired = isConfMode && confDeadline && now > confDeadline;
+  const start = event.startTime?.toDate?.();
+  const end   = event.endTime?.toDate?.();
 
-  const deadline       = start ? new Date(start.getTime() - signupMins * 60000) : null;
-  const withinDeadline = !deadline || now <= deadline;
-  const locked         = isLockedByTrainer(attendance);
   const isCancelled    = event.status === 'cancelled';
   const isSkipped      = event.status === 'skipped';
-
-  const memberStatus = attendance?.status || (
-    isConfMode       ? 'confirmation_pending' :
-    mode === 'opt_out' ? 'registered' : 'none'
-  );
-  const memberNote   = attendance?.memberNote || '';
-
-  const firstRegTime     = attendance?.firstRegisteredAt?.toDate?.() || null;
-  const alreadyWithdrawn = !!attendance?.hasWithdrawn;
-
-  const canWithdraw = !locked && !isPast && !alreadyWithdrawn
-    && attendance?.status === 'registered' && !attendance?.trainerSet
-    && firstRegTime && (now - firstRegTime) < WITHDRAW_WINDOW_MS;
-
+  const memberStatus   = attendance?.status ?? (isConfMode ? 'confirmation_pending' : mode === 'opt_out' ? 'registered' : 'none');
+  const locked         = isPast || isCancelled || isSkipped;
+  const withinDeadline = !deadline || new Date() <= deadline;
   const isMemberCancelled = memberStatus === 'cancelled' && !locked && !isPast;
+  const firstRegTime      = attendance?.firstRegisteredAt?.toDate?.();
+  const canWithdraw       = !!(firstRegTime && (Date.now() - firstRegTime.getTime()) < WITHDRAW_WINDOW_MS && memberStatus !== 'cancelled' && !locked);
 
-  const canRevokeLate = !locked && !isPast
-    && attendance?.status === 'late_excused'
-    && !attendance?.trainerSet;
+  const isRegistered   = ['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(memberStatus);
+  const isPending      = memberStatus === 'confirmation_pending';
+  const trainerLate    = event.trainerLateMinutes
+    ? Object.values(event.trainerLateMinutes).some(m => m > 0) : false;
 
-  const card = createElement('div', 'card');
-
-  // --- Abgesagt ---
-  if (isCancelled) {
-    card.style.opacity    = '0.72';
-    card.style.borderLeft = '4px solid var(--color-error, #c62828)';
-    card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-        <div>
-          <h3 style="margin:0 0 2px;text-decoration:line-through;color:var(--color-text-muted);">${event.title || 'Termin'}</h3>
-          <p class="text-muted" style="margin:0;font-size:0.88rem;text-decoration:line-through;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
-        </div>
-        <span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;">
-          <span class="material-icons" style="font-size:14px;">cancel</span> Abgesagt
-        </span>
-      </div>
-      ${event.cancellationReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>` : ''}
-      ${event.trainerBroadcast  ? `<p class="text-muted" style="margin:6px 0 0;font-size:0.85rem;font-style:italic;">„${event.trainerBroadcast}"</p>` : ''}
-    `;
-    return card;
-  }
-
-  // --- Ausgefallen ---
-  if (isSkipped) {
-    card.style.opacity    = '0.75';
-    card.style.borderLeft = '4px solid var(--color-warning, #e65100)';
-    card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-        <div>
-          <h3 style="margin:0 0 2px;color:var(--color-text-muted);">${event.title || 'Termin'}</h3>
-          <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
-        </div>
-        <span class="chip chip-warning" style="display:inline-flex;align-items:center;gap:4px;">
-          <span class="material-icons" style="font-size:14px;">event_busy</span> Ausgefallen
-        </span>
-      </div>
-      ${event.skipReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.skipReason}</p>` : ''}
-    `;
-    return card;
-  }
-
-  // FIX: Alle verspäteten Betreuer anzeigen (je ein Chip mit Name, Minuten, Notiz)
-  const lateList = event._trainerLateList || [];
-  const trainerLateHtml = lateList.length
-    ? lateList.map(entry =>
-        `<div class="chip chip-warning" style="margin-bottom:6px;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;">
-          <span class="material-icons" style="font-size:15px;">schedule</span>
-          <strong>${escapeHtml(entry.name)}</strong> meldet Verspätung (ca. ${entry.minutes} Min.)${entry.note ? ': ' + escapeHtml(entry.note) : ''}
-         </div>`
-      ).join('')
-    : '';
-
-  const broadcastHtml = event.trainerBroadcast
-    ? `<div style="background:rgba(21,101,192,0.08);border-left:3px solid var(--color-primary);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
-        <span style="font-size:0.8rem;font-weight:600;color:var(--color-primary);text-transform:uppercase;letter-spacing:.04em;">Nachricht vom ${tLabel}</span>
-        <p style="margin:4px 0 0;">${event.trainerBroadcast}</p>
-       </div>` : '';
-
-  const trainerNoteHtml = attendance?.trainerNoteMember
-    ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
-        <span style="font-size:0.8rem;font-weight:600;color:var(--color-warning,#f57c00);text-transform:uppercase;letter-spacing:.04em;">Persönliche Notiz deines ${tLabel}s</span>
-        <p style="margin:4px 0 0;">${attendance.trainerNoteMember}</p>
-       </div>` : '';
-
-  const participantInfo = buildParticipantInfoHtml(event, isPast);
-  const trainerInfo     = buildTrainerInfoHtml(event, isPast);
-
-  const statusChipClass = {
-    registered:           'chip-success',
-    confirmation_pending: 'chip-warning',
-    none:                 '',
-    cancelled:            'chip-error',
-    present:              'chip-success',
-    absent_excused:       'chip-warning',
-    absent_unexcused:     'chip-error',
-    late_excused:         'chip-warning',
-    late_unexcused:       'chip-warning'
-  }[memberStatus] || '';
-
-  const isPending    = memberStatus === 'confirmation_pending';
-  const isRegistered = memberStatus === 'registered';
-
-  const toggleLabel = isConfMode
+  const btnLabel = isConfMode
     ? (memberStatus === 'cancelled' ? 'Wieder anmelden' : 'Abmelden')
     : mode === 'opt_in'
       ? (isRegistered ? 'Abmelden' : 'Anmelden')
       : (memberStatus === 'cancelled' ? 'Wieder anmelden' : 'Abmelden');
 
-  const lockedHtml = locked
-    ? `<p class="text-muted" style="font-size:0.85rem;margin:4px 0 0;display:flex;align-items:center;gap:4px;">
-        <span class="material-icons" style="font-size:15px;">lock</span>
-        Vom ${tLabel} eingetragen – keine Änderung möglich.
-       </p>` : '';
+  const statusMap = {
+    registered:           'chip-success',
+    present:              'chip-success',
+    late_excused:         'chip-warning',
+    late_unexcused:       'chip-error',
+    absent_excused:       'chip-warning',
+    absent_unexcused:     'chip-error',
+    confirmation_pending: 'chip-warning',
+    cancelled:            'chip-error',
+    none:                 'chip-primary',
+  };
 
-  let withdrawHtml = '';
-  if (canWithdraw) {
-    const msLeft  = Math.max(0, WITHDRAW_WINDOW_MS - (now - firstRegTime));
-    const minLeft = Math.floor(msLeft / 60000);
-    const secLeft = Math.floor((msLeft % 60000) / 1000);
-    withdrawHtml = `
-      <div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.85rem;color:var(--color-error,#c62828);display:inline-flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:16px;">timer</span>
-          Versehentlich angemeldet? Noch <strong id="withdraw-countdown-${event.id}">${minLeft}:${String(secLeft).padStart(2,'0')}</strong> zum Rückziehen.
-        </span>
-        <button class="btn-danger" data-action="withdraw" style="padding:4px 14px;font-size:0.85rem;">Anmeldung zurückziehen</button>
-      </div>`;
-  }
+  const isRegisteredOrLate = ['registered','late_excused','late_unexcused'].includes(memberStatus);
+  const isPending_    = memberStatus === 'confirmation_pending';
 
-  const deadlineHtml = !withinDeadline && !isPast && !locked
-    ? `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;">
-        <span class="material-icons" style="font-size:15px;">schedule</span>
-        Anmeldefrist abgelaufen
-       </p>` : '';
+  const trainerLateHtml = trainerLate
+    ? `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">schedule</span> ${tLabel} meldet Verspätung.</p>`
+    : '';
+  const broadcastHtml = event.trainerBroadcast
+    ? `<p class="text-muted" style="font-size:0.85rem;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;vertical-align:middle;">campaign</span> <strong>Nachricht:</strong> ${escapeHtml(event.trainerBroadcast)}</p>`
+    : '';
+  const trainerNoteHtml = attendance?.trainerNoteMember
+    ? `<p class="text-muted" style="font-size:0.85rem;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;vertical-align:middle;">info</span> <strong>Betreuer-Notiz:</strong> ${escapeHtml(attendance.trainerNoteMember)}</p>`
+    : '';
+  const withdrawHtml = canWithdraw
+    ? `<div style="background:rgba(245,124,0,0.07);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.88rem;color:var(--color-text);">Anmeldung rücknahme noch möglich: <strong><span id="withdraw-countdown-${event.id}">--:--</span></strong></span>
+        <button class="btn-danger" data-action="withdraw" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
+          <span class="material-icons" style="font-size:15px;">undo</span> Anmeldung rückziehen
+        </button>
+      </div>`
+    : '';
+  const lateBannerHtml = ['late_excused','late_unexcused'].includes(memberStatus)
+    ? `<div style="background:rgba(245,124,0,0.07);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.88rem;">Verspätung gemeldet</span>
+        <button class="btn-secondary" data-action="revoke-late" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
+          <span class="material-icons" style="font-size:15px;">undo</span> Widerrufen
+        </button>
+      </div>`
+    : '';
+  const cancelledBannerHtml = isMemberCancelled && withinDeadline
+    ? `<div style="background:rgba(183,28,28,0.06);border-left:3px solid var(--color-error,#b71c1c);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+        <span class="material-icons" style="font-size:16px;color:var(--color-error,#b71c1c);">cancel</span>
+        <span style="font-size:0.88rem;">Du bist für diesen Termin abgemeldet.</span>
+      </div>`
+    : '';
 
   let confirmBannerHtml = '';
-  if (isConfMode && !locked && isPending && !confWindowExpired) {
-    confirmBannerHtml = `
-      <div style="background:rgba(245,124,0,0.09);border-left:3px solid var(--color-warning,#e65100);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
-        <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#e65100);display:flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:16px;">pending</span>
-          Bestätigung ausstehend
-        </p>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Du bist vorläufig angemeldet. Bitte bestätige deine Teilnahme oder melde dich ab.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn-primary" data-action="confirm-attendance" style="display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:16px;">check_circle</span> Teilnahme bestätigen
-          </button>
-          <button class="btn-danger" data-action="toggle" style="display:inline-flex;align-items:center;gap:4px;">
-            <span class="material-icons" style="font-size:16px;">cancel</span> Abmelden
-          </button>
-        </div>
-      </div>`;
-  } else if (isConfMode && isPending && confWindowExpired) {
+  const showConfirmBtn = isConfMode && isPending_ && !confWindowExpired;
+  if (isConfMode && confWindowExpired && memberStatus !== 'cancelled') {
     confirmBannerHtml = `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">lock_clock</span> Bestätigungsfenster abgelaufen.</p>`;
   }
 
-  const showToggle = !isPast && withinDeadline && !locked
-    && !(isConfMode && isPending)
+  const showToggle = withinDeadline && !locked
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
 
-  // Banner für gemeldete Verspätung (mit Widerruf-Option)
-  const lateBannerHtml = (!isPast && !locked && attendance?.status === 'late_excused' && !attendance?.trainerSet)
-    ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.85rem;color:var(--color-warning,#f57c00);display:inline-flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:16px;">schedule</span>
-          Verspätung gemeldet (entschuldigt)
-        </span>
-        <button class="btn-secondary" data-action="revoke-late" style="padding:4px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
-          <span class="material-icons" style="font-size:15px;">undo</span> Widerrufen
-        </button>
-       </div>` : '';
+  const card = createElement('div', 'card');
+  card.style.marginBottom = '0';
 
-  const cancelledBannerHtml = isMemberCancelled && withinDeadline
-    ? `<div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.85rem;color:var(--color-error,#c62828);display:inline-flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:16px;">cancel</span>
-          Du hast dich abgemeldet
-        </span>
-       </div>` : '';
+  if (isCancelled) {
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:1.1rem;font-weight:700;margin-bottom:4px;">${event.title || 'Termin'}</div>
+          <div class="text-muted" style="font-size:0.9rem;margin-bottom:4px;">${start ? formatDate(start) : ''}, ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</div>
+        </div>
+        <span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">cancel</span> Abgesagt</span>
+      </div>
+      ${event.cancellationReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.cancellationReason}</p>` : ''}
+      ${renderTrainerPillRow(event)}
+    `;
+    return card;
+  }
+
+  if (isSkipped) {
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:1.1rem;font-weight:700;margin-bottom:4px;">${event.title || 'Termin'}</div>
+          <div class="text-muted" style="font-size:0.9rem;margin-bottom:4px;">${start ? formatDate(start) : ''}, ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</div>
+        </div>
+        <span class="chip chip-warning" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span> Ausgefallen</span>
+      </div>
+      ${event.skipReason ? `<p class="text-muted" style="margin:8px 0 0;font-size:0.88rem;">Begründung: ${event.skipReason}</p>` : ''}
+      ${renderTrainerPillRow(event)}
+    `;
+    return card;
+  }
+
+  const statusChipClass = statusMap[memberStatus] || 'chip-primary';
+  const statusLabel     = translateMemberStatus(memberStatus, mode);
+
+  const isRegisteredOrLate2 = ['registered','present','late_excused','late_unexcused'].includes(memberStatus);
+  const showLateBtn = isRegisteredOrLate2 && !isPast && !locked;
+  const showNoteArea = isRegisteredOrLate2 && !isPast;
 
   card.innerHTML = `
-    ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}${withdrawHtml}${lateBannerHtml}${cancelledBannerHtml}${confirmBannerHtml}
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-      <div>
-        <h3 style="margin:0 0 4px;">${event.title || 'Termin'}</h3>
-        <p class="text-muted" style="margin:0;font-size:0.88rem;">${start ? formatDateTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</p>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+      <div style="min-width:0;flex:1;">
+        <div style="font-size:1.1rem;font-weight:700;margin-bottom:4px;">${event.title || 'Termin'}</div>
+        <div class="text-muted" style="font-size:0.9rem;margin-bottom:4px;">${start ? formatDate(start) : ''}, ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</div>
+        ${event.location ? `<div class="text-muted" style="font-size:0.85rem;margin-bottom:4px;"><span class="material-icons" style="font-size:14px;vertical-align:middle;">place</span> ${escapeHtml(event.location)}</div>` : ''}
       </div>
-      <span class="chip ${statusChipClass}">${translateMemberStatus(memberStatus, mode)}</span>
+      <span class="chip ${statusChipClass}" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+        ${statusLabel}
+      </span>
     </div>
-    ${lockedHtml}
-    ${event.description ? `<p style="margin:10px 0 4px;">${event.description}</p>` : ''}
-    ${trainerInfo}
-    ${participantInfo}
-    ${deadlineHtml}
-    <hr class="divider" />
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      ${showToggle ? `<button class="btn-primary" data-action="toggle">${toggleLabel}</button>` : ''}
-      ${!isPast && !locked && attendance?.status !== 'late_excused' ? `<button class="btn-secondary" data-action="late" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">schedule</span> Verspätung melden</button>` : ''}
-    </div>
+
+    ${renderTrainerPillRow(event)}
+
     <div style="margin-top:12px;">
-      <label>Mein Hinweis (für ${tLabel} sichtbar)</label>
-      <textarea rows="2" data-role="note" ${locked ? 'disabled style="opacity:0.6;"' : ''}>${memberNote}</textarea>
-      ${!locked ? `<button class="btn-secondary" data-action="save-note" style="margin-top:0;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:16px;">save</span> Hinweis speichern</button>` : ''}
+      ${trainerLateHtml}${broadcastHtml}${trainerNoteHtml}${withdrawHtml}${lateBannerHtml}${cancelledBannerHtml}${confirmBannerHtml}
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${showToggle ? `
+          <button class="${memberStatus === 'cancelled' || memberStatus === 'none' ? 'btn-primary' : 'btn-danger'}" data-action="toggle" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">${memberStatus === 'cancelled' || memberStatus === 'none' ? 'check_circle' : 'cancel'}</span>
+            ${btnLabel}
+          </button>
+        ` : ''}
+        ${showConfirmBtn ? `
+          <button class="btn-primary" data-action="confirm-attendance" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">how_to_reg</span>
+            Teilnahme bestätigen
+          </button>
+        ` : ''}
+        ${showLateBtn ? `
+          <button class="btn-secondary" data-action="late" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">schedule</span>
+            ${isPending_ ? '' : 'Verspätung melden'}
+            ${isPending_ ? 'Bestätigungsfenster abgelaufen' : ''}
+          </button>
+        ` : ''}
+      </div>
+
+      ${showNoteArea ? `
+        <div style="margin-top:10px;">
+          <textarea data-role="note" rows="2" style="width:100%;" placeholder="Hinweis an den ${tLabel} (optional)…">${escapeHtml(attendance?.memberNote || '')}</textarea>
+          <button class="btn-secondary" data-action="save-note" style="margin-top:4px;padding:5px 14px;font-size:0.85rem;">Hinweis speichern</button>
+        </div>
+      ` : ''}
     </div>
     <div data-role="error" class="text-error"></div>
   `;
@@ -578,6 +480,32 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
       : (currentStatus === 'cancelled'  ? 'registered' : 'cancelled');
   }
 
+  // Bei Abmeldung: Abmeldegrund abfragen (alle Modi inkl. confirmation)
+  if (newStatus === 'cancelled') {
+    showModal({
+      title: 'Abmelden',
+      body: `
+        <p>Möchtest du dich wirklich abmelden?</p>
+        <label style="display:block;margin-top:10px;">Abmeldegrund (optional)</label>
+        <input type="text" id="cancel-reason-input" placeholder="z.B. Krank, anderer Termin…" style="margin-top:4px;" />
+      `,
+      confirmLabel: 'Abmelden',
+      onConfirm: async () => {
+        const reason = document.getElementById('cancel-reason-input')?.value.trim() || '';
+        const updateData = {
+          eventId: event.id, userId: user.uid,
+          status: 'cancelled', trainerSet: false,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        if (reason) updateData.memberNote = reason;
+        await firestore.collection('eventAttendance').doc(`${event.id}_${user.uid}`).set(updateData, { merge: true });
+        showToast('Erfolgreich abgemeldet.', 'success');
+        loadMemberDashboard();
+      }
+    });
+    return;
+  }
+
   const isFirstReg = (newStatus === 'registered' || newStatus === 'confirmation_pending') && !attendance?.firstRegisteredAt;
   const updateData = {
     eventId: event.id, userId: user.uid,
@@ -588,8 +516,7 @@ async function memberToggleAttendance(event, attendance, mode, deadline) {
 
   await firestore.collection('eventAttendance').doc(`${event.id}_${user.uid}`).set(updateData, { merge: true });
 
-  const msg = newStatus === 'cancelled' ? 'Erfolgreich abgemeldet.'
-    : newStatus === 'confirmation_pending' ? 'Wieder vorgemerkt – bitte Teilnahme bestätigen.'
+  const msg = newStatus === 'confirmation_pending' ? 'Wieder vorgemerkt – bitte Teilnahme bestätigen.'
     : 'Erfolgreich angemeldet.';
   showToast(msg, 'success');
   loadMemberDashboard();
