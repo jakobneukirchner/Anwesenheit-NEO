@@ -46,7 +46,7 @@ async function loadTrainerDashboard() {
     const past = filtered.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; })
       .sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
 
-    const untilText = formatDateGerman(futureEnd);
+    const untilText = formatDate(futureEnd);
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
     const newHtml = `
@@ -128,7 +128,7 @@ async function renderTrainerOverviewCard(event, isPast) {
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div style="min-width:0;flex:1;">
         <div style="font-size:1.35rem;font-weight:700;line-height:1.2;margin-bottom:8px;">${event.title || 'Termin'}</div>
-        <div class="text-muted" style="font-size:0.95rem;margin-bottom:10px;">${start ? formatDateGermanShort(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}</div>
+        <div class="text-muted" style="font-size:0.95rem;margin-bottom:10px;">${start ? formatDate(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}</div>
         <div class="text-muted" style="font-size:0.92rem;">${registered} / ${total} Teilnehmer angemeldet${isPast ? ` · ${present} anwesend` : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
@@ -208,11 +208,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
     const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
 
-    // Label für Verspätungs-Button
-    const lateButtonLabel = myLateMinutes
-      ? `Verspätung: ~${myLateMinutes} Min. <span class="material-icons" style="font-size:14px;vertical-align:middle;">edit</span>`
-      : 'Verspätung melden';
-
     container.innerHTML = `
       <style>
         .member-note-tooltip-popup {
@@ -242,13 +237,13 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <div>
           <h2 style="margin:0;line-height:1.2;">${event.title || 'Termin'}</h2>
           <div class="text-muted" style="font-size:0.92rem;margin-top:4px;">
-            ${start ? formatDateGerman(start) : ''} · ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}
+            ${start ? formatDate(start) : ''} &middot; ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}
           </div>
         </div>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
-        ${renderTrainerStatCard('Datum & Zeit', `${start ? formatDateGerman(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}`)}
+        ${renderTrainerStatCard('Datum & Zeit', `${start ? formatDate(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}`)}
         ${renderTrainerStatCard('Angemeldet', `${registered} / ${event.minParticipants || registered}`)}
         ${renderTrainerStatCard('Anwesend', `${present}`, 'var(--color-success)')}
         ${renderTrainerStatCard('Gefehlt', `${absent}`, absent > 0 ? 'var(--color-error)' : 'var(--color-text)')}
@@ -409,7 +404,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       document.getElementById('trainer-cancel-event-btn').onclick = () => _cancelEvent(event, container, options);
       document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateMinutes, myLateNote, container, options);
 
-      // FIX: Verspätung widerrufen
       const revokeBtn = document.getElementById('trainer-revoke-late-btn');
       if (revokeBtn) revokeBtn.onclick = () => {
         showModal({
@@ -485,7 +479,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         </td>
         <td>
           <input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}
-            ${att.trainerSet ? '' : ''} style="width:18px;height:18px;cursor:pointer;" />
+            style="width:18px;height:18px;cursor:pointer;" />
         </td>
         <td>
           <select class="trainer-status-select" style="padding:4px 6px;font-size:0.85rem;">
@@ -602,7 +596,6 @@ function _cancelEvent(event, container, options) {
   });
 }
 
-// FIX: Speichert Verspätung in trainerLateMinutes UND trainerLateNotes
 function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, container, options) {
   showModal({
     title: currentLateMinutes ? 'Verspätung ändern' : 'Verspätung melden',
