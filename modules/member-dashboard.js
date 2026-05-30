@@ -209,7 +209,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     none:                 'chip-primary',
   };
 
-  const isRegisteredOrLate = ['registered','late_excused','late_unexcused'].includes(memberStatus);
   const isPending_    = memberStatus === 'confirmation_pending';
 
   const trainerLateHtml = trainerLate
@@ -244,13 +243,32 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       </div>`
     : '';
 
+  // Bestätigungsmodus-Banner (wie Original, aber Abmelden-Button triggert Grund-Popup)
   let confirmBannerHtml = '';
-  const showConfirmBtn = isConfMode && isPending_ && !confWindowExpired;
-  if (isConfMode && confWindowExpired && memberStatus !== 'cancelled') {
+  if (isConfMode && !isPast && !locked && isPending_ && !confWindowExpired && withinDeadline) {
+    confirmBannerHtml = `
+      <div style="background:rgba(245,124,0,0.09);border-left:3px solid var(--color-warning,#e65100);border-radius:4px;padding:10px 14px;margin-bottom:10px;">
+        <p style="margin:0 0 6px;font-weight:600;color:var(--color-warning,#e65100);display:flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:16px;">pending</span>
+          Bestätigung ausstehend
+        </p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.85rem;">Du bist vorläufig angemeldet. Bitte bestätige deine Teilnahme oder melde dich ab.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-primary" data-action="confirm-attendance" style="display:inline-flex;align-items:center;gap:4px;">
+            <span class="material-icons" style="font-size:16px;">check_circle</span> Teilnahme bestätigen
+          </button>
+          <button class="btn-danger" data-action="toggle" style="display:inline-flex;align-items:center;gap:4px;">
+            <span class="material-icons" style="font-size:16px;">cancel</span> Abmelden
+          </button>
+        </div>
+      </div>`;
+  } else if (isConfMode && isPending_ && confWindowExpired) {
     confirmBannerHtml = `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">lock_clock</span> Bestätigungsfenster abgelaufen.</p>`;
   }
 
+  // Toggle-Button nur anzeigen wenn NICHT im Confirmation-Pending-Banner (hat eigene Buttons)
   const showToggle = withinDeadline && !locked
+    && !(isConfMode && isPending_ && !confWindowExpired)
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
 
   const card = createElement('div', 'card');
@@ -317,17 +335,10 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
             ${btnLabel}
           </button>
         ` : ''}
-        ${showConfirmBtn ? `
-          <button class="btn-primary" data-action="confirm-attendance" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
-            <span class="material-icons" style="font-size:16px;">how_to_reg</span>
-            Teilnahme bestätigen
-          </button>
-        ` : ''}
         ${showLateBtn ? `
           <button class="btn-secondary" data-action="late" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
             <span class="material-icons" style="font-size:16px;">schedule</span>
-            ${isPending_ ? '' : 'Verspätung melden'}
-            ${isPending_ ? 'Bestätigungsfenster abgelaufen' : ''}
+            Verspätung melden
           </button>
         ` : ''}
       </div>
@@ -406,10 +417,12 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     });
 
-    const toggleBtn = card.querySelector('[data-action="toggle"]');
-    if (toggleBtn) toggleBtn.onclick = () => guardedAction(async () => {
-      try { await memberToggleAttendance(event, attendance, mode, deadline); }
-      catch (e) { errorEl.textContent = 'Aktion fehlgeschlagen: ' + e.message; }
+    // Alle toggle-Buttons (Banner + normale Buttons) durchsuchen
+    card.querySelectorAll('[data-action="toggle"]').forEach(btn => {
+      btn.onclick = () => guardedAction(async () => {
+        try { await memberToggleAttendance(event, attendance, mode, deadline); }
+        catch (e) { errorEl.textContent = 'Aktion fehlgeschlagen: ' + e.message; }
+      });
     });
 
     const lateBtn = card.querySelector('[data-action="late"]');
