@@ -91,6 +91,17 @@ async function loadMemberDashboard() {
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
     const untilText = formatDate(futureEnd);
 
+    // ── Heute-Trennlinie ─────────────────────────────────────────────────
+    const todayStr = now.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    const todayDivider = `
+      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 8px;">
+        <div style="flex:1;height:2px;background:linear-gradient(to right,var(--color-primary,#01696f),transparent);border-radius:2px;"></div>
+        <span style="font-size:0.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--color-primary,#01696f);white-space:nowrap;">
+          <span class="material-icons" style="font-size:14px;vertical-align:middle;margin-right:3px;">today</span>Heute · ${todayStr}
+        </span>
+        <div style="flex:1;height:2px;background:linear-gradient(to left,var(--color-primary,#01696f),transparent);border-radius:2px;"></div>
+      </div>`;
+
     const newHtml = `
       <div id="member-list-view">
         <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
@@ -135,6 +146,16 @@ async function loadMemberDashboard() {
     if (!past.length)     paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
 
     const settings = window.appSettings || {};
+
+    // Trennlinie oben in "Kommende" (zeigt: ab jetzt)
+    if (upcoming.length) {
+      upEl.insertAdjacentHTML('beforeend', todayDivider);
+    }
+    // Trennlinie oben in "Vergangene" (zeigt: bis heute)
+    if (past.length) {
+      paEl.insertAdjacentHTML('beforeend', todayDivider);
+    }
+
     for (const ev of upcoming) upEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, false));
     for (const ev of past)     paEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, true));
 
@@ -213,12 +234,29 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
   const trainerLateHtml = trainerLate
     ? `<p class="text-muted" style="font-size:0.85rem;display:flex;align-items:center;gap:4px;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;">schedule</span> ${tLabel} meldet Verspätung.</p>`
     : '';
+
+  // ── Betreuer-Broadcast: groß & prominent ─────────────────────────────
   const broadcastHtml = event.trainerBroadcast
-    ? `<p class="text-muted" style="font-size:0.85rem;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;vertical-align:middle;">campaign</span> <strong>Nachricht:</strong> ${escapeHtml(event.trainerBroadcast)}</p>`
+    ? `<div style="background:var(--color-surface-offset,#f3f0ec);border-left:4px solid var(--color-primary,#01696f);border-radius:6px;padding:12px 16px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span class="material-icons" style="font-size:20px;color:var(--color-primary,#01696f);">campaign</span>
+          <strong style="font-size:1rem;color:var(--color-primary,#01696f);">Nachricht vom Betreuer</strong>
+        </div>
+        <p style="margin:0;font-size:1rem;line-height:1.5;">${escapeHtml(event.trainerBroadcast)}</p>
+      </div>`
     : '';
+
+  // ── Betreuer-Notiz an Mitglied: groß & prominent ─────────────────────
   const trainerNoteHtml = attendance?.trainerNoteMember
-    ? `<p class="text-muted" style="font-size:0.85rem;margin-bottom:8px;"><span class="material-icons" style="font-size:15px;vertical-align:middle;">info</span> <strong>Betreuer-Notiz:</strong> ${escapeHtml(attendance.trainerNoteMember)}</p>`
+    ? `<div style="background:var(--color-surface-offset,#f3f0ec);border-left:4px solid var(--color-blue,#006494);border-radius:6px;padding:12px 16px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span class="material-icons" style="font-size:20px;color:var(--color-blue,#006494);">info</span>
+          <strong style="font-size:1rem;color:var(--color-blue,#006494);">Notiz deines Betreuers</strong>
+        </div>
+        <p style="margin:0;font-size:1rem;line-height:1.5;">${escapeHtml(attendance.trainerNoteMember)}</p>
+      </div>`
     : '';
+
   const withdrawHtml = canWithdraw
     ? `<div style="background:rgba(245,124,0,0.07);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <span style="font-size:0.88rem;color:var(--color-text);">Anmeldung rücknahme noch möglich: <strong><span id="withdraw-countdown-${event.id}">--:--</span></strong></span>
