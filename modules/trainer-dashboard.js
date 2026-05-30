@@ -47,7 +47,6 @@ async function loadTrainerDashboard() {
       .sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
 
     const untilText = formatDate(futureEnd);
-    const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
     const newHtml = `
       <div id="trainer-list-view">
@@ -57,19 +56,29 @@ async function loadTrainerDashboard() {
         </div>
 
         <div class="tabs" style="margin-bottom:16px;">
-          <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
+          <button class="tab-btn active" data-tab="upcoming">
             <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">event</span>
             Kommende Termine
             <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
           </button>
-          <button class="tab-btn${activeTab === 'past' ? ' active' : ''}" data-tab="past">
+          <button class="tab-btn" data-tab="past">
             <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">history</span>
             Vergangene Termine
           </button>
         </div>
 
-        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
-        <div id="trainer-overview-past"     style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'past'     ? ' hidden' : ''}></div>
+        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"></div>
+
+        <div id="trainer-section-divider" style="display:flex;align-items:center;gap:12px;margin:28px 0 16px;">
+          <div style="flex:1;height:1px;background:var(--color-border);"></div>
+          <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-muted);white-space:nowrap;">
+            <span class="material-icons" style="font-size:15px;">history</span>
+            Vergangene Termine
+          </span>
+          <div style="flex:1;height:1px;background:var(--color-border);"></div>
+        </div>
+
+        <div id="trainer-overview-past" style="display:flex;flex-direction:column;gap:12px;"></div>
       </div>
     `;
 
@@ -81,8 +90,9 @@ async function loadTrainerDashboard() {
       btn.onclick = () => {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById('trainer-overview-upcoming').hidden = btn.dataset.tab !== 'upcoming';
-        document.getElementById('trainer-overview-past').hidden     = btn.dataset.tab !== 'past';
+        const targetId = btn.dataset.tab === 'past' ? 'trainer-section-divider' : 'trainer-overview-upcoming';
+        const targetEl = document.getElementById(targetId);
+        if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       };
     });
 
@@ -380,7 +390,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     `;
 
     document.getElementById('trainer-back-btn').onclick = () => {
-      // Tooltip aufräumen bevor wir zurücknavigieren
       const tip = container.querySelector('.member-note-tooltip-popup');
       if (tip) tip.remove();
       if (options.backFn) options.backFn();
