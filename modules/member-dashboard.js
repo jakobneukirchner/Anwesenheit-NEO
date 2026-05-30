@@ -23,6 +23,11 @@ async function loadMemberDashboard() {
     const futureEnd = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
     const pastStart = new Date(now.getTime() - 120   * 24 * 60 * 60 * 1000);
 
+    // Auto-Cancel-Check: offene Anfragen prüfen bevor wir rendern
+    if (typeof _checkAutoCancelRequests === 'function') {
+      await _checkAutoCancelRequests();
+    }
+
     const [allEventsSnap, myAttSnap] = await Promise.all([
       firestore.collection('events')
         .where('startTime', '>=', firebase.firestore.Timestamp.fromDate(pastStart))
@@ -52,7 +57,8 @@ async function loadMemberDashboard() {
     const trainerUids = new Set();
     allEventsSnap.forEach(doc => {
       const ev = { id: doc.id, ...doc.data() };
-      if (!skipEvent(ev)) eventsRaw.push(ev);
+      // Auch auto-cancelled Events einschließen (damit Mitglieder das Banner sehen)
+      if (!skipEvent(ev) || ev.substitutionStatus === 'cancelled') eventsRaw.push(ev);
       (ev.trainers || []).forEach(t => trainerUids.add(t));
       (ev.trainerCancellations || []).forEach(t => trainerUids.add(t));
     });
@@ -80,6 +86,7 @@ async function loadMemberDashboard() {
 
     upcoming.forEach(ev => {
       if (ev.status === 'cancelled' || ev.status === 'skipped') return;
+      if (ev.substitutionStatus === 'cancelled') return;
       const att  = attMap[ev.id];
       const mode = getMode(ev);
       const defaultStatus = mode === 'opt_out' ? 'registered' : mode === 'confirmation' ? 'confirmation_pending' : 'none';
@@ -185,9 +192,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     : null;
   const now               = new Date();
 
-  // Anmeldefenster offen?
-  // Im Bestätigungsmodus: offen solange deadline nicht überschritten UND confWindowEnd nicht überschritten
-  // Im opt_in / opt_out: nur deadline relevant
   const deadlineOpen   = !deadline || now <= deadline;
   const confWindowOpen = !confWindowEnd || now <= confWindowEnd;
   const windowOpen     = isConfMode ? (deadlineOpen && confWindowOpen) : deadlineOpen;
@@ -197,13 +201,12 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
 
   const isCancelled  = event.status === 'cancelled';
   const isSkipped    = event.status === 'skipped';
-  const locked       = isPast || isCancelled || isSkipped;
+  const isAutoCancelled = event.substitutionStatus === 'cancelled';
+  const locked       = isPast || isCancelled || isSkipped || isAutoCancelled;
 
-  // Aktueller Status des Mitglieds
   const memberStatus = attendance?.status
     ?? (isConfMode ? 'confirmation_pending' : mode === 'opt_out' ? 'registered' : 'none');
 
-  // 5-Min-Rücknahme
   const firstRegTime = attendance?.firstRegisteredAt?.toDate?.();
   const canWithdraw  = !!(
     firstRegTime &&
@@ -214,10 +217,37 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
 
   const isRegisteredFamily = ['registered','present','late_excused','late_unexcused','confirmation_pending'].includes(memberStatus);
 
-  // ── Abgesagt / Ausgefallen ────────────────────────────────
   const card = createElement('div', 'card');
   card.style.marginBottom = '0';
 
+  // ── Auto-abgesagt (keine Vertretung) ──────────────────────
+  if (isAutoCancelled && !isCancelled && !isSkipped) {
+    card.style.borderLeft = '4px solid var(--color-error)';
+    card.style.background = 'color-mix(in oklch, var(--color-error) 5%, var(--color-surface))';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:1.1rem;font-weight:700;margin-bottom:4px;">${event.title || 'Termin'}</div>
+          <div class="text-muted" style="font-size:0.9rem;margin-bottom:4px;">${start ? formatDate(start) : ''}, ${start ? formatTime(start) : ''}${end ? ' – ' + formatTime(end) : ''}</div>
+        </div>
+        <span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+          <span class="material-icons" style="font-size:14px;">cancel</span>
+          Termin fällt aus
+        </span>
+      </div>
+      <div style="margin-top:10px;background:color-mix(in oklch,var(--color-error) 8%,var(--color-surface-2));border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:8px;">
+        <span class="material-icons" style="font-size:18px;color:var(--color-error);flex-shrink:0;margin-top:1px;">group_off</span>
+        <div>
+          <strong style="font-size:0.92rem;color:var(--color-error);">Keine Vertretung gefunden</strong>
+          <p class="text-muted" style="margin:3px 0 0;font-size:0.85rem;">Für diesen Termin konnte keine Vertretung organisiert werden. Der Termin fällt leider aus.</p>
+        </div>
+      </div>
+      ${renderTrainerPillRow(event)}
+    `;
+    return card;
+  }
+
+  // ── Abgesagt ──────────────────────────────────────────────
   if (isCancelled) {
     card.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
@@ -315,8 +345,7 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       </div>`
     : '';
 
-  // ── Verspätungs-Banner (eigene Verspätung widerrufen) ─────
-  // Verspätungsgrund steht in attendance.memberLateReason (eigenes Feld)
+  // ── Verspätungs-Banner ────────────────────────────────────
   const isLate = ['late_excused','late_unexcused'].includes(memberStatus);
   const lateReason = attendance?.memberLateReason || '';
   const lateBannerHtml = isLate && !locked
@@ -346,9 +375,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     : '';
 
   // ── Bestätigungsmodus-Banner ──────────────────────────────
-  // Zeigt Bestätigung-ausstehend nur wenn:
-  //   status=confirmation_pending UND windowOpen
-  // Zeigt "Fenster abgelaufen" wenn windowOpen=false (unabhängig von Status)
   let confirmBannerHtml = '';
   if (isConfMode && !isPast && !locked) {
     if (!windowOpen) {
@@ -375,21 +401,11 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
           </div>
         </div>`;
     }
-    // status=registered im confMode → kein Banner nötig, Toggle-Button genügt
-    // status=cancelled im confMode → cancelledBannerHtml + Toggle-Button "Wieder anmelden"
   }
 
   // ── Haupt-Toggle-Button ───────────────────────────────────
-  // Sichtbar wenn:
-  //   - nicht locked
-  //   - windowOpen
-  //   - NICHT (isConfMode && memberStatus === 'confirmation_pending') ← wird durch Banner-Buttons abgedeckt
-  //   - NICHT (isConfMode && memberStatus === 'registered') ← zeigen wir separaten Abmelden-Button
   const showToggle = !locked && windowOpen && !(isConfMode && memberStatus === 'confirmation_pending');
 
-  // Im confMode und registered: Button = "Abmelden"
-  // Im confMode und cancelled:  Button = "Wieder anmelden"
-  // Sonst: standard opt_in / opt_out Logik
   let toggleLabel, toggleIcon, toggleClass;
   if (isConfMode) {
     if (memberStatus === 'cancelled') {
@@ -397,7 +413,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       toggleIcon  = 'check_circle';
       toggleClass = 'btn-primary';
     } else {
-      // registered (bereits bestätigt)
       toggleLabel = 'Abmelden';
       toggleIcon  = 'cancel';
       toggleClass = 'btn-danger';
@@ -408,7 +423,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     toggleIcon  = isReg ? 'cancel'   : 'check_circle';
     toggleClass = isReg ? 'btn-danger' : 'btn-primary';
   } else {
-    // opt_out
     const isCancM = memberStatus === 'cancelled';
     toggleLabel = isCancM ? 'Wieder anmelden' : 'Abmelden';
     toggleIcon  = isCancM ? 'check_circle'    : 'cancel';
@@ -466,7 +480,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
     const errorEl = card.querySelector('[data-role="error"]');
     const uid = window.currentUser.firebaseUser.uid;
 
-    // Anmeldung rückziehen (5-Min)
     const withdrawBtn = card.querySelector('[data-action="withdraw"]');
     if (withdrawBtn) withdrawBtn.onclick = () => guardedAction(async () => {
       try {
@@ -480,7 +493,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     });
 
-    // Countdown
     if (canWithdraw) {
       const countdownEl = card.querySelector(`#withdraw-countdown-${event.id}`);
       if (countdownEl) {
@@ -494,7 +506,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       }
     }
 
-    // Verspätung widerrufen → zurück zu registered (oder confirmation_pending)
     const revokeLateBtn = card.querySelector('[data-action="revoke-late"]');
     if (revokeLateBtn) revokeLateBtn.onclick = () => guardedAction(async () => {
       showModal({
@@ -518,7 +529,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       });
     });
 
-    // Teilnahme bestätigen (confMode, pending → registered)
     const confirmBtn = card.querySelector('[data-action="confirm-attendance"]');
     if (confirmBtn) confirmBtn.onclick = () => guardedAction(async () => {
       try {
@@ -533,7 +543,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       } catch (e) { errorEl.textContent = 'Fehler: ' + e.message; }
     });
 
-    // Abmelden aus Bestätigungs-Banner (confMode, pending → cancelled)
     const cancelConfBtn = card.querySelector('[data-action="cancel-conf"]');
     if (cancelConfBtn) cancelConfBtn.onclick = () => guardedAction(async () => {
       showModal({
@@ -554,14 +563,12 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       });
     });
 
-    // Haupt-Toggle (An/Abmelden)
     const toggleBtn = card.querySelector('[data-action="toggle"]');
     if (toggleBtn) toggleBtn.onclick = () => guardedAction(async () => {
       try { await memberToggleAttendance(event, attendance, mode, deadline, confWindowEnd, isConfMode); }
       catch (e) { errorEl.textContent = 'Aktion fehlgeschlagen: ' + e.message; }
     });
 
-    // Verspätung melden → speichert in memberLateReason (eigenes Feld)
     const lateBtn = card.querySelector('[data-action="late"]');
     if (lateBtn) lateBtn.onclick = () => guardedAction(async () => {
       showModal({
@@ -579,7 +586,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
             status: 'late_excused', trainerSet: false,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           };
-          // Grund in eigenem Feld speichern, NICHT in memberNote überschreiben
           if (reason) updateData.memberLateReason = reason;
           await firestore.collection('eventAttendance').doc(`${event.id}_${uid}`).set(updateData, { merge: true });
           showToast('Verspätung gemeldet (entschuldigt).', 'success');
@@ -588,7 +594,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
       });
     });
 
-    // Hinweis an Betreuer speichern
     const noteTextarea = card.querySelector('textarea[data-role="note"]');
     const noteBtn      = card.querySelector('[data-action="save-note"]');
     if (noteBtn) noteBtn.onclick = () => guardedAction(async () => {
@@ -607,7 +612,6 @@ async function renderMemberEventCard(event, attendance, settings, isPast) {
 async function memberToggleAttendance(event, attendance, mode, deadline, confWindowEnd, isConfMode) {
   const user = window.currentUser.firebaseUser;
 
-  // Frist-Check
   const now = new Date();
   const deadlineOpen   = !deadline || now <= deadline;
   const confWindowOpen = !confWindowEnd || now <= confWindowEnd;
@@ -620,9 +624,6 @@ async function memberToggleAttendance(event, attendance, mode, deadline, confWin
   const currentStatus = attendance?.status
     ?? (isConfMode ? 'confirmation_pending' : mode === 'opt_out' ? 'registered' : 'none');
 
-  // Im confMode: registered → cancelled (Abmelden), cancelled → confirmation_pending (Wieder anmelden)
-  // opt_in:      registriert → cancelled, sonst → registered
-  // opt_out:     cancelled → registered, sonst → cancelled
   let newStatus;
   if (isConfMode) {
     newStatus = currentStatus === 'cancelled' ? 'confirmation_pending' : 'cancelled';
@@ -633,7 +634,6 @@ async function memberToggleAttendance(event, attendance, mode, deadline, confWin
     newStatus = currentStatus === 'cancelled' ? 'registered' : 'cancelled';
   }
 
-  // Abmeldung → Modal mit optionalem Grund
   if (newStatus === 'cancelled') {
     showModal({
       title: 'Abmelden',
@@ -659,7 +659,6 @@ async function memberToggleAttendance(event, attendance, mode, deadline, confWin
     return;
   }
 
-  // Anmeldung / Wieder-Anmeldung
   const isFirstReg = !attendance?.firstRegisteredAt;
   const updateData = {
     eventId: event.id, userId: user.uid,
