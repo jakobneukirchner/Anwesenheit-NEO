@@ -83,24 +83,10 @@ async function loadMemberDashboard() {
       const att  = attMap[ev.id];
       const mode = getMode(ev);
       const defaultStatus = mode === 'opt_out' ? 'registered' : mode === 'confirmation' ? 'confirmation_pending' : 'none';
-      if (!att) {
-        attMap[ev.id] = { status: defaultStatus, _virtual: true };
-      }
+      if (!att) attMap[ev.id] = { status: defaultStatus, _virtual: true };
     });
 
-    const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
     const untilText = formatDate(futureEnd);
-
-    // ── Heute-Trennlinie ─────────────────────────────────────────────────
-    const todayStr = now.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    const todayDivider = `
-      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 8px;">
-        <div style="flex:1;height:2px;background:linear-gradient(to right,var(--color-primary,#01696f),transparent);border-radius:2px;"></div>
-        <span style="font-size:0.8rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--color-primary,#01696f);white-space:nowrap;">
-          <span class="material-icons" style="font-size:14px;vertical-align:middle;margin-right:3px;">today</span>Heute · ${todayStr}
-        </span>
-        <div style="flex:1;height:2px;background:linear-gradient(to left,var(--color-primary,#01696f),transparent);border-radius:2px;"></div>
-      </div>`;
 
     const newHtml = `
       <div id="member-list-view">
@@ -108,21 +94,7 @@ async function loadMemberDashboard() {
           <h2 style="margin:0;">Meine Termine</h2>
           <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
         </div>
-
-        <div class="tabs" style="margin-bottom:16px;">
-          <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
-            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">event</span>
-            Kommende Termine
-            <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
-          </button>
-          <button class="tab-btn${activeTab === 'past' ? ' active' : ''}" data-tab="past">
-            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">history</span>
-            Vergangene Termine
-          </button>
-        </div>
-
-        <div id="member-upcoming" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
-        <div id="member-past"     style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'past'     ? ' hidden' : ''}></div>
+        <div id="member-event-list" style="display:flex;flex-direction:column;gap:12px;"></div>
       </div>
     `;
 
@@ -130,34 +102,30 @@ async function loadMemberDashboard() {
     container.innerHTML = newHtml;
     container.scrollTop = scrollY;
 
-    container.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.onclick = () => {
-        container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        document.getElementById('member-upcoming').hidden = btn.dataset.tab !== 'upcoming';
-        document.getElementById('member-past').hidden     = btn.dataset.tab !== 'past';
-      };
-    });
-
-    const upEl = document.getElementById('member-upcoming');
-    const paEl = document.getElementById('member-past');
-
-    if (!upcoming.length) upEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine kommenden Termine.</p></div>`;
-    if (!past.length)     paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
-
+    const listEl = document.getElementById('member-event-list');
     const settings = window.appSettings || {};
 
-    // Trennlinie oben in "Kommende" (zeigt: ab jetzt)
+    // ── Kommende Termine ───────────────────────────────────────
     if (upcoming.length) {
-      upEl.insertAdjacentHTML('beforeend', todayDivider);
-    }
-    // Trennlinie oben in "Vergangene" (zeigt: bis heute)
-    if (past.length) {
-      paEl.insertAdjacentHTML('beforeend', todayDivider);
+      for (const ev of upcoming) listEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, false));
+    } else {
+      listEl.insertAdjacentHTML('beforeend', `<div class="card"><p class="text-muted" style="margin:0;">Keine kommenden Termine.</p></div>`);
     }
 
-    for (const ev of upcoming) upEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, false));
-    for (const ev of past)     paEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, true));
+    // ── Trenner ────────────────────────────────────────────────
+    listEl.insertAdjacentHTML('beforeend', `
+      <div style="display:flex;align-items:center;gap:10px;margin:8px 0 4px;">
+        <div style="flex:1;height:1px;background:var(--color-border,#d4d1ca);"></div>
+        <span style="font-size:0.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-muted,#7a7974);white-space:nowrap;">Vergangene Termine</span>
+        <div style="flex:1;height:1px;background:var(--color-border,#d4d1ca);"></div>
+      </div>`);
+
+    // ── Vergangene Termine ─────────────────────────────────────
+    if (past.length) {
+      for (const ev of past) listEl.appendChild(await renderMemberEventCard(ev, attMap[ev.id], settings, true));
+    } else {
+      listEl.insertAdjacentHTML('beforeend', `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`);
+    }
 
   } catch (e) {
     console.error(e);
