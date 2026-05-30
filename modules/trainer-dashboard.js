@@ -153,6 +153,25 @@ function openTrainerDetailPage(eventId) {
   });
 }
 
+/**
+ * Gibt einen lesbaren Label + CSS-Klasse für einen Anwesenheitsstatus zurück.
+ */
+function getAttendanceStatusChip(status) {
+  const map = {
+    registered:            { label: 'Angemeldet',             cls: 'chip-primary'  },
+    present:               { label: 'Anwesend',               cls: 'chip-success'  },
+    absent_excused:        { label: 'Entsch. gefehlt',        cls: 'chip-warning'  },
+    absent_unexcused:      { label: 'Unentsch. gefehlt',      cls: 'chip-error'    },
+    late_excused:          { label: 'Verspätet (entsch.)',    cls: 'chip-warning'  },
+    late_unexcused:        { label: 'Verspätet (unentsch.)', cls: 'chip-error'    },
+    cancelled:             { label: 'Abgemeldet',             cls: 'chip-warning'  },
+    confirmation_pending:  { label: 'Ausst. Bestätigung',    cls: 'chip-primary'  },
+  };
+  const entry = map[status];
+  if (!entry) return `<span class="chip" style="font-size:0.78rem;">${status}</span>`;
+  return `<span class="chip ${entry.cls}" style="font-size:0.78rem;">${entry.label}</span>`;
+}
+
 async function renderTrainerDetailView(eventId, container, options = {}) {
   container.innerHTML = `<div class="loading-center">Lade Termin…</div>`;
 
@@ -307,8 +326,14 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <table style="width:100%;min-width:1050px;">
           <thead>
             <tr>
-              <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th>
-              <th>Interne Notiz</th><th>Notiz an Mitglied</th><th>Hinweis v. Mitglied</th><th></th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Schnell-Check</th>
+              <th>Detailstatus</th>
+              <th>Interne Notiz</th>
+              <th>Notiz an Mitglied</th>
+              <th>Hinweis v. Mitglied</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="trainer-attendance-body"></tbody>
@@ -455,27 +480,38 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const attBody = document.getElementById('trainer-attendance-body');
     const memberAttendances = attendances.filter(a => !trainerUids.has(a.userId));
 
+    const statusOptions = [
+      ['registered','Angemeldet'],
+      ['present','Anwesend'],
+      ['absent_excused','Entsch. gefehlt'],
+      ['absent_unexcused','Unentsch. gefehlt'],
+      ['late_excused','Verspätet (entsch.)'],
+      ['late_unexcused','Verspätet (unentsch.)'],
+      ['cancelled','Abgemeldet'],
+      ['confirmation_pending','Ausst. Bestätigung']
+    ];
+
     for (const att of memberAttendances) {
       const u = userMap[att.userId] || { displayName: att.userId };
       const tr = document.createElement('tr');
       tr.dataset.attId = att.id;
 
-      const statusOptions = [
-        ['registered','Angemeldet'],['present','Anwesend'],['absent_excused','Entsch. gefehlt'],
-        ['absent_unexcused','Unentsch. gefehlt'],['late_excused','Verspätet (entsch.)'],
-        ['late_unexcused','Verspätet (unentsch.)'],['cancelled','Abgemeldet'],['confirmation_pending','Ausst. Bestätigung']
-      ];
-
       const noteIconHtml = att.memberNote
         ? `<span class="member-note-icon" tabindex="0" data-note="${escapeHtml(att.memberNote)}" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
         : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>';
 
+      // Status-Spalte: echter Anwesenheitsstatus als Chip
+      // + kleiner Hinweis ob vom Betreuer oder selbst gesetzt
+      const statusChip = getAttendanceStatusChip(att.status);
+      const setterHint = att.trainerSet
+        ? `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">vom Betreuer</div>`
+        : `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">selbst</div>`;
+
       tr.innerHTML = `
         <td style="font-weight:500;">${u.displayName || u.email || att.userId}</td>
         <td>
-          <span class="chip ${att.trainerSet ? 'chip-primary' : 'chip-warning'}" style="font-size:0.78rem;">
-            ${att.trainerSet ? 'Vom Betreuer' : 'Selbst'}
-          </span>
+          ${statusChip}
+          ${setterHint}
         </td>
         <td>
           <input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}
