@@ -167,7 +167,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const attendances = [];
     attSnap.forEach(doc => attendances.push({ id: doc.id, ...doc.data() }));
 
-    // FIX: Trainer-IDs aus userIds entfernen, damit Trainer nicht in der Anwesenheitsliste erscheinen
     const trainerUids = new Set(event.trainers || []);
     const userIds = new Set([...trainerUids, ...attendances.map(a => a.userId)]);
     const userMap = {};
@@ -203,11 +202,16 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <div style="color:var(--color-text);">${escapeHtml(location)}</div>
       </div>` : '';
 
-    // FIX: Aktions-Buttons je nach Status anpassen
     const myUid = window.currentUser?.firebaseUser?.uid;
     const iAmCancelled = (event.trainerCancellations || []).includes(myUid);
     const iAmTrainer   = trainerUids.has(myUid);
-    const myLateStatus = event.trainerLateMinutes?.[myUid];
+    const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
+    const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
+
+    // Label für Verspätungs-Button
+    const lateButtonLabel = myLateMinutes
+      ? `Verspätung: ~${myLateMinutes} Min. <span class="material-icons" style="font-size:14px;vertical-align:middle;">edit</span>`
+      : 'Verspätung melden';
 
     container.innerHTML = `
       <style>
@@ -261,11 +265,12 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             const u = userMap[uid] || { displayName: uid };
             const cancelled = (event.trainerCancellations || []).includes(uid);
             const lateMin   = event.trainerLateMinutes?.[uid];
+            const lateNote  = event.trainerLateNotes?.[uid];
             return `
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--color-border);">
                 <span>${u.displayName || u.email || uid}</span>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                  ${lateMin ? `<span class="chip chip-warning">~${lateMin} Min. verspätet</span>` : ''}
+                  ${lateMin ? `<span class="chip chip-warning" title="${lateNote ? escapeHtml(lateNote) : ''}">~${lateMin} Min. verspätet</span>` : ''}
                   <span class="chip ${cancelled ? 'chip-error' : 'chip-success'}">${cancelled ? 'Abgemeldet' : 'Eingeplant'}</span>
                 </div>
               </div>`;
@@ -319,6 +324,17 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <div style="font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">settings</span>Aktionen
         </div>
+        ${myLateMinutes ? `
+          <div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span style="font-size:0.9rem;color:var(--color-warning,#f57c00);display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">schedule</span>
+              Deine Verspätung: <strong>~${myLateMinutes} Min.</strong>${myLateNote ? ' – ' + escapeHtml(myLateNote) : ''}
+            </span>
+            <button class="btn-secondary" id="trainer-revoke-late-btn" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
+              <span class="material-icons" style="font-size:15px;">undo</span> Widerrufen
+            </button>
+          </div>
+        ` : ''}
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           ${iAmTrainer ? `
             <button class="btn-danger" id="trainer-cancel-self-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
@@ -330,7 +346,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             </button>
             <button class="btn-secondary" id="trainer-late-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">schedule</span>
-              ${myLateStatus ? `Verspätung: ~${myLateStatus} Min.` : 'Verspätung melden'}
+              ${myLateMinutes ? `Verspätung ändern` : 'Verspätung melden'}
             </button>
           ` : ''}
         </div>
@@ -342,7 +358,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       else loadTrainerDashboard();
     };
 
-    // FIX: Broadcast-Speichern – liest jetzt korrekt aus dem textarea
     document.getElementById('trainer-save-broadcast').onclick = async () => {
       const btn = document.getElementById('trainer-save-broadcast');
       const msg = document.getElementById('trainer-broadcast-input').value.trim();
@@ -367,7 +382,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       container.querySelectorAll('.trainer-present-check').forEach(cb => { if (!cb.disabled) cb.checked = true; });
     };
 
-    // FIX: Speichern-Button – korrekte Selektor-Logik
     document.getElementById('trainer-save-attendance').onclick = async () => {
       const btn = document.getElementById('trainer-save-attendance');
       btn.disabled = true;
@@ -391,14 +405,31 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     };
 
     if (iAmTrainer) {
-      // FIX: Abmelden / Wieder einplanen
       document.getElementById('trainer-cancel-self-btn').onclick = () => _toggleTrainerSelf(event, myUid, iAmCancelled, container, options);
-
-      // FIX: Termin absagen (event.status = cancelled)
       document.getElementById('trainer-cancel-event-btn').onclick = () => _cancelEvent(event, container, options);
+      document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateMinutes, myLateNote, container, options);
 
-      // FIX: Verspätung melden – echtes Modal
-      document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateStatus, container, options);
+      // FIX: Verspätung widerrufen
+      const revokeBtn = document.getElementById('trainer-revoke-late-btn');
+      if (revokeBtn) revokeBtn.onclick = () => {
+        showModal({
+          title: 'Verspätung widerrufen',
+          body: `<p>Möchtest du deine gemeldete Verspätung wirklich widerrufen? Die Mitglieder sehen dann keine Verspätungsmeldung mehr von dir.</p>`,
+          confirmLabel: 'Ja, widerrufen',
+          onConfirm: async () => {
+            try {
+              await firestore.collection('events').doc(event.id).update({
+                [`trainerLateMinutes.${myUid}`]: firebase.firestore.FieldValue.delete(),
+                [`trainerLateNotes.${myUid}`]:   firebase.firestore.FieldValue.delete()
+              });
+              showToast('Verspätung widerrufen.', 'success');
+              await renderTrainerDetailView(event.id, container, options);
+            } catch (err) {
+              showToast('Fehler: ' + err.message, 'error');
+            }
+          }
+        });
+      };
     }
 
     // Tooltip
@@ -417,291 +448,186 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       tooltipEl.classList.add('visible');
       const rect = anchorEl.getBoundingClientRect();
       const tooltipW = 280;
-      let left = rect.left;
-      let top  = rect.bottom + 6;
-      if (left + tooltipW > window.innerWidth - 8) left = window.innerWidth - tooltipW - 8;
-      if (left < 8) left = 8;
-      if (top + 80 > window.innerHeight) top = rect.top - 80;
+      let left = rect.left + rect.width / 2 - tooltipW / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tooltipW - 8));
       tooltipEl.style.left = left + 'px';
-      tooltipEl.style.top  = top  + 'px';
-      tooltipEl.style.maxWidth = tooltipW + 'px';
-    }
-    function hideMemberNoteTooltip() {
-      tooltipHideTimer = setTimeout(() => tooltipEl.classList.remove('visible'), 100);
+      tooltipEl.style.top  = (rect.bottom + 8) + 'px';
     }
 
-    // FIX: Anwesenheitsliste filtert Trainer-UIDs heraus
-    const tbody = document.getElementById('trainer-attendance-body');
+    function hideMemberNoteTooltip(delay = 200) {
+      tooltipHideTimer = setTimeout(() => tooltipEl.classList.remove('visible'), delay);
+    }
+
+    const attBody = document.getElementById('trainer-attendance-body');
     const memberAttendances = attendances.filter(a => !trainerUids.has(a.userId));
 
     for (const att of memberAttendances) {
-      const user = userMap[att.userId] || { displayName: att.userId };
-      const tr   = document.createElement('tr');
+      const u = userMap[att.userId] || { displayName: att.userId };
+      const tr = document.createElement('tr');
       tr.dataset.attId = att.id;
 
-      const selectOptions = [
-        ['registered','Angemeldet (offen)'],['confirmation_pending','Ausst. (Bestätigung)'],
-        ['present','Anwesend'],['absent_excused','Abgemeldet'],['absent_unexcused','Unentschuldigt gefehlt'],
-        ['late_excused','Verspätet (entsch.)'],['late_unexcused','Verspätet (unentsch.)'],['cancelled','Termin abgesagt']
+      const statusOptions = [
+        ['registered','Angemeldet'],['present','Anwesend'],['absent_excused','Entsch. gefehlt'],
+        ['absent_unexcused','Unentsch. gefehlt'],['late_excused','Verspätet (entsch.)'],
+        ['late_unexcused','Verspätet (unentsch.)'],['cancelled','Abgemeldet'],['confirmation_pending','Ausst. Bestätigung']
       ];
 
-      const generalNote  = (user.generalNote || '').trim();
-      const noteIconHtml = generalNote
-        ? `<button class="member-note-icon" aria-label="Notiz anzeigen" tabindex="0" style="background:none;border:none;cursor:pointer;"><span class="material-icons" style="font-size:18px;">info</span></button>`
-        : '';
+      const noteIconHtml = att.memberNote
+        ? `<span class="member-note-icon" tabindex="0" data-note="${escapeHtml(att.memberNote)}" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
+        : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>';
 
       tr.innerHTML = `
+        <td style="font-weight:500;">${u.displayName || u.email || att.userId}</td>
         <td>
-          <div style="font-weight:600;display:flex;align-items:center;gap:0;flex-wrap:nowrap;">
-            <span>${escapeHtml(user.displayName || user.email || att.userId)}</span>
-            ${noteIconHtml}
-          </div>
-          ${att.addedByTrainer ? `<div><span class="chip" style="font-size:0.72rem;">Manuell</span></div>` : ''}
+          <span class="chip ${att.trainerSet ? 'chip-primary' : 'chip-warning'}" style="font-size:0.78rem;">
+            ${att.trainerSet ? 'Vom Betreuer' : 'Selbst'}
+          </span>
         </td>
-        <td>${renderTrainerStatusChip(att.status)}</td>
-        <td><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}/> Anwesend</label></td>
-        <td><select class="trainer-status-select" style="min-width:180px;">${selectOptions.map(([v,l]) => `<option value="${v}" ${att.status===v?'selected':''}>${l}</option>`).join('')}</select></td>
-        <td><input class="trainer-internal-note" type="text" value="${escapeHtml(att.trainerNoteInternal||'')}" placeholder="Interne Notiz" style="width:100%;min-width:180px;"/></td>
-        <td><input class="trainer-member-note" type="text" value="${escapeHtml(att.trainerNoteMember||'')}" placeholder="Notiz an Mitglied" style="width:100%;min-width:160px;"/></td>
-        <td><input type="text" value="${escapeHtml(att.memberNote||'')}" disabled style="width:100%;min-width:150px;background:var(--color-surface-offset);"/></td>
-        <td><button class="btn-danger trainer-remove-person" style="padding:6px 8px;display:inline-flex;align-items:center;gap:4px;" title="Entfernen"><span class="material-icons" style="font-size:16px;">person_remove</span></button></td>
+        <td>
+          <input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}
+            ${att.trainerSet ? '' : ''} style="width:18px;height:18px;cursor:pointer;" />
+        </td>
+        <td>
+          <select class="trainer-status-select" style="padding:4px 6px;font-size:0.85rem;">
+            ${statusOptions.map(([v,l]) => `<option value="${v}"${att.status === v ? ' selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </td>
+        <td><input type="text" class="trainer-internal-note" value="${escapeHtml(att.trainerNoteInternal || '')}" placeholder="Interne Notiz…" style="width:120px;" /></td>
+        <td><input type="text" class="trainer-member-note" value="${escapeHtml(att.trainerNoteMember || '')}" placeholder="Notiz an Mitglied…" style="width:130px;" /></td>
+        <td>${noteIconHtml}</td>
+        <td></td>
       `;
 
-      if (generalNote) {
-        const noteBtn = tr.querySelector('.member-note-icon');
-        noteBtn.addEventListener('mouseenter', () => showMemberNoteTooltip(noteBtn, generalNote));
-        noteBtn.addEventListener('mouseleave', hideMemberNoteTooltip);
-        noteBtn.addEventListener('focus',      () => showMemberNoteTooltip(noteBtn, generalNote));
-        noteBtn.addEventListener('blur',       hideMemberNoteTooltip);
-        noteBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (tooltipEl.classList.contains('visible')) tooltipEl.classList.remove('visible');
-          else showMemberNoteTooltip(noteBtn, generalNote);
-        });
+      const presentCheck  = tr.querySelector('.trainer-present-check');
+      const statusSelect  = tr.querySelector('.trainer-status-select');
+      presentCheck.onchange = () => {
+        statusSelect.value = presentCheck.checked ? 'present' : 'registered';
+      };
+      statusSelect.onchange = () => {
+        presentCheck.checked = ['present','late_excused','late_unexcused'].includes(statusSelect.value);
+      };
+
+      if (att.memberNote) {
+        const noteIcon = tr.querySelector('.member-note-icon');
+        if (noteIcon) {
+          noteIcon.addEventListener('mouseenter', () => showMemberNoteTooltip(noteIcon, att.memberNote));
+          noteIcon.addEventListener('mouseleave', () => hideMemberNoteTooltip());
+          noteIcon.addEventListener('focus',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
+          noteIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
+          noteIcon.addEventListener('click',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
+        }
       }
 
-      const selectEl     = tr.querySelector('.trainer-status-select');
-      const presentCheck = tr.querySelector('.trainer-present-check');
-      presentCheck.onchange = () => { if (presentCheck.checked) selectEl.value = 'present'; };
-      selectEl.onchange     = () => {
-        presentCheck.checked = ['present','late_excused','late_unexcused'].includes(selectEl.value);
-        tr.children[1].innerHTML = renderTrainerStatusChip(selectEl.value);
-      };
-      tr.querySelector('.trainer-remove-person').onclick = () => {
-        showModal({
-          title: 'Person entfernen',
-          body: `<p>Soll <strong>${escapeHtml(user.displayName || user.email || att.userId)}</strong> entfernt werden?</p>`,
-          confirmLabel: 'Entfernen',
-          onConfirm: async () => {
-            try {
-              await firestore.collection('eventAttendance').doc(att.id).delete();
-              showToast('Person entfernt.', 'success');
-              await renderTrainerDetailView(event.id, container, options);
-            } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
-          }
-        });
-      };
-      tbody.appendChild(tr);
+      attBody.appendChild(tr);
     }
-
-    document.addEventListener('click', () => tooltipEl.classList.remove('visible'), { once: false });
 
   } catch (e) {
     console.error(e);
-    container.innerHTML = `<p class="text-error">Fehler beim Laden der Detailansicht: ${e.message}</p>`;
+    container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
   }
 }
 
-// FIX: Abmelden / Wieder einplanen als Trainer
-async function _toggleTrainerSelf(event, trainerUid, isCancelled, container, options) {
-  const action = isCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden';
-  const body   = isCancelled
-    ? `<p>Möchtest du dich wieder für <strong>${escapeHtml(event.title || 'Termin')}</strong> einplanen?</p>`
-    : `<p>Möchtest du dich als ${getRoleLabel('teacher')} für <strong>${escapeHtml(event.title || 'Termin')}</strong> abmelden?</p>`;
-  showModal({
-    title: action,
-    body,
-    confirmLabel: action,
-    onConfirm: async () => {
-      try {
-        if (isCancelled) {
-          await firestore.collection('events').doc(event.id).update({
-            trainerCancellations: firebase.firestore.FieldValue.arrayRemove(trainerUid)
-          });
-          showToast('Du bist wieder eingeplant.', 'success');
-        } else {
-          await firestore.collection('events').doc(event.id).update({
-            trainerCancellations: firebase.firestore.FieldValue.arrayUnion(trainerUid)
-          });
-          showToast('Du wurdest abgemeldet.', 'success');
-        }
-        await renderTrainerDetailView(event.id, container, options);
-      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
-    }
-  });
-}
-
-// FIX: Termin absagen (setzt event.status = 'cancelled')
-async function _cancelEvent(event, container, options) {
-  if (event.status === 'cancelled') {
-    showModal({
-      title: 'Absage rückgängig machen',
-      body: `<p>Soll <strong>${escapeHtml(event.title || 'Termin')}</strong> wieder aktiviert werden?</p>`,
-      confirmLabel: 'Reaktivieren',
-      onConfirm: async () => {
-        try {
-          await firestore.collection('events').doc(event.id).update({ status: 'active' });
-          showToast('Termin reaktiviert.', 'success');
-          await renderTrainerDetailView(event.id, container, options);
-        } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
-      }
-    });
-    return;
-  }
-  showModal({
-    title: 'Termin absagen',
-    body: `
-      <p>Soll <strong>${escapeHtml(event.title || 'Termin')}</strong> abgesagt werden?</p>
-      <p class="text-muted" style="font-size:0.88rem;">Alle angemeldeten Mitglieder werden benachrichtigt.</p>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-        <input type="checkbox" id="cancel-notify-members" checked/>
-        Mitglieder per Push benachrichtigen
-      </label>`,
-    confirmLabel: 'Termin absagen',
-    onConfirm: async () => {
-      try {
-        await firestore.collection('events').doc(event.id).update({ status: 'cancelled' });
-        showToast('Termin wurde abgesagt.', 'success');
-        await renderTrainerDetailView(event.id, container, options);
-      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
-    }
-  });
-}
-
-// FIX: Verspätung melden als Trainer
-async function _reportTrainerLate(event, trainerUid, currentLateMin, container, options) {
-  showModal({
-    title: 'Verspätung melden',
-    body: `
-      <p class="text-muted" style="margin-top:0;font-size:0.88rem;">Wie viele Minuten wirst du voraussichtlich verspätet sein?</p>
-      <input type="number" id="trainer-late-minutes" min="1" max="120" value="${currentLateMin || 15}"
-        style="width:100%;font-size:1.1rem;text-align:center;" placeholder="Minuten"/>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-        ${[5,10,15,20,30,45].map(m => `<button class="btn-secondary trainer-late-preset" data-min="${m}" style="padding:5px 12px;">${m} Min.</button>`).join('')}
-      </div>`,
-    confirmLabel: 'Melden',
-    onConfirm: async () => {
-      const min = parseInt(document.getElementById('trainer-late-minutes').value);
-      if (!min || min < 1) { showToast('Bitte eine gültige Minutenanzahl eingeben.', 'error'); return false; }
-      try {
-        await firestore.collection('events').doc(event.id).update({
-          [`trainerLateMinutes.${trainerUid}`]: min
-        });
-        showToast(`Verspätung von ${min} Min. gemeldet.`, 'success');
-        await renderTrainerDetailView(event.id, container, options);
-      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
-    }
-  });
-  // Preset-Buttons nach Modal-Render setzen
-  setTimeout(() => {
-    document.querySelectorAll('.trainer-late-preset').forEach(btn => {
-      btn.onclick = () => {
-        const inp = document.getElementById('trainer-late-minutes');
-        if (inp) inp.value = btn.dataset.min;
-      };
-    });
-  }, 60);
-}
-
-function renderTrainerStatCard(label, value, valueColor = 'var(--color-text)') {
-  return `<div class="card" style="margin:0;"><div class="text-muted" style="font-size:0.82rem;margin-bottom:10px;">${label}</div><div style="font-size:1.65rem;font-weight:700;color:${valueColor};line-height:1.1;">${value}</div></div>`;
-}
-
-function renderTrainerNeedCard(needed, reached) {
+function renderTrainerStatCard(label, value, color = 'var(--color-text)') {
   return `
-    <div class="card" style="margin:0;border-left:4px solid ${reached ? 'var(--color-success)' : 'var(--color-warning)'};">
-      <div class="text-muted" style="font-size:0.82rem;margin-bottom:10px;">Noch benötigt</div>
-      <div style="font-size:1.65rem;font-weight:700;color:${reached ? 'var(--color-success)' : 'var(--color-warning)'};line-height:1.1;">${needed}</div>
-      <div style="margin-top:10px;font-size:0.86rem;color:var(--color-text-muted);display:flex;align-items:center;gap:6px;">
-        <span class="material-icons" style="font-size:16px;color:${reached ? 'var(--color-success)' : 'var(--color-warning)'};">${reached ? 'check_circle' : 'warning'}</span>
-        ${reached ? 'Mindestanzahl erreicht' : 'Noch Teilnehmer benötigt'}
-      </div>
+    <div class="card" style="padding:12px 16px;margin-bottom:0;">
+      <div class="text-muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
+      <div style="font-size:1.4rem;font-weight:700;color:${color};">${value}</div>
     </div>`;
 }
 
-function renderTrainerStatusChip(status) {
-  const map = {
-    registered:['Angemeldet','chip-primary'], confirmation_pending:['Ausst. Bestätigung','chip-warning'],
-    present:['Anwesend','chip-success'], absent_excused:['Abgemeldet','chip-error'],
-    absent_unexcused:['Unentschuldigt','chip-error'], late_excused:['Verspätet (entsch.)','chip-warning'],
-    late_unexcused:['Verspätet (unentsch.)','chip-warning'], cancelled:['Termin abgesagt','chip-error']
-  };
-  const [label, cls] = map[status] || [status, ''];
-  return `<span class="chip ${cls}">${label}</span>`;
+function renderTrainerNeedCard(needed, minReached) {
+  if (minReached) {
+    return `<div class="card" style="padding:12px 16px;margin-bottom:0;border-left:3px solid var(--color-success);">
+      <div class="text-muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Mindestanzahl</div>
+      <div style="font-size:1rem;font-weight:600;color:var(--color-success);display:flex;align-items:center;gap:6px;">
+        <span class="material-icons" style="font-size:18px;">check_circle</span>Erreicht
+      </div>
+    </div>`;
+  }
+  return `<div class="card" style="padding:12px 16px;margin-bottom:0;border-left:3px solid var(--color-warning);">
+    <div class="text-muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Noch benötigt</div>
+    <div style="font-size:1.4rem;font-weight:700;color:var(--color-warning);">${needed} Person${needed === 1 ? '' : 'en'}</div>
+  </div>`;
 }
 
-async function _showAddMemberModal(event, _unused, onDone) {
-  const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
-  const registeredUids = new Set();
-  attSnap.forEach(doc => registeredUids.add(doc.data().userId));
-
-  const uSnap = await firestore.collection('users').orderBy('displayName').get();
-  const allUsers = [];
-  uSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
-
-  const available = allUsers.filter(u => (u.roles || []).includes('member') && !registeredUids.has(u.id));
-  if (!available.length) { showToast('Alle Mitglieder sind bereits angemeldet.', 'info'); return; }
-
+function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
   showModal({
-    title: 'Person hinzufügen',
-    body: `
-      <p class="text-muted" style="margin-top:0;font-size:0.88rem;">Mitglieder können auch außerhalb der Gruppe hinzugefügt werden.</p>
-      <input type="search" id="trainer-add-member-search" placeholder="Mitglied suchen…" style="width:100%;margin-bottom:10px;"/>
-      <div id="trainer-add-member-list" style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;">
-        ${available.map(u => `
-          <label style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:6px;background:var(--color-surface-offset);cursor:pointer;">
-            <input type="checkbox" name="trainer-add-member" value="${u.id}"/>
-            <div><div style="font-weight:600;">${escapeHtml(u.displayName || '(kein Name)')}</div><div class="text-muted" style="font-size:0.8rem;">${escapeHtml(u.email || '')}</div></div>
-          </label>`).join('')}
-      </div>`,
-    confirmLabel: 'Hinzufügen',
+    title: iAmCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden',
+    body: iAmCancelled
+      ? `<p>Möchtest du dich wieder als ${getRoleLabel('teacher')} für diesen Termin einplanen?</p>`
+      : `<p>Möchtest du dich als ${getRoleLabel('teacher')} von diesem Termin abmelden?</p>`,
+    confirmLabel: iAmCancelled ? 'Wieder einplanen' : 'Abmelden',
     onConfirm: async () => {
-      const selected = [...document.querySelectorAll('input[name="trainer-add-member"]:checked')].map(i => i.value);
-      if (!selected.length) { showToast('Bitte mindestens eine Person wählen.', 'error'); return false; }
       try {
-        const defaultMode   = event.mode || window.appSettings?.defaultMode || 'opt_in';
-        const initialStatus = defaultMode === 'confirmation' ? 'confirmation_pending' : 'registered';
-        const batch = firestore.batch();
-        selected.forEach(uid => {
-          const ref = firestore.collection('eventAttendance').doc();
-          batch.set(ref, { eventId: event.id, userId: uid, status: initialStatus, addedByTrainer: true, addedAt: new Date(), firstRegisteredAt: new Date() });
-          batch.update(firestore.collection('events').doc(event.id), { directMembers: firebase.firestore.FieldValue.arrayUnion(uid) });
-        });
-        await batch.commit();
-        showToast('Person(en) hinzugefügt.', 'success');
-        onDone && onDone();
-      } catch (err) { showToast('Fehler: ' + err.message, 'error'); return false; }
+        if (iAmCancelled) {
+          await firestore.collection('events').doc(event.id).update({
+            trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid)
+          });
+          showToast('Wieder eingeplant.', 'success');
+        } else {
+          await firestore.collection('events').doc(event.id).update({
+            trainerCancellations: firebase.firestore.FieldValue.arrayUnion(myUid)
+          });
+          showToast('Als Betreuer abgemeldet.', 'success');
+        }
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      }
     }
   });
-
-  setTimeout(() => {
-    const search = document.getElementById('trainer-add-member-search');
-    const list   = document.getElementById('trainer-add-member-list');
-    if (!search || !list) return;
-    search.oninput = () => {
-      const q = search.value.toLowerCase();
-      list.querySelectorAll('label').forEach(l => { l.style.display = l.textContent.toLowerCase().includes(q) ? '' : 'none'; });
-    };
-    search.focus();
-  }, 60);
 }
 
-function formatDateGerman(date) {
-  return new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
+function _cancelEvent(event, container, options) {
+  showModal({
+    title: 'Termin absagen',
+    body: `
+      <p>Bitte gib eine kurze Begründung an (optional):</p>
+      <input type="text" id="cancel-reason-input" placeholder="z.B. Halle nicht verfügbar" />
+    `,
+    confirmLabel: 'Termin absagen',
+    onConfirm: async () => {
+      const reason = document.getElementById('cancel-reason-input')?.value.trim() || '';
+      try {
+        await firestore.collection('events').doc(event.id).update({
+          status: 'cancelled',
+          cancellationReason: reason || firebase.firestore.FieldValue.delete()
+        });
+        showToast('Termin abgesagt.', 'success');
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      }
+    }
+  });
 }
-function formatDateGermanShort(date) {
-  return new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
-}
-function escapeHtml(value) {
-  return String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+
+// FIX: Speichert Verspätung in trainerLateMinutes UND trainerLateNotes
+function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, container, options) {
+  showModal({
+    title: currentLateMinutes ? 'Verspätung ändern' : 'Verspätung melden',
+    body: `
+      <p>Wie viele Minuten wirst du voraussichtlich zu spät sein?</p>
+      <label>Minuten</label>
+      <input type="number" id="late-minutes-input" min="1" max="120" value="${currentLateMinutes || 15}" style="width:100px;" />
+      <label style="margin-top:10px;">Begründung (optional, für Mitglieder sichtbar)</label>
+      <input type="text" id="late-note-input" placeholder="z.B. Zug hat Verspätung" value="${escapeHtml(currentLateNote || '')}" />
+    `,
+    confirmLabel: 'Speichern',
+    onConfirm: async () => {
+      const minutes = parseInt(document.getElementById('late-minutes-input')?.value || '0', 10);
+      const note    = document.getElementById('late-note-input')?.value.trim() || '';
+      if (!minutes || minutes < 1) { showToast('Bitte eine gültige Minutenzahl eingeben.', 'warning'); return; }
+      try {
+        await firestore.collection('events').doc(event.id).update({
+          [`trainerLateMinutes.${myUid}`]: minutes,
+          [`trainerLateNotes.${myUid}`]:   note || firebase.firestore.FieldValue.delete()
+        });
+        showToast(`Verspätung von ~${minutes} Min. gemeldet.`, 'success');
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      }
+    }
+  });
 }

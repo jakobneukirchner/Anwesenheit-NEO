@@ -64,7 +64,7 @@ async function loadMemberDashboard() {
       const trainerIds   = ev.trainers || [];
       const cancelledIds = ev.trainerCancellations || [];
 
-      // FIX: Nur Betreuer die NICHT abgemeldet sind als aktiv anzeigen
+      // Nur Betreuer die NICHT abgemeldet sind als aktiv anzeigen
       const activeTrainerIds    = trainerIds.filter(tid => !cancelledIds.includes(tid));
       const allUniqueTrainerIds = [...new Set([...trainerIds, ...cancelledIds])];
 
@@ -80,16 +80,16 @@ async function loadMemberDashboard() {
 
       if (ev.status === 'cancelled' || ev.status === 'skipped') return;
 
-      // FIX: trainerLateNote aus trainerAttendance laden
-      if (trainerIds.length) {
-        const lateSnap = await firestore.collection('trainerAttendance')
-          .where('eventId', '==', ev.id)
-          .where('status', '==', 'late')
-          .get();
-        if (!lateSnap.empty) {
-          const lateDoc = lateSnap.docs[0].data();
-          ev.trainerLateNote = lateDoc.lateNote || lateDoc.note || 'Verspätung gemeldet';
-          ev.trainerLateMinutes = lateDoc.lateMinutes || null;
+      // FIX: Betreuer-Verspätung direkt aus event.trainerLateMinutes (Map-Feld) lesen
+      // Wir suchen den ersten aktiven Trainer, der eine Verspätung gemeldet hat
+      if (activeTrainerIds.length && ev.trainerLateMinutes) {
+        for (const tid of activeTrainerIds) {
+          const lateMin = ev.trainerLateMinutes[tid];
+          if (lateMin) {
+            ev._trainerLateMinutes = lateMin;
+            ev._trainerLateNote   = ev.trainerLateNotes?.[tid] || null;
+            break;
+          }
         }
       }
 
@@ -117,10 +117,8 @@ async function loadMemberDashboard() {
     const upcoming = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t > now; });
     const past     = events.filter(e => { const t = e.startTime?.toDate?.(); return t && t <= now; });
 
-    // ── Stiller Refresh: aktiven Tab merken, dann Inhalt swap ohne Flackern
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
-    // Neuen HTML-String aufbauen (noch NICHT in den DOM schreiben)
     const newHtml = `
       <p class="text-muted" style="margin-bottom:12px;font-size:0.85rem;">
         Termine bis <strong>${cutOff.toLocaleDateString('de-DE')}</strong> (${lookAheadDays} Tage im Voraus)
@@ -133,12 +131,10 @@ async function loadMemberDashboard() {
       <div id="tab-past"${activeTab !== 'past' ? ' hidden' : ''}></div>
     `;
 
-    // Swap: jetzt erst den DOM aktualisieren
     const scrollY = container.scrollTop;
     container.innerHTML = newHtml;
     container.scrollTop = scrollY;
 
-    // Tab-Wechsel-Logik
     container.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -252,10 +248,8 @@ function renderMemberEventCard(event, attendance, isPast) {
     && attendance?.status === 'registered' && !attendance?.trainerSet
     && firstRegTime && (now - firstRegTime) < WITHDRAW_WINDOW_MS;
 
-  // FIX: Absage widerrufen möglich wenn status === 'cancelled' und nicht locked
   const isMemberCancelled = memberStatus === 'cancelled' && !locked && !isPast;
 
-  // FIX: Verspätung widerrufen möglich wenn status === 'late_excused' und nicht vom Trainer gesetzt
   const canRevokeLate = !locked && !isPast
     && attendance?.status === 'late_excused'
     && !attendance?.trainerSet;
@@ -301,12 +295,14 @@ function renderMemberEventCard(event, attendance, isPast) {
     return card;
   }
 
-  // FIX: trainerLateNote mit Minuten anzeigen
-  const lateMinutesText = event.trainerLateMinutes ? ` (ca. ${event.trainerLateMinutes} Min.)` : '';
-  const trainerLateHtml = event.trainerLateNote
+  // FIX: Betreuer-Verspätung aus _trainerLateMinutes (direkt aus event.trainerLateMinutes gelesen)
+  const trainerLateMinutes = event._trainerLateMinutes || null;
+  const trainerLateNote    = event._trainerLateNote    || null;
+  const lateMinutesText    = trainerLateMinutes ? ` (ca. ${trainerLateMinutes} Min.)` : '';
+  const trainerLateHtml    = trainerLateMinutes
     ? `<div class="chip chip-warning" style="margin-bottom:8px;display:inline-flex;align-items:center;gap:4px;">
         <span class="material-icons" style="font-size:15px;">schedule</span>
-        ${tLabel} meldet Verspätung${lateMinutesText}: ${event.trainerLateNote}
+        ${tLabel} meldet Verspätung${lateMinutesText}${trainerLateNote ? ': ' + escapeHtml(trainerLateNote) : ''}
        </div>` : '';
 
   const broadcastHtml = event.trainerBroadcast
@@ -398,7 +394,7 @@ function renderMemberEventCard(event, attendance, isPast) {
     && !(isConfMode && isPending)
     && !(isConfMode && confWindowExpired && memberStatus !== 'cancelled');
 
-  // FIX: Banner für gemeldete Verspätung (mit Widerruf-Option)
+  // Banner für gemeldete Verspätung (mit Widerruf-Option)
   const lateBannerHtml = (!isPast && !locked && attendance?.status === 'late_excused' && !attendance?.trainerSet)
     ? `<div style="background:rgba(245,124,0,0.08);border-left:3px solid var(--color-warning,#f57c00);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <span style="font-size:0.85rem;color:var(--color-warning,#f57c00);display:inline-flex;align-items:center;gap:6px;">
@@ -410,7 +406,6 @@ function renderMemberEventCard(event, attendance, isPast) {
         </button>
        </div>` : '';
 
-  // FIX: Banner für Absage (mit Widerruf-Option)
   const cancelledBannerHtml = isMemberCancelled && withinDeadline
     ? `<div style="background:rgba(198,40,40,0.07);border-left:3px solid var(--color-error,#c62828);border-radius:4px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <span style="font-size:0.85rem;color:var(--color-error,#c62828);display:inline-flex;align-items:center;gap:6px;">
@@ -475,7 +470,6 @@ function renderMemberEventCard(event, attendance, isPast) {
       }
     }
 
-    // FIX: Verspätung widerrufen
     const revokeLateBtn = card.querySelector('[data-action="revoke-late"]');
     if (revokeLateBtn) revokeLateBtn.onclick = () => guardedAction(async () => {
       showModal({
