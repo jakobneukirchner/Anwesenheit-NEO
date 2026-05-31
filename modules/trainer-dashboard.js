@@ -469,6 +469,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
     const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
 
+    // "Vertretung anfragen"-Button: nur sichtbar wenn abgemeldet und noch keine offene Anfrage
+    const showSubstBtn = iAmTrainer && iAmCancelled && !myOpenRequest;
+
     const substBanner = myOpenRequest ? `
       <div id="subst-banner" style="background:color-mix(in oklch,var(--color-warning) 10%,var(--color-surface));border:1px solid var(--color-warning);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
         <span style="display:inline-flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--color-warning);">
@@ -559,7 +562,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}\" angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
@@ -621,6 +624,12 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <span class="material-icons" style="font-size:16px;">${iAmCancelled ? 'event_available' : 'event_busy'}</span>
               ${iAmCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden'}
             </button>
+            ${showSubstBtn ? `
+            <button class="btn-secondary" id="trainer-ask-subst-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">swap_horiz</span>
+              Vertretung anfragen
+            </button>
+            ` : ''}
             <button class="btn-secondary" id="trainer-cancel-event-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">cancel</span>Termin absagen
             </button>
@@ -693,6 +702,12 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       document.getElementById('trainer-cancel-self-btn').onclick = () => _toggleTrainerSelf(event, myUid, iAmCancelled, container, options);
       document.getElementById('trainer-cancel-event-btn').onclick = () => _cancelEvent(event, container, options);
       document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateMinutes, myLateNote, container, options);
+
+      // Standalone "Vertretung anfragen"-Button (nur wenn abgemeldet + noch keine offene Anfrage)
+      const askSubstBtn = document.getElementById('trainer-ask-subst-btn');
+      if (askSubstBtn) {
+        askSubstBtn.onclick = () => _askSubstitutionRequest(event, myUid, '', container, options);
+      }
 
       const revokeBtn = document.getElementById('trainer-revoke-late-btn');
       if (revokeBtn) revokeBtn.onclick = () => {
