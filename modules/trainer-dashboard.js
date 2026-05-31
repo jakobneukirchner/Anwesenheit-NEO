@@ -707,3 +707,78 @@ function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, c
     }
   });
 }
+
+/**
+ * Öffnet einen Dialog, mit dem der Trainer einen anderen Betreuer als Vertretung
+ * benachrichtigen kann. Schreibt eine system_message in Firestore.
+ */
+async function _openReplacementModal(event, requestingUid) {
+  const start = event.startTime?.toDate?.();
+  const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
+
+  // Alle anderen Trainer des Termins laden (nicht der anfragende selbst)
+  const otherTrainerUids = (event.trainers || []).filter(uid => uid !== requestingUid);
+
+  if (!otherTrainerUids.length) {
+    showModal({
+      title: 'Keine weiteren Betreuer',
+      body: `<p>Für diesen Termin sind keine weiteren ${getRoleLabel('teacher')} eingetragen, die benachrichtigt werden könnten.</p>`,
+      confirmLabel: 'OK',
+      onConfirm: () => {}
+    });
+    return;
+  }
+
+  // Nutzerdaten laden
+  const userMap = {};
+  await Promise.all(otherTrainerUids.map(async uid => {
+    const doc = await firestore.collection('users').doc(uid).get();
+    userMap[uid] = doc.exists ? { id: uid, ...doc.data() } : { id: uid, displayName: uid };
+  }));
+
+  const myProfile = window.currentUser?.profile;
+  const myName = myProfile?.displayName || 'Ein Betreuer';
+
+  const optionsHtml = otherTrainerUids.map(uid => {
+    const u = userMap[uid];
+    return `<option value="${uid}">${u.displayName || u.email || uid}</option>`;
+  }).join('');
+
+  showModal({
+    title: 'Vertretung anfragen',
+    body: `
+      <p style="margin-bottom:12px;">Wen möchtest du als mögliche Vertretung für <strong>${escapeHtml(event.title || 'diesen Termin')}</strong> (${dateStr}) anfragen?</p>
+      <label style="display:block;margin-bottom:4px;font-weight:600;">Betreuer auswählen</label>
+      <select id="replacement-target-select" style="width:100%;margin-bottom:12px;">${optionsHtml}</select>
+      <label style="display:block;margin-bottom:4px;font-weight:600;">Nachricht (optional)</label>
+      <textarea id="replacement-message-input" rows="3" placeholder="z.B. Ich kann leider nicht kommen. Kannst du einspringen?" style="width:100%;"></textarea>
+    `,
+    confirmLabel: 'Anfrage senden',
+    onConfirm: async () => {
+      const targetUid = document.getElementById('replacement-target-select')?.value;
+      const customMsg = document.getElementById('replacement-message-input')?.value.trim() || '';
+      if (!targetUid) return;
+
+      const targetUser = userMap[targetUid];
+      const messageText = customMsg
+        || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
+
+      try {
+        await firestore.collection('system_messages').add({
+          toUid:     targetUid,
+          fromUid:   requestingUid,
+          type:      'replacement_request',
+          eventId:   event.id,
+          eventTitle: event.title || '',
+          eventDate: event.startTime || null,
+          message:   messageText,
+          read:      false,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        showToast(`Anfrage an ${targetUser.displayName || 'Betreuer'} gesendet.`, 'success');
+      } catch (err) {
+        showToast('Fehler beim Senden: ' + err.message, 'error');
+      }
+    }
+  });
+}
