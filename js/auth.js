@@ -25,12 +25,6 @@ function showApp() {
 /* ─── Auto-Refresh ──────────────────────────────────────────────────────────── */
 let _autoRefreshTimer = null;
 
-/**
- * Startet den Auto-Refresh-Timer.
- * Beim Tick wird window._silentRefresh = true gesetzt, damit alle
- * Dashboard-Loader wissen, dass sie KEIN Loading-Overlay zeigen
- * und KEINE Textfelder leeren sollen.
- */
 function startAutoRefresh(seconds) {
   stopAutoRefresh();
   const ms = parseInt(seconds) * 1000;
@@ -41,8 +35,6 @@ function startAutoRefresh(seconds) {
     try {
       routeToDashboard(window.currentUser.roles, window.currentDashboardRole);
     } finally {
-      // Flag wird nach dem synchronen Teil zurückgesetzt;
-      // async-Teile prüfen es selbst.
       window._silentRefresh = false;
     }
   }, ms);
@@ -60,6 +52,7 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
   if (!fbUser) {
     window.currentUser = null;
     stopAutoRefresh();
+    if (typeof stopNotificationsListener === 'function') stopNotificationsListener();
     const appContent = document.getElementById('app-content');
     if (appContent) appContent.innerHTML = '';
     showLogin();
@@ -108,6 +101,10 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
 
   startAutoRefresh(window.appSettings?.autoRefreshSeconds ?? 0);
 
+  // Notification-Bell initialisieren & Listener starten
+  if (typeof initNotificationBell      === 'function') initNotificationBell();
+  if (typeof startNotificationsListener === 'function') startNotificationsListener();
+
   routeToDashboard(window.currentUser.roles);
   if (typeof renderSystemMessageBanner === 'function') renderSystemMessageBanner();
 });
@@ -140,7 +137,6 @@ const MY_MEMBERS_ROLES = ['admin', 'coordinator', 'teacher'];
 function routeToDashboard(roles, forceRole) {
   const role = forceRole || getPrimaryRole(roles);
   window.currentDashboardRole = role;
-  // Beim stillen Refresh keinen neuen Switcher bauen (würde flackern)
   if (!window._silentRefresh) renderDashboardSwitcher(roles);
   (DASHBOARD_LOADERS[role] || DASHBOARD_LOADERS.member)();
 }

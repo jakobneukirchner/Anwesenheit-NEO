@@ -79,47 +79,38 @@
       font-size: 1rem; font-weight: 600;
       display: flex; align-items: center; justify-content: center; gap: 8px;
     }
-    #login-error { margin-top: 12px; font-size: 0.875rem; color: var(--color-error); min-height: 20px; }
+    #login-error { margin-top: 10px; font-size: 0.85rem; color: var(--color-error); min-height: 1.2em; }
     #forgot-pw-btn {
-      display: block; width: 100%; margin-top: 12px; padding: 6px;
       background: none; border: none; cursor: pointer;
-      font-size: 0.85rem; color: var(--color-text-muted);
-      text-align: center; border-radius: var(--radius-small);
+      font-size: 0.8rem; color: var(--color-text-muted);
+      margin-top: 10px; padding: 0;
+      text-decoration: underline dotted;
     }
-    #forgot-pw-btn:hover { color: var(--color-primary); background: rgba(21,101,192,0.07); }
-    #login-spinner {
-      width: 16px; height: 16px;
-      border: 2px solid rgba(255,255,255,0.4);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-    }
+    #forgot-pw-btn:hover { color: var(--color-text); }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
 
-  <!-- Wird sofort angezeigt bis Firebase den Auth-State geprüft hat -->
-  <div id="auth-loading">
-    <div class="auth-spinner"></div>
-  </div>
+  <!-- AUTH LOADING -->
+  <div id="auth-loading"><div class="auth-spinner"></div></div>
 
-  <!-- Beide Screens starten versteckt – auth.js blendet den richtigen ein -->
+  <!-- LOGIN -->
   <div id="login-screen" class="hidden">
     <div id="login-box">
-      <h2>Anwesenheit-NEO</h2>
-      <form id="login-form" autocomplete="on" novalidate>
+      <h2>Anmelden</h2>
+      <form id="login-form">
         <label for="login-email">E-Mail</label>
-        <input id="login-email" type="email" name="email" autocomplete="email" placeholder="deine@email.de" />
+        <input type="email" id="login-email" autocomplete="email" required />
         <label for="login-password">Passwort</label>
-        <input id="login-password" type="password" name="password" autocomplete="current-password" placeholder="Passwort" />
+        <input type="password" id="login-password" autocomplete="current-password" required />
         <div id="login-error"></div>
         <button type="submit" id="login-submit-btn" class="btn-primary">
           <span id="login-btn-text">Anmelden</span>
-          <div id="login-spinner" class="hidden"></div>
+          <span id="login-spinner" class="auth-spinner hidden" style="width:18px;height:18px;border-width:2px;"></span>
         </button>
       </form>
-      <button type="button" id="forgot-pw-btn">Passwort vergessen?</button>
+      <button id="forgot-pw-btn">Passwort vergessen?</button>
     </div>
   </div>
 
@@ -138,6 +129,10 @@
           <button id="profile-btn" class="btn-text btn-icon" title="Konto">
             <span class="material-icons">manage_accounts</span>
             <span class="btn-label">Konto</span>
+          </button>
+          <button id="notif-btn" class="btn-icon-only" title="Benachrichtigungen" aria-label="Benachrichtigungen" style="position:relative;">
+            <span class="material-icons">notifications</span>
+            <span id="notif-badge" hidden style="position:absolute;top:4px;right:4px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--color-notification,#a13544);color:#fff;font-size:0.65rem;font-weight:700;line-height:16px;text-align:center;pointer-events:none;"></span>
           </button>
           <button id="logout-btn" class="btn-text btn-icon" title="Abmelden">
             <span class="material-icons">logout</span>
@@ -165,6 +160,11 @@
         </div>
         <div id="mobile-role-switcher" class="mobile-drawer-section"></div>
         <div class="mobile-drawer-section">
+          <button id="mobile-notif-btn" class="mobile-drawer-btn" hidden style="position:relative;">
+            <span class="material-icons">notifications</span>
+            <span>Benachrichtigungen</span>
+            <span id="mobile-notif-badge" hidden style="margin-left:auto;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:var(--color-notification,#a13544);color:#fff;font-size:0.72rem;font-weight:700;line-height:20px;text-align:center;"></span>
+          </button>
           <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
             <span class="material-icons">manage_accounts</span>
             <span>Konto</span>
@@ -194,30 +194,8 @@
   <script src="/modules/statistics.js"></script>
   <script src="/modules/system-messages.js"></script>
   <script src="/modules/member-report.js"></script>
+  <script src="/modules/notifications.js"></script>
   <script src="/js/auth.js"></script>
 
   <script>
     (function() {
-      const menuBtn  = document.getElementById('mobile-menu-btn');
-      const drawer   = document.getElementById('mobile-drawer');
-      const overlay  = document.getElementById('mobile-drawer-overlay');
-      const closeBtn = document.getElementById('mobile-drawer-close');
-      function isMobile() { return window.matchMedia('(max-width: 639px)').matches; }
-      function openDrawer() {
-        if (!isMobile()) return;
-        drawer.hidden = false; overlay.hidden = false;
-        document.body.style.overflow = 'hidden';
-      }
-      function closeDrawer() {
-        drawer.hidden = true; overlay.hidden = true;
-        document.body.style.overflow = '';
-      }
-      menuBtn?.addEventListener('click', openDrawer);
-      closeBtn?.addEventListener('click', closeDrawer);
-      overlay?.addEventListener('click', closeDrawer);
-      window.addEventListener('resize', () => { if (!isMobile()) closeDrawer(); });
-      window._mobileDrawerClose = closeDrawer;
-    })();
-  </script>
-</body>
-</html>
