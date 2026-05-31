@@ -25,26 +25,20 @@ async function loadTrainerDashboard() {
     // Auto-Cancel-Check: offene Anfragen prüfen bevor wir rendern
     await _checkAutoCancelRequests();
 
-    const [asTrainerSnap, cancelledSnap, incomingSnap, mySnap] = await Promise.all([
+    // Keine Composite-Queries (kein Index nötig): nur einzelne where-Klauseln,
+    // Sortierung + zweite Filterbedingungen werden clientseitig erledigt.
+    const [asTrainerSnap, cancelledSnap, incomingTargetedSnap, mySentSnap] = await Promise.all([
       firestore.collection('events').where('trainers', 'array-contains', uid).get(),
       firestore.collection('events').where('trainerCancellations', 'array-contains', uid).get(),
-      // Eingehende Anfragen: gezielte an mich
-      firestore.collection('substitution_requests')
-        .where('targetTrainerId', '==', uid)
-        .where('status', '==', 'open')
-        .get(),
-      // Meine gesendeten Anfragen
-      firestore.collection('substitution_requests')
-        .where('requesterId', '==', uid)
-        .orderBy('createdAt', 'desc')
-        .limit(10)
-        .get()
+      // Eingehende gezielte Anfragen (nur targetTrainerId-Filter)
+      firestore.collection('substitution_requests').where('targetTrainerId', '==', uid).get(),
+      // Meine gesendeten Anfragen (nur requesterId-Filter, Sortierung clientseitig)
+      firestore.collection('substitution_requests').where('requesterId', '==', uid).get()
     ]);
 
-    // Allgemeine Anfragen (targetTrainerId == null) laden
+    // Allgemeine Anfragen ohne Composite-Index
     const generalSnap = await firestore.collection('substitution_requests')
       .where('targetTrainerId', '==', null)
-      .where('status', '==', 'open')
       .get();
 
     const seen = new Set();
@@ -68,22 +62,38 @@ async function loadTrainerDashboard() {
 
     const untilText = formatDate(futureEnd);
 
-    // Vertretungsanfragen zusammenbauen
+    // Vertretungsanfragen clientseitig filtern und sortieren
     const incoming = [];
     const seenReq = new Set();
-    incomingSnap.forEach(doc => { if (!seenReq.has(doc.id)) { seenReq.add(doc.id); incoming.push({ id: doc.id, ...doc.data() }); } });
+
+    // Gezielte eingehende: nur 'open'
+    incomingTargetedSnap.forEach(doc => {
+      const d = doc.data();
+      if (d.status === 'open' && !seenReq.has(doc.id)) {
+        seenReq.add(doc.id);
+        incoming.push({ id: doc.id, ...d });
+      }
+    });
+    // Allgemeine offene (nicht von mir)
     generalSnap.forEach(doc => {
       const d = doc.data();
-      if (!seenReq.has(doc.id) && d.requesterId !== uid) {
+      if (d.status === 'open' && d.requesterId !== uid && !seenReq.has(doc.id)) {
         seenReq.add(doc.id);
-        incoming.push({ id: doc.id, ...doc.data() });
+        incoming.push({ id: doc.id, ...d });
       }
     });
 
+    // Meine gesendeten: clientseitig sortieren + auf 10 begrenzen
     const mySent = [];
-    mySnap.forEach(doc => mySent.push({ id: doc.id, ...doc.data() }));
+    mySentSnap.forEach(doc => mySent.push({ id: doc.id, ...doc.data() }));
+    mySent.sort((a, b) => {
+      const ta = a.createdAt?.toMillis?.() || (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
+      const tb = b.createdAt?.toMillis?.() || (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
+      return tb - ta;
+    });
+    const mySentLimited = mySent.slice(0, 10);
 
-    const hasSubstRequests = incoming.length > 0 || mySent.length > 0;
+    const hasSubstRequests = incoming.length > 0 || mySentLimited.length > 0;
 
     const newHtml = `
       <div id="trainer-list-view">
@@ -155,7 +165,7 @@ async function loadTrainerDashboard() {
     for (const ev of past)     paEl.appendChild(await renderTrainerOverviewCard(ev, true));
 
     if (hasSubstRequests) {
-      renderSubstitutionSection(document.getElementById('trainer-substitution-section'), incoming, mySent, uid);
+      renderSubstitutionSection(document.getElementById('trainer-substitution-section'), incoming, mySentLimited, uid);
     }
 
   } catch (e) {
@@ -262,7 +272,6 @@ async function _acceptSubstitutionRequest(reqId, eventId) {
           acceptedByName: myName,
           resolvedAt: new Date()
         });
-        // Event aktualisieren
         const reqDoc = await reqRef.get();
         const req = reqDoc.data();
         const evRef = firestore.collection('events').doc(req.eventId || eventId);
@@ -271,10 +280,7 @@ async function _acceptSubstitutionRequest(reqId, eventId) {
           substitutionTrainerId: myUid
         });
         await batch.commit();
-
-        // System-Messages an anfragenden Trainer + alle Koordinatoren
         await _sendSubstitutionMessage(req, 'accepted', myName);
-
         showToast('Vertretung angenommen.', 'success');
         openTrainerDetailPage(req.eventId || eventId);
       } catch (err) {
@@ -294,10 +300,8 @@ async function _declineSubstitutionRequest(reqId) {
         const reqRef = firestore.collection('substitution_requests').doc(reqId);
         const reqDoc = await reqRef.get();
         const req = reqDoc.data();
-        // Gezielte Anfrage → wird allgemeine Anfrage (neues Dokument, altes auf declined)
         await reqRef.update({ status: 'declined' });
         if (req.targetTrainerId) {
-          // Neue allgemeine Anfrage erstellen
           await firestore.collection('substitution_requests').add({
             ...req,
             targetTrainerId: null,
@@ -325,7 +329,6 @@ async function renderTrainerOverviewCard(event, isPast) {
   if (event.status === 'skipped')   card.style.borderLeft = '4px solid var(--color-warning)';
   if (event.status === 'cancelled') card.style.borderLeft = '4px solid var(--color-error)';
 
-  // Vertretungsanfrage-Hervorhebung
   if (event.substitutionStatus === 'requested') {
     card.style.borderLeft = '4px solid var(--color-notification)';
     card.style.background = 'color-mix(in oklch, var(--color-notification) 6%, var(--color-surface))';
@@ -380,9 +383,6 @@ function openTrainerDetailPage(eventId) {
   });
 }
 
-/**
- * Gibt einen lesbaren Label + CSS-Klasse für einen Anwesenheitsstatus zurück.
- */
 function getAttendanceStatusChip(status) {
   const map = {
     registered:            { label: 'Angemeldet',             cls: 'chip-primary'  },
@@ -411,17 +411,19 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
 
     const myUid = window.currentUser?.firebaseUser?.uid;
 
-    // Prüfen ob eigene offene Anfrage für diesen Termin existiert
+    // Offene eigene Anfrage für diesen Termin: nur eventId+status filtern (kein Index nötig)
+    // requesterId wird clientseitig geprüft
     let myOpenRequest = null;
     const myReqSnap = await firestore.collection('substitution_requests')
-      .where('requesterId', '==', myUid)
       .where('eventId', '==', eventId)
       .where('status', '==', 'open')
-      .limit(1)
       .get();
-    if (!myReqSnap.empty) {
-      myReqSnap.forEach(doc => { myOpenRequest = { id: doc.id, ...doc.data() }; });
-    }
+    myReqSnap.forEach(doc => {
+      const d = doc.data();
+      if (d.requesterId === myUid && !myOpenRequest) {
+        myOpenRequest = { id: doc.id, ...d };
+      }
+    });
 
     const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
     const attendances = [];
@@ -467,7 +469,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
     const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
 
-    // Banner für offene Vertretungsanfrage
     const substBanner = myOpenRequest ? `
       <div id="subst-banner" style="background:color-mix(in oklch,var(--color-warning) 10%,var(--color-surface));border:1px solid var(--color-warning);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
         <span style="display:inline-flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--color-warning);">
@@ -865,7 +866,6 @@ function renderTrainerNeedCard(needed, minReached) {
 
 function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
   if (iAmCancelled) {
-    // Wieder einplanen – direkt
     showModal({
       title: 'Wieder einplanen',
       body: `<p>Möchtest du dich wieder als ${getRoleLabel('teacher')} für diesen Termin einplanen?</p>`,
@@ -875,15 +875,20 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
           await firestore.collection('events').doc(event.id).update({
             trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid)
           });
-          // Eigene offene Anfragen für diesen Termin stornieren
+          // Eigene offene Anfragen für diesen Termin stornieren (clientseitig gefiltert)
           const openSnap = await firestore.collection('substitution_requests')
-            .where('requesterId', '==', myUid)
             .where('eventId', '==', event.id)
             .where('status', '==', 'open')
             .get();
           const batch = firestore.batch();
-          openSnap.forEach(doc => batch.update(doc.ref, { status: 'cancelled', resolution: 'trainer_found', resolvedAt: new Date() }));
-          if (!openSnap.empty) {
+          let found = false;
+          openSnap.forEach(doc => {
+            if (doc.data().requesterId === myUid) {
+              batch.update(doc.ref, { status: 'cancelled', resolution: 'trainer_found', resolvedAt: new Date() });
+              found = true;
+            }
+          });
+          if (found) {
             await batch.commit();
             await firestore.collection('events').doc(event.id).update({ substitutionStatus: 'none', substitutionTrainerId: null });
           }
@@ -897,7 +902,6 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
     return;
   }
 
-  // Abmelden – erst Grund, dann Vertretungsanfrage
   showModal({
     title: 'Als Betreuer abmelden',
     body: `
@@ -913,7 +917,6 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
           trainerCancellations: firebase.firestore.FieldValue.arrayUnion(myUid)
         });
         showToast('Als Betreuer abgemeldet.', 'success');
-        // Zweites Modal: Vertretung anfragen?
         await _askSubstitutionRequest(event, myUid, reason, container, options);
       } catch (err) {
         showToast('Fehler: ' + err.message, 'error');
@@ -923,7 +926,6 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
 }
 
 async function _askSubstitutionRequest(event, myUid, cancelReason, container, options) {
-  // Alle Trainer der App laden (außer sich selbst)
   let allTrainers = [];
   try {
     const snap = await firestore.collection('users').where('roles', 'array-contains', 'teacher').get();
@@ -999,7 +1001,6 @@ async function _askSubstitutionRequest(event, myUid, cancelReason, container, op
       const eventDate = event.startTime?.toDate?.() || new Date();
       const autoCancelAt = new Date(eventDate.getTime() - 2 * deadline * 60 * 1000);
 
-      // Anfrage erstellen
       const reqData = {
         eventId: event.id,
         eventDate: eventDate,
@@ -1026,10 +1027,7 @@ async function _askSubstitutionRequest(event, myUid, cancelReason, container, op
           substitutionStatus: 'requested',
           substitutionTrainerId: null
         });
-
-        // System-Messages senden
         await _sendSubstitutionMessage({ ...reqData, id: reqRef.id }, 'created', null);
-
         showToast(
           type === 'targeted'
             ? `Anfrage an ${targetUser?.displayName || 'Trainer'} gesendet.`
@@ -1044,7 +1042,6 @@ async function _askSubstitutionRequest(event, myUid, cancelReason, container, op
     }
   });
 
-  // Radio-Toggle für Trainer-Dropdown
   setTimeout(() => {
     document.querySelectorAll('input[name="subst-type"]').forEach(radio => {
       radio.addEventListener('change', () => {
@@ -1070,14 +1067,12 @@ async function _sendSubstitutionMessage(req, type, actorName) {
     const messages = [];
 
     if (type === 'created') {
-      // An alle Koordinatoren
       const text = req.targetTrainerId
         ? `Vertretungsanfrage: ${req.requesterName} hat sich vom Termin "${req.eventGroupName}" am ${dateStr} abgemeldet und ${req.targetTrainerName} als Vertretung angefragt.`
         : `Vertretungsanfrage: ${req.requesterName} hat sich vom Termin "${req.eventGroupName}" am ${dateStr} abgemeldet und sucht eine Vertretung.`;
       for (const cid of coordIds) {
         messages.push({ recipientId: cid, text, type: 'substitution_request', linkedRequestId: req.id, expiresWhen: 'substitution_resolved', createdAt: new Date(), read: false });
       }
-      // An Zieltrainer
       if (req.targetTrainerId) {
         messages.push({
           recipientId: req.targetTrainerId,
@@ -1086,7 +1081,6 @@ async function _sendSubstitutionMessage(req, type, actorName) {
         });
       }
     } else if (type === 'accepted') {
-      // An anfragenden Trainer
       messages.push({
         recipientId: req.requesterId,
         text: `${actorName} hat deine Vertretungsanfrage für "${req.eventGroupName}" am ${dateStr} angenommen.`,
@@ -1108,7 +1102,6 @@ async function _sendSubstitutionMessage(req, type, actorName) {
       for (const cid of coordIds) {
         messages.push({ recipientId: cid, text: `Termin "${req.eventGroupName}" am ${dateStr} automatisch abgesagt (keine Vertretung, Anmeldefrist abgelaufen).`, type: 'substitution_auto_cancelled', linkedRequestId: req.id, createdAt: new Date(), read: false });
       }
-      // Gruppenmitglieder benachrichtigen
       if (req.eventGroupId) {
         const gDoc = await firestore.collection('groups').doc(req.eventGroupId).get();
         const memberIds = gDoc.exists ? (gDoc.data().members || []) : [];
@@ -1133,14 +1126,17 @@ async function _sendSubstitutionMessage(req, type, actorName) {
 async function _checkAutoCancelRequests() {
   try {
     const now = new Date();
+    // Nur ein einziges where() → kein Composite-Index nötig
+    // autoCancelNotified wird clientseitig gefiltert
     const snap = await firestore.collection('substitution_requests')
       .where('status', '==', 'open')
-      .where('autoCancelNotified', '==', false)
       .get();
 
     const toCancel = [];
     snap.forEach(doc => {
       const d = doc.data();
+      // Clientseitiger Filter: autoCancelNotified === false
+      if (d.autoCancelNotified === true) return;
       const cancelAt = d.autoCancelAt?.toDate?.();
       if (cancelAt && now >= cancelAt) {
         toCancel.push({ id: doc.id, ...d });
