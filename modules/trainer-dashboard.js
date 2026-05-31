@@ -932,6 +932,9 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
           trainerCancellations: firebase.firestore.FieldValue.arrayUnion(myUid)
         });
         showToast('Als Betreuer abgemeldet.', 'success');
+        // BUGFIX: View erst neu laden (damit iAmCancelled + showSubstBtn aktuell sind),
+        // dann Vertretungs-Dialog öffnen
+        await renderTrainerDetailView(event.id, container, options);
         await _askSubstitutionRequest(event, myUid, reason, container, options);
       } catch (err) {
         showToast('Fehler: ' + err.message, 'error');
@@ -1198,38 +1201,3 @@ function _cancelEvent(event, container, options) {
         });
         showToast('Termin abgesagt.', 'success');
         await renderTrainerDetailView(event.id, container, options);
-      } catch (err) {
-        showToast('Fehler: ' + err.message, 'error');
-      }
-    }
-  });
-}
-
-function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, container, options) {
-  showModal({
-    title: currentLateMinutes ? 'Verspätung ändern' : 'Verspätung melden',
-    body: `
-      <p>Wie viele Minuten wirst du voraussichtlich zu spät sein?</p>
-      <label>Minuten</label>
-      <input type="number" id="late-minutes-input" min="1" max="120" value="${currentLateMinutes || 15}" style="width:100px;" />
-      <label style="margin-top:10px;">Begründung (optional, für Mitglieder sichtbar)</label>
-      <input type="text" id="late-note-input" placeholder="z.B. Zug hat Verspätung" value="${escapeHtml(currentLateNote || '')}" />
-    `,
-    confirmLabel: 'Speichern',
-    onConfirm: async () => {
-      const minutes = parseInt(document.getElementById('late-minutes-input')?.value || '0', 10);
-      const note    = document.getElementById('late-note-input')?.value.trim() || '';
-      if (!minutes || minutes < 1) { showToast('Bitte eine gültige Minutenzahl eingeben.', 'warning'); return; }
-      try {
-        await firestore.collection('events').doc(event.id).update({
-          [`trainerLateMinutes.${myUid}`]: minutes,
-          [`trainerLateNotes.${myUid}`]:   note || firebase.firestore.FieldValue.delete()
-        });
-        showToast(`Verspätung von ~${minutes} Min. gemeldet.`, 'success');
-        await renderTrainerDetailView(event.id, container, options);
-      } catch (err) {
-        showToast('Fehler: ' + err.message, 'error');
-      }
-    }
-  });
-}
