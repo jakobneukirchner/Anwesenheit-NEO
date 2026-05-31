@@ -227,6 +227,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
     const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
 
+    // Prüfen ob Termin ohne aktive Trainer ist (alle abgemeldet oder keine eingetragen)
+    const activeTrainers = (event.trainers || []).filter(uid => !(event.trainerCancellations || []).includes(uid));
+    const noTrainerWarning = activeTrainers.length === 0 && (event.trainers || []).length > 0;
+
     container.innerHTML = `
       <style>
         .member-note-tooltip-popup {
@@ -260,6 +264,18 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           </div>
         </div>
       </div>
+
+      ${noTrainerWarning ? `
+      <div style="background:rgba(161,44,123,0.08);border-left:4px solid var(--color-error);border-radius:6px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="material-icons" style="font-size:20px;color:var(--color-error);flex-shrink:0;">warning</span>
+        <div style="flex:1;">
+          <strong style="color:var(--color-error);">Kein aktiver Betreuer!</strong>
+          <div style="font-size:0.87rem;color:var(--color-text-muted);margin-top:2px;">Alle Betreuer haben sich abgemeldet. Bitte eine Vertretung organisieren oder den Koordinator informieren.</div>
+        </div>
+        <button class="btn-secondary" id="trainer-notify-coord-btn" style="padding:6px 14px;display:inline-flex;align-items:center;gap:6px;flex-shrink:0;">
+          <span class="material-icons" style="font-size:15px;">send</span>Koordinator informieren
+        </button>
+      </div>` : ''}
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
         ${renderTrainerStatCard('Datum & Zeit', `${start ? formatDate(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}`)}
@@ -435,6 +451,12 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         btn.disabled = false;
       }
     };
+
+    // "Koordinator informieren"-Button (nur wenn kein aktiver Trainer)
+    const notifyCoordBtn = document.getElementById('trainer-notify-coord-btn');
+    if (notifyCoordBtn) {
+      notifyCoordBtn.onclick = () => _notifyCoordinatorNoTrainer(event);
+    }
 
     if (iAmTrainer) {
       document.getElementById('trainer-cancel-self-btn').onclick = () => _toggleTrainerSelf(event, myUid, iAmCancelled, container, options);
@@ -633,16 +655,35 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
 
           await renderTrainerDetailView(event.id, container, options);
 
-          if ((event.trainers || []).length > 1) {
+          // Prüfen ob nach Abmeldung noch aktive Trainer übrig sind
+          const freshDoc = await firestore.collection('events').doc(event.id).get();
+          const freshEvent = freshDoc.exists ? { id: freshDoc.id, ...freshDoc.data() } : event;
+          const stillActive = (freshEvent.trainers || []).filter(uid => !(freshEvent.trainerCancellations || []).includes(uid));
+
+          if (stillActive.length === 0) {
+            // Keine Trainer mehr → Koordinator-Benachrichtigung anbieten
+            setTimeout(() => {
+              showModal({
+                title: 'Kein Betreuer mehr!',
+                body: `<p style="color:var(--color-error);font-weight:600;margin-bottom:8px;">⚠️ Es sind jetzt keine aktiven Betreuer für diesen Termin mehr eingetragen.</p>
+                       <p>Möchtest du den Koordinator darüber informieren oder direkt eine Vertretung suchen?</p>`,
+                confirmLabel: 'Koordinator informieren',
+                cancelLabel: 'Vertretung suchen',
+                onConfirm: async () => {
+                  await _notifyCoordinatorNoTrainer(freshEvent);
+                },
+                onCancel: () => {
+                  _openReplacementModal(freshEvent, myUid);
+                }
+              });
+            }, 180);
+          } else if ((event.trainers || []).length > 1) {
             setTimeout(() => {
               showModal({
                 title: 'Vertretung organisieren?',
                 body: `<p>Du hast dich abgemeldet. Möchtest du direkt einen anderen Betreuer als mögliche Vertretung vorschlagen/benachrichtigen?</p>`,
                 confirmLabel: 'Vertretung auswählen',
                 onConfirm: async () => {
-                  const freshDoc = await firestore.collection('events').doc(event.id).get();
-                  if (!freshDoc.exists) return showToast('Termin nicht gefunden.', 'error');
-                  const freshEvent = { id: freshDoc.id, ...freshDoc.data() };
                   _openReplacementModal(freshEvent, myUid);
                 }
               });
@@ -712,38 +753,98 @@ function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, c
 }
 
 /**
- * Öffnet einen Dialog, mit dem der Trainer einen anderen Betreuer als Vertretung
- * benachrichtigen kann. Schreibt eine system_message in Firestore.
+ * Sendet eine system_message an alle Koordinatoren/Admins,
+ * dass ein Termin ohne aktiven Betreuer ist.
+ */
+async function _notifyCoordinatorNoTrainer(event) {
+  const start = event.startTime?.toDate?.();
+  const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
+  const myName = window.currentUser?.profile?.displayName || 'Ein Betreuer';
+
+  try {
+    // Alle Koordinatoren und Admins laden
+    const coordSnap = await firestore.collection('users').get();
+    const coordinators = [];
+    coordSnap.forEach(doc => {
+      const d = doc.data();
+      if ((d.roles || []).some(r => r === 'coordinator' || r === 'admin')) {
+        coordinators.push({ id: doc.id, ...d });
+      }
+    });
+
+    if (!coordinators.length) {
+      showToast('Keine Koordinatoren gefunden.', 'warning');
+      return;
+    }
+
+    const batch = firestore.batch();
+    coordinators.forEach(coord => {
+      const ref = firestore.collection('system_messages').doc();
+      batch.set(ref, {
+        toUid:      coord.id,
+        fromUid:    window.currentUser?.firebaseUser?.uid || null,
+        type:       'no_trainer_alert',
+        eventId:    event.id,
+        eventTitle: event.title || '',
+        eventDate:  event.startTime || null,
+        message:    `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`,
+        read:       false,
+        createdAt:  firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    await batch.commit();
+    showToast(`Koordinator${coordinators.length > 1 ? 'en' : ''} informiert.`, 'success');
+  } catch (err) {
+    showToast('Fehler beim Senden: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Öffnet einen Dialog, mit dem der Trainer JEDEN Betreuer (auch gruppenfremde)
+ * als Vertretung benachrichtigen kann. Schreibt eine system_message in Firestore.
  */
 async function _openReplacementModal(event, requestingUid) {
   const start = event.startTime?.toDate?.();
   const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
 
-  const otherTrainerUids = (event.trainers || []).filter(uid => uid !== requestingUid);
+  // Alle Benutzer mit Trainer-Rolle laden (nicht nur die des Events)
+  let allTrainers = [];
+  try {
+    const snap = await firestore.collection('users').orderBy('displayName').get();
+    snap.forEach(doc => {
+      const d = doc.data();
+      if ((d.roles || []).includes('teacher') && doc.id !== requestingUid) {
+        allTrainers.push({ id: doc.id, ...d });
+      }
+    });
+  } catch (e) {
+    console.warn('Konnte Trainer nicht laden:', e);
+  }
 
-  if (!otherTrainerUids.length) {
+  if (!allTrainers.length) {
     showModal({
-      title: 'Keine weiteren Betreuer',
-      body: `<p>Für diesen Termin sind keine weiteren ${getRoleLabel('teacher')} eingetragen, die benachrichtigt werden könnten.</p>`,
+      title: 'Keine Betreuer verfügbar',
+      body: `<p>Es sind keine weiteren ${getRoleLabel('teacher')} im System eingetragen.</p>`,
       confirmLabel: 'OK',
       onConfirm: () => {}
     });
     return;
   }
 
-  const userMap = {};
-  await Promise.all(otherTrainerUids.map(async uid => {
-    const doc = await firestore.collection('users').doc(uid).get();
-    userMap[uid] = doc.exists ? { id: uid, ...doc.data() } : { id: uid, displayName: uid };
-  }));
-
   const myProfile = window.currentUser?.profile;
   const myName = myProfile?.displayName || 'Ein Betreuer';
 
-  const optionsHtml = otherTrainerUids.map(uid => {
-    const u = userMap[uid];
-    return `<option value="${uid}">${u.displayName || u.email || uid}</option>`;
-  }).join('');
+  // Gruppen-eigene Trainer als erstes anzeigen (als Hint markieren)
+  const eventTrainerUids = new Set((event.trainers || []).filter(uid => uid !== requestingUid));
+  const ownTrainers  = allTrainers.filter(u => eventTrainerUids.has(u.id));
+  const otherTrainers = allTrainers.filter(u => !eventTrainerUids.has(u.id));
+
+  const buildOptions = (list, groupLabel) => list.length
+    ? `<optgroup label="${groupLabel}">${list.map(u => `<option value="${u.id}">${u.displayName || u.email || u.id}</option>`).join('')}</optgroup>`
+    : '';
+
+  const optionsHtml = buildOptions(ownTrainers, 'Am Termin eingeplant')
+    + buildOptions(otherTrainers, 'Andere Betreuer');
 
   showModal({
     title: 'Vertretung anfragen',
@@ -760,7 +861,7 @@ async function _openReplacementModal(event, requestingUid) {
       const customMsg = document.getElementById('replacement-message-input')?.value.trim() || '';
       if (!targetUid) return;
 
-      const targetUser = userMap[targetUid];
+      const targetUser = allTrainers.find(u => u.id === targetUid) || { displayName: targetUid };
       const messageText = customMsg
         || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
