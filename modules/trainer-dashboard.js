@@ -597,6 +597,27 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
             trainerCancellations: firebase.firestore.FieldValue.arrayUnion(myUid)
           });
           showToast('Als Betreuer abgemeldet.', 'success');
+
+          // Erst die View sauber neu laden, damit der Button-Zustand stimmt.
+          await renderTrainerDetailView(event.id, container, options);
+
+          // Dann optional Vertretungs-Dialog anbieten.
+          if ((event.trainers || []).length > 1) {
+            setTimeout(() => {
+              showModal({
+                title: 'Vertretung organisieren?',
+                body: `<p>Du hast dich abgemeldet. Möchtest du direkt einen anderen Betreuer als mögliche Vertretung vorschlagen/benachrichtigen?</p>`,
+                confirmLabel: 'Vertretung auswählen',
+                onConfirm: async () => {
+                  const freshDoc = await firestore.collection('events').doc(event.id).get();
+                  if (!freshDoc.exists) return showToast('Termin nicht gefunden.', 'error');
+                  const freshEvent = { id: freshDoc.id, ...freshDoc.data() };
+                  _openReplacementModal(freshEvent, myUid);
+                }
+              });
+            }, 180);
+          }
+          return;
         }
         await renderTrainerDetailView(event.id, container, options);
       } catch (err) {
