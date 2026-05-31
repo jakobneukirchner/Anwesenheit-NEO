@@ -6,6 +6,7 @@ async function loadCoordinatorDashboard() {
   const container = document.getElementById('app-content');
   container.innerHTML = `
     <h2 style="margin-top:0;">Koordinator-Dashboard</h2>
+    <div id="coord-system-messages-banner"></div>
     <div class="tabs">
       <button class="tab-btn active" data-tab="users">Benutzer</button>
       <button class="tab-btn" data-tab="groups">Gruppen</button>
@@ -19,6 +20,10 @@ async function loadCoordinatorDashboard() {
     <div id="tab-settings" hidden></div>
     <div id="tab-messages" hidden></div>
   `;
+
+  // systemMessages für den aktuellen Koordinator laden und als Banner anzeigen
+  _renderCoordSystemMessagesBanner(document.getElementById('coord-system-messages-banner'));
+
   const tabs   = { users: null, groups: null, schedule: null, settings: null, messages: null};
   const tabEls = {
     users:    document.getElementById('tab-users'),
@@ -43,6 +48,67 @@ async function loadCoordinatorDashboard() {
     };
   });
   loaders.users();
+}
+
+/* ── systemMessages-Banner für Koordinatoren ─────────────────────────────────── */
+async function _renderCoordSystemMessagesBanner(bannerEl) {
+  if (!bannerEl) return;
+  try {
+    const uid = window.currentUser?.firebaseUser?.uid;
+    if (!uid) return;
+
+    const snap = await firestore.collection('systemMessages')
+      .where('active', '==', true)
+      .orderBy('createdAt', 'desc')
+      .limit(20)
+      .get();
+
+    const messages = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      // Nachricht gilt wenn: recipients='all' oder (recipients='users' und uid in recipientUsers)
+      if (d.recipients === 'all' || (d.recipients === 'users' && (d.recipientUsers || []).includes(uid))) {
+        messages.push({ id: doc.id, ...d });
+      }
+    });
+
+    if (!messages.length) { bannerEl.innerHTML = ''; return; }
+
+    const typeStyles = {
+      warning: { bg: 'rgba(245,124,0,0.10)', border: 'var(--color-warning,#f57c00)', icon: 'warning', iconColor: 'var(--color-warning,#f57c00)' },
+      error:   { bg: 'rgba(211,47,47,0.08)',  border: 'var(--color-error,#d32f2f)',   icon: 'error',   iconColor: 'var(--color-error,#d32f2f)'   },
+      info:    { bg: 'rgba(2,136,209,0.08)',   border: 'var(--color-primary)',         icon: 'info',    iconColor: 'var(--color-primary)'          },
+      success: { bg: 'rgba(46,125,50,0.08)',   border: 'var(--color-success,#2e7d32)', icon: 'check_circle', iconColor: 'var(--color-success,#2e7d32)' },
+    };
+
+    bannerEl.innerHTML = messages.map(msg => {
+      const s = typeStyles[msg.type] || typeStyles.info;
+      return `
+        <div data-sysmsg-id="${msg.id}" style="display:flex;align-items:flex-start;gap:10px;background:${s.bg};border-left:4px solid ${s.border};border-radius:6px;padding:10px 14px;margin-bottom:8px;flex-wrap:wrap;">
+          <span class="material-icons" style="font-size:20px;color:${s.iconColor};flex-shrink:0;margin-top:1px;">${s.icon}</span>
+          <div style="flex:1;min-width:0;">
+            ${msg.title ? `<div style="font-weight:700;margin-bottom:2px;">${escapeHtml(msg.title)}</div>` : ''}
+            <div style="font-size:0.88rem;color:var(--color-text);">${escapeHtml(msg.message || '')}</div>
+          </div>
+          <button data-dismiss-sysmsg="${msg.id}" style="background:none;border:none;cursor:pointer;padding:2px;flex-shrink:0;color:var(--color-text-muted);line-height:1;" title="Ausblenden">
+            <span class="material-icons" style="font-size:18px;">close</span>
+          </button>
+        </div>`;
+    }).join('');
+
+    bannerEl.querySelectorAll('[data-dismiss-sysmsg]').forEach(btn => {
+      btn.onclick = async () => {
+        const msgId = btn.dataset.dismissSysmsg;
+        try {
+          await firestore.collection('systemMessages').doc(msgId).update({ active: false });
+        } catch(e) { /* ignorieren falls keine Schreibrechte */ }
+        const msgEl = bannerEl.querySelector(`[data-sysmsg-id="${msgId}"]`);
+        if (msgEl) msgEl.remove();
+      };
+    });
+  } catch(e) {
+    console.warn('systemMessages-Banner konnte nicht geladen werden:', e);
+  }
 }
 
 /* ===================== USERS TAB ===================== */
@@ -380,7 +446,6 @@ async function _checkAutoCancelRequests() {
     const now = new Date();
     const cutoff = new Date(now.getTime() - fristMin * 60 * 1000);
 
-    // Alle vergangenen Events laden (startTime < cutoff)
     const evSnap = await firestore.collection('events')
       .where('startTime', '<', cutoff)
       .get();
@@ -389,7 +454,6 @@ async function _checkAutoCancelRequests() {
     const eventIds = [];
     evSnap.forEach(doc => eventIds.push(doc.id));
 
-    // In Chunks von 10 (Firestore 'in'-Limit)
     const chunks = [];
     for (let i = 0; i < eventIds.length; i += 10) chunks.push(eventIds.slice(i, i + 10));
 
@@ -404,7 +468,6 @@ async function _checkAutoCancelRequests() {
       await batch.commit();
     }
   } catch (e) {
-    // Nicht-kritisch: Fehler nur loggen, Tab trotzdem laden
     console.warn('_checkAutoCancelRequests fehlgeschlagen:', e);
   }
 }
@@ -427,6 +490,17 @@ async function renderScheduleTab(el) {
       if ((d.roles||[]).includes('teacher')) allTrainers.push({ id: doc.id, ...d });
     });
     window._allTrainers = allTrainers;
+
+    // IDs der Termine laden, für die eine aktive no_trainer_alert-Meldung existiert
+    const alertSnap = await firestore.collection('systemMessages')
+      .where('active', '==', true)
+      .where('_msgType', '==', 'no_trainer_alert')
+      .get();
+    const alertEventIds = new Set();
+    alertSnap.forEach(doc => {
+      const eid = doc.data()._eventId;
+      if (eid) alertEventIds.add(eid);
+    });
 
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
@@ -459,7 +533,7 @@ async function renderScheduleTab(el) {
     const delSelBtn    = el.querySelector('#sch-delete-selected');
 
     const renderView = () => scheduleViewMode === 'list'
-      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn)
+      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn, alertEventIds)
       : renderCalendarView(contentEl, events, groups, el);
 
     el.querySelector('#view-list').onclick = () => { scheduleViewMode='list'; el.querySelector('#view-list').classList.add('active'); el.querySelector('#view-calendar').classList.remove('active'); renderView(); };
@@ -591,7 +665,7 @@ async function confirmDeleteEvents(selectedIds, events, parentEl) {
 }
 
 /* ── Terminliste ──────────────────────────────────────────────────────────── */
-function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn) {
+function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn, alertEventIds = new Set()) {
   const selected = new Set();
 
   const updateBulk = () => {
@@ -683,17 +757,30 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     }
 
     visible.forEach(ev => {
-      const startDate = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
-      const isSkipped = ev.status === 'skipped';
+      const startDate  = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+      const isSkipped  = ev.status === 'skipped';
+      const hasAlert   = alertEventIds.has(ev.id);
       const row = document.createElement('tr');
+
       if (isSkipped) row.style.opacity = '0.6';
+      // Hervorheben wenn kein aktiver Betreuer gemeldet
+      if (hasAlert && !isSkipped) {
+        row.style.background = 'rgba(245,124,0,0.08)';
+        row.style.borderLeft = '3px solid var(--color-warning,#f57c00)';
+      }
+
+      const noTrainerBadge = hasAlert && !isSkipped
+        ? `<span class="chip chip-warning" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;"><span class="material-icons" style="font-size:12px;">warning</span>Kein Betreuer</span>`
+        : '';
+
       row.innerHTML = `
         <td><input type="checkbox" class="ev-check" data-id="${ev.id}" /></td>
         <td>
-          <div style="display:flex;align-items:center;gap:6px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             ${isSkipped ? '<span class="material-icons" style="font-size:14px;color:var(--color-error);" title="Ausgefallen">event_busy</span>' : ''}
             <span style="${isSkipped?'text-decoration:line-through;':''}">${ev.title||'(kein Titel)'}</span>
             ${ev.recurrenceId ? '<span class="chip" style="font-size:0.72rem;padding:1px 5px;">Reihe</span>' : ''}
+            ${noTrainerBadge}
           </div>
           ${isSkipped && ev.skipReason ? `<div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:2px;">Grund: ${ev.skipReason}</div>` : ''}
         </td>
