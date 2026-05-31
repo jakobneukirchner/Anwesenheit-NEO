@@ -116,7 +116,6 @@ async function renderAdminSystemTab(el) {
       </div>
     `;
 
-    // Branding
     el.querySelector('#as-save-branding').onclick = async () => {
       await firestore.collection('settings').doc('global').set({
         brandingTitle: document.getElementById('as-title').value.trim(),
@@ -127,7 +126,6 @@ async function renderAdminSystemTab(el) {
       showToast('Branding gespeichert.', 'success');
     };
 
-    // Auto-Refresh
     el.querySelector('#as-save-refresh').onclick = async () => {
       const seconds = parseInt(document.getElementById('as-auto-refresh').value) || 0;
       await firestore.collection('settings').doc('global').set(
@@ -144,7 +142,6 @@ async function renderAdminSystemTab(el) {
       showToast('Auto-Refresh gespeichert.', 'success');
     };
 
-    // Rate-Limit
     el.querySelector('#as-save-rl').onclick = async () => {
       await firestore.collection('settings').doc('global').set({
         rateLimitMaxActions:    parseInt(document.getElementById('as-rl-max').value) || 100,
@@ -153,7 +150,6 @@ async function renderAdminSystemTab(el) {
       showToast('Rate-Limit gespeichert.', 'success');
     };
 
-    // Auth
     el.querySelector('#as-save-auth').onclick = async () => {
       await firestore.collection('settings').doc('global').set({
         authAllowPassword: document.getElementById('as-allow-pw').checked
@@ -161,7 +157,6 @@ async function renderAdminSystemTab(el) {
       showToast('Auth-Einstellungen gespeichert.', 'success');
     };
 
-    // Aktuellen Status anzeigen
     const statusEl = document.getElementById('as-refresh-status');
     if (statusEl && autoRefreshVal > 0) {
       statusEl.textContent = `Aktuell aktiv – alle ${autoRefreshVal} Sekunden.`;
