@@ -1,1 +1,1 @@
-TRAINER_CONTENT
+// trainer-dashboard.js — patched via tool
