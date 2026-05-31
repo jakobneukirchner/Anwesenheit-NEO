@@ -22,24 +22,10 @@ async function loadTrainerDashboard() {
     const futureEnd = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
     const pastStart = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000);
 
-    // Auto-Cancel-Check: offene Anfragen prüfen bevor wir rendern
-    await _checkAutoCancelRequests();
-
-    // Keine Composite-Queries (kein Index nötig): nur einzelne where-Klauseln,
-    // Sortierung + zweite Filterbedingungen werden clientseitig erledigt.
-    const [asTrainerSnap, cancelledSnap, incomingTargetedSnap, mySentSnap] = await Promise.all([
+    const [asTrainerSnap, cancelledSnap] = await Promise.all([
       firestore.collection('events').where('trainers', 'array-contains', uid).get(),
-      firestore.collection('events').where('trainerCancellations', 'array-contains', uid).get(),
-      // Eingehende gezielte Anfragen (nur targetTrainerId-Filter)
-      firestore.collection('substitution_requests').where('targetTrainerId', '==', uid).get(),
-      // Meine gesendeten Anfragen (nur requesterId-Filter, Sortierung clientseitig)
-      firestore.collection('substitution_requests').where('requesterId', '==', uid).get()
+      firestore.collection('events').where('trainerCancellations', 'array-contains', uid).get()
     ]);
-
-    // Allgemeine Anfragen ohne Composite-Index
-    const generalSnap = await firestore.collection('substitution_requests')
-      .where('targetTrainerId', '==', null)
-      .get();
 
     const seen = new Set();
     const events = [];
@@ -61,39 +47,7 @@ async function loadTrainerDashboard() {
       .sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
 
     const untilText = formatDate(futureEnd);
-
-    // Vertretungsanfragen clientseitig filtern und sortieren
-    const incoming = [];
-    const seenReq = new Set();
-
-    // Gezielte eingehende: nur 'open'
-    incomingTargetedSnap.forEach(doc => {
-      const d = doc.data();
-      if (d.status === 'open' && !seenReq.has(doc.id)) {
-        seenReq.add(doc.id);
-        incoming.push({ id: doc.id, ...d });
-      }
-    });
-    // Allgemeine offene (nicht von mir)
-    generalSnap.forEach(doc => {
-      const d = doc.data();
-      if (d.status === 'open' && d.requesterId !== uid && !seenReq.has(doc.id)) {
-        seenReq.add(doc.id);
-        incoming.push({ id: doc.id, ...d });
-      }
-    });
-
-    // Meine gesendeten: clientseitig sortieren + auf 10 begrenzen
-    const mySent = [];
-    mySentSnap.forEach(doc => mySent.push({ id: doc.id, ...doc.data() }));
-    mySent.sort((a, b) => {
-      const ta = a.createdAt?.toMillis?.() || (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
-      const tb = b.createdAt?.toMillis?.() || (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
-      return tb - ta;
-    });
-    const mySentLimited = mySent.slice(0, 10);
-
-    const hasSubstRequests = incoming.length > 0 || mySentLimited.length > 0;
+    const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
     const newHtml = `
       <div id="trainer-list-view">
@@ -103,41 +57,19 @@ async function loadTrainerDashboard() {
         </div>
 
         <div class="tabs" style="margin-bottom:16px;">
-          <button class="tab-btn active" data-tab="upcoming">
+          <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
             <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">event</span>
             Kommende Termine
             <span class="chip chip-primary" style="margin-left:4px;">${upcoming.length}</span>
           </button>
-          <button class="tab-btn" data-tab="past">
+          <button class="tab-btn${activeTab === 'past' ? ' active' : ''}" data-tab="past">
             <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">history</span>
             Vergangene Termine
           </button>
         </div>
 
-        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"></div>
-
-        <div id="trainer-section-divider" style="display:flex;align-items:center;gap:12px;margin:28px 0 16px;">
-          <div style="flex:1;height:1px;background:var(--color-border);"></div>
-          <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-muted);white-space:nowrap;">
-            <span class="material-icons" style="font-size:15px;">history</span>
-            Vergangene Termine
-          </span>
-          <div style="flex:1;height:1px;background:var(--color-border);"></div>
-        </div>
-
-        <div id="trainer-overview-past" style="display:flex;flex-direction:column;gap:12px;"></div>
-
-        ${hasSubstRequests ? `
-        <div style="display:flex;align-items:center;gap:12px;margin:28px 0 16px;">
-          <div style="flex:1;height:1px;background:var(--color-border);"></div>
-          <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--color-text-muted);white-space:nowrap;">
-            <span class="material-icons" style="font-size:15px;">swap_horiz</span>
-            Vertretungsanfragen
-          </span>
-          <div style="flex:1;height:1px;background:var(--color-border);"></div>
-        </div>
-        <div id="trainer-substitution-section"></div>
-        ` : ''}
+        <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
+        <div id="trainer-overview-past"     style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'past'     ? ' hidden' : ''}></div>
       </div>
     `;
 
@@ -149,9 +81,8 @@ async function loadTrainerDashboard() {
       btn.onclick = () => {
         container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        const targetId = btn.dataset.tab === 'past' ? 'trainer-section-divider' : 'trainer-overview-upcoming';
-        const targetEl = document.getElementById(targetId);
-        if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('trainer-overview-upcoming').hidden = btn.dataset.tab !== 'upcoming';
+        document.getElementById('trainer-overview-past').hidden     = btn.dataset.tab !== 'past';
       };
     });
 
@@ -164,10 +95,6 @@ async function loadTrainerDashboard() {
     for (const ev of upcoming) upEl.appendChild(await renderTrainerOverviewCard(ev, false));
     for (const ev of past)     paEl.appendChild(await renderTrainerOverviewCard(ev, true));
 
-    if (hasSubstRequests) {
-      renderSubstitutionSection(document.getElementById('trainer-substitution-section'), incoming, mySentLimited, uid);
-    }
-
   } catch (e) {
     console.error(e);
     if (!window._silentRefresh) {
@@ -176,163 +103,11 @@ async function loadTrainerDashboard() {
   }
 }
 
-/* ===================== VERTRETUNGSANFRAGEN-SEKTION ===================== */
-
-function renderSubstitutionSection(el, incoming, mySent, myUid) {
-  let html = '';
-
-  if (incoming.length) {
-    html += `<div style="font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:6px;color:var(--color-text-muted);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.04em;">
-      <span class="material-icons" style="font-size:16px;">inbox</span>Eingehend
-    </div>`;
-    html += incoming.map(req => {
-      const d = req.eventDate?.toDate?.();
-      const isGeneral = !req.targetTrainerId;
-      return `
-        <div class="card" style="margin-bottom:10px;border-left:3px solid var(--color-warning);" data-req-id="${req.id}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
-            <div>
-              <div style="font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
-                <span class="material-icons" style="font-size:16px;color:var(--color-warning);">swap_horiz</span>
-                ${req.eventGroupName || 'Gruppe'}
-                ${isGeneral ? `<span class="chip chip-warning" style="font-size:0.72rem;">Allgemeine Anfrage</span>` : ''}
-              </div>
-              <div class="text-muted" style="font-size:0.88rem;">
-                📅 ${d ? formatDate(d) : '–'}
-                ${req.note ? ` · <em>"${escapeHtml(req.note)}"</em>` : ''}
-              </div>
-              <div class="text-muted" style="font-size:0.82rem;margin-top:3px;">Von: ${escapeHtml(req.requesterName || '–')}</div>
-            </div>
-            <div style="display:flex;gap:8px;flex-shrink:0;">
-              <button class="btn-danger" data-action="decline-req" data-req-id="${req.id}" style="padding:6px 12px;font-size:0.85rem;">Ablehnen</button>
-              <button class="btn-primary" data-action="accept-req" data-req-id="${req.id}" data-event-id="${req.eventId}" style="padding:6px 12px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
-                <span class="material-icons" style="font-size:15px;">check</span>Annehmen & öffnen
-              </button>
-            </div>
-          </div>
-        </div>`;
-    }).join('');
-  }
-
-  const relevantSent = mySent.filter(r => r.requesterId === myUid);
-  if (relevantSent.length) {
-    html += `<div style="font-weight:600;margin:14px 0 10px;display:flex;align-items:center;gap:6px;color:var(--color-text-muted);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.04em;">
-      <span class="material-icons" style="font-size:16px;">outbox</span>Meine Anfragen
-    </div>`;
-    html += relevantSent.map(req => {
-      const d = req.eventDate?.toDate?.();
-      const statusMap = {
-        open:      { label: 'Offen – warte auf Rückmeldung', cls: 'chip-warning', icon: 'hourglass_empty' },
-        accepted:  { label: `Angenommen${req.acceptedByName ? ' von ' + req.acceptedByName : ''}`, cls: 'chip-success', icon: 'check_circle' },
-        cancelled: { label: 'Termin abgesagt', cls: 'chip-error', icon: 'cancel' },
-        declined:  { label: 'Abgelehnt', cls: 'chip-error', icon: 'cancel' },
-      };
-      const s = statusMap[req.status] || { label: req.status, cls: '', icon: 'info' };
-      return `
-        <div class="card" style="margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-            <div>
-              <div style="font-weight:600;margin-bottom:4px;">${req.eventGroupName || 'Gruppe'}</div>
-              <div class="text-muted" style="font-size:0.88rem;">📅 ${d ? formatDate(d) : '–'}</div>
-            </div>
-            <span class="chip ${s.cls}" style="display:inline-flex;align-items:center;gap:4px;">
-              <span class="material-icons" style="font-size:14px;">${s.icon}</span>${s.label}
-            </span>
-          </div>
-        </div>`;
-    }).join('');
-  }
-
-  el.innerHTML = html || '<div class="card"><p class="text-muted" style="margin:0;">Keine Vertretungsanfragen.</p></div>';
-
-  // Events binden
-  el.querySelectorAll('[data-action="accept-req"]').forEach(btn => {
-    btn.onclick = () => _acceptSubstitutionRequest(btn.dataset.reqId, btn.dataset.eventId);
-  });
-  el.querySelectorAll('[data-action="decline-req"]').forEach(btn => {
-    btn.onclick = () => _declineSubstitutionRequest(btn.dataset.reqId);
-  });
-}
-
-async function _acceptSubstitutionRequest(reqId, eventId) {
-  const myUid  = window.currentUser?.firebaseUser?.uid;
-  const myName = window.currentUser?.profile?.displayName || 'Trainer';
-  showModal({
-    title: 'Vertretung annehmen',
-    body: `<p>Möchtest du diese Vertretung übernehmen? Der Termin wird direkt geöffnet.</p>`,
-    confirmLabel: 'Annehmen',
-    onConfirm: async () => {
-      try {
-        const batch = firestore.batch();
-        const reqRef = firestore.collection('substitution_requests').doc(reqId);
-        batch.update(reqRef, {
-          status: 'accepted',
-          resolution: 'trainer_found',
-          acceptedById: myUid,
-          acceptedByName: myName,
-          resolvedAt: new Date()
-        });
-        const reqDoc = await reqRef.get();
-        const req = reqDoc.data();
-        const evRef = firestore.collection('events').doc(req.eventId || eventId);
-        batch.update(evRef, {
-          substitutionStatus: 'filled',
-          substitutionTrainerId: myUid
-        });
-        await batch.commit();
-        await _sendSubstitutionMessage(req, 'accepted', myName);
-        showToast('Vertretung angenommen.', 'success');
-        openTrainerDetailPage(req.eventId || eventId);
-      } catch (err) {
-        showToast('Fehler: ' + err.message, 'error');
-      }
-    }
-  });
-}
-
-async function _declineSubstitutionRequest(reqId) {
-  showModal({
-    title: 'Anfrage ablehnen',
-    body: `<p>Möchtest du diese Vertretungsanfrage ablehnen? Sie wird dann als <strong>allgemeine Anfrage</strong> an alle Koordinatoren weitergeleitet.</p>`,
-    confirmLabel: 'Ablehnen',
-    onConfirm: async () => {
-      try {
-        const reqRef = firestore.collection('substitution_requests').doc(reqId);
-        const reqDoc = await reqRef.get();
-        const req = reqDoc.data();
-        await reqRef.update({ status: 'declined' });
-        if (req.targetTrainerId) {
-          await firestore.collection('substitution_requests').add({
-            ...req,
-            targetTrainerId: null,
-            targetTrainerName: null,
-            status: 'open',
-            autoCancelNotified: false,
-            createdAt: new Date()
-          });
-          await _sendSubstitutionMessage(req, 'declined_to_general');
-        }
-        showToast('Anfrage abgelehnt. Wurde als allgemeine Anfrage weitergeleitet.', 'info');
-        loadTrainerDashboard();
-      } catch (err) {
-        showToast('Fehler: ' + err.message, 'error');
-      }
-    }
-  });
-}
-
-/* ===================== OVERVIEW CARD ===================== */
-
 async function renderTrainerOverviewCard(event, isPast) {
   const card = createElement('div', 'card');
   card.style.marginBottom = '0';
   if (event.status === 'skipped')   card.style.borderLeft = '4px solid var(--color-warning)';
   if (event.status === 'cancelled') card.style.borderLeft = '4px solid var(--color-error)';
-
-  if (event.substitutionStatus === 'requested') {
-    card.style.borderLeft = '4px solid var(--color-notification)';
-    card.style.background = 'color-mix(in oklch, var(--color-notification) 6%, var(--color-surface))';
-  }
 
   const start = event.startTime?.toDate?.();
   const end   = event.endTime?.toDate?.();
@@ -349,10 +124,6 @@ async function renderTrainerOverviewCard(event, isPast) {
   const activeLabel = event.status === 'cancelled' ? 'Abgesagt' : event.status === 'skipped' ? 'Ausgefallen' : 'Aktiv';
   const activeClass = event.status === 'cancelled' ? 'chip-error' : event.status === 'skipped' ? 'chip-warning' : 'chip-success';
 
-  const substBadge = event.substitutionStatus === 'requested'
-    ? `<span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">swap_horiz</span>Vertretung gesucht</span>`
-    : '';
-
   card.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
       <div style="min-width:0;flex:1;">
@@ -361,7 +132,6 @@ async function renderTrainerOverviewCard(event, isPast) {
         <div class="text-muted" style="font-size:0.92rem;">${registered} / ${total} Teilnehmer angemeldet${isPast ? ` · ${present} anwesend` : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-        ${substBadge}
         ${needsBadge ? `<span class="chip chip-warning" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span>Noch ${missing} Person${missing === 1 ? '' : 'en'} benötigt</span>` : ''}
         <span class="chip ${activeClass}" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">${event.status === 'cancelled' ? 'cancel' : 'check_circle'}</span>${activeLabel}</span>
         <button class="btn-primary" data-open-detail="${event.id}" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
@@ -383,6 +153,9 @@ function openTrainerDetailPage(eventId) {
   });
 }
 
+/**
+ * Gibt einen lesbaren Label + CSS-Klasse für einen Anwesenheitsstatus zurück.
+ */
 function getAttendanceStatusChip(status) {
   const map = {
     registered:            { label: 'Angemeldet',             cls: 'chip-primary'  },
@@ -408,22 +181,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const event = { id: eventDoc.id, ...eventDoc.data() };
     const start = event.startTime?.toDate?.();
     const end   = event.endTime?.toDate?.();
-
-    const myUid = window.currentUser?.firebaseUser?.uid;
-
-    // Offene eigene Anfrage für diesen Termin: nur eventId+status filtern (kein Index nötig)
-    // requesterId wird clientseitig geprüft
-    let myOpenRequest = null;
-    const myReqSnap = await firestore.collection('substitution_requests')
-      .where('eventId', '==', eventId)
-      .where('status', '==', 'open')
-      .get();
-    myReqSnap.forEach(doc => {
-      const d = doc.data();
-      if (d.requesterId === myUid && !myOpenRequest) {
-        myOpenRequest = { id: doc.id, ...d };
-      }
-    });
 
     const attSnap = await firestore.collection('eventAttendance').where('eventId', '==', event.id).get();
     const attendances = [];
@@ -464,23 +221,11 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <div style="color:var(--color-text);">${escapeHtml(location)}</div>
       </div>` : '';
 
+    const myUid = window.currentUser?.firebaseUser?.uid;
     const iAmCancelled = (event.trainerCancellations || []).includes(myUid);
     const iAmTrainer   = trainerUids.has(myUid);
     const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
     const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
-
-    // "Vertretung anfragen"-Button: nur sichtbar wenn abgemeldet und noch keine offene Anfrage
-    const showSubstBtn = iAmTrainer && iAmCancelled && !myOpenRequest;
-
-    const substBanner = myOpenRequest ? `
-      <div id="subst-banner" style="background:color-mix(in oklch,var(--color-warning) 10%,var(--color-surface));border:1px solid var(--color-warning);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-        <span style="display:inline-flex;align-items:center;gap:8px;font-size:0.9rem;color:var(--color-warning);">
-          <span class="material-icons" style="font-size:18px;">warning</span>
-          <strong>Offene Vertretungsanfrage:</strong> Für diesen Termin wartest du noch auf eine Vertretung.
-          ${myOpenRequest.targetTrainerName ? `Angefragt: <strong>${escapeHtml(myOpenRequest.targetTrainerName)}</strong>` : 'Allgemeine Anfrage an Koordinatoren.'}
-        </span>
-        <button class="btn-secondary" id="subst-banner-close" style="padding:4px 10px;font-size:0.82rem;">Schließen</button>
-      </div>` : '';
 
     container.innerHTML = `
       <style>
@@ -502,11 +247,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         .member-note-icon:hover, .member-note-icon:focus {
           background: var(--color-primary-highlight); outline: none;
         }
-        .member-late-reason-icon {
-          display: inline-flex; align-items: center; gap: 4px;
-          cursor: pointer; color: var(--color-warning, #e65100);
-          font-size: 0.82rem; vertical-align: middle;
-        }
       </style>
 
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;">
@@ -520,8 +260,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           </div>
         </div>
       </div>
-
-      ${substBanner}
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
         ${renderTrainerStatCard('Datum & Zeit', `${start ? formatDate(start) : '–'}, ${start ? formatTime(start) : ''}${end ? ' - ' + formatTime(end) : ''}`)}
@@ -592,10 +330,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <th>Status</th>
               <th>Schnell-Check</th>
               <th>Detailstatus</th>
+              <th>Versp.-Grund</th>
               <th>Interne Notiz</th>
               <th>Notiz an Mitglied</th>
               <th>Hinweis v. Mitglied</th>
-              <th>Versp.-Grund</th>
               <th></th>
             </tr>
           </thead>
@@ -624,12 +362,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <span class="material-icons" style="font-size:16px;">${iAmCancelled ? 'event_available' : 'event_busy'}</span>
               ${iAmCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden'}
             </button>
-            ${showSubstBtn ? `
-            <button class="btn-secondary" id="trainer-ask-subst-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
-              <span class="material-icons" style="font-size:16px;">swap_horiz</span>
-              Vertretung anfragen
-            </button>
-            ` : ''}
             <button class="btn-secondary" id="trainer-cancel-event-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">cancel</span>Termin absagen
             </button>
@@ -643,14 +375,9 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     `;
 
     document.getElementById('trainer-back-btn').onclick = () => {
-      const tip = container.querySelector('.member-note-tooltip-popup');
-      if (tip) tip.remove();
       if (options.backFn) options.backFn();
       else loadTrainerDashboard();
     };
-
-    const substBannerClose = document.getElementById('subst-banner-close');
-    if (substBannerClose) substBannerClose.onclick = () => document.getElementById('subst-banner')?.remove();
 
     document.getElementById('trainer-save-broadcast').onclick = async () => {
       const btn = document.getElementById('trainer-save-broadcast');
@@ -703,12 +430,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       document.getElementById('trainer-cancel-event-btn').onclick = () => _cancelEvent(event, container, options);
       document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateMinutes, myLateNote, container, options);
 
-      // Standalone "Vertretung anfragen"-Button (nur wenn abgemeldet + noch keine offene Anfrage)
-      const askSubstBtn = document.getElementById('trainer-ask-subst-btn');
-      if (askSubstBtn) {
-        askSubstBtn.onclick = () => _askSubstitutionRequest(event, myUid, '', container, options);
-      }
-
       const revokeBtn = document.getElementById('trainer-revoke-late-btn');
       if (revokeBtn) revokeBtn.onclick = () => {
         showModal({
@@ -732,9 +453,13 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     }
 
     // Tooltip
-    let tooltipEl = document.createElement('div');
-    tooltipEl.className = 'member-note-tooltip-popup';
-    container.appendChild(tooltipEl);
+    let tooltipEl = document.getElementById('trainer-member-note-tooltip');
+    if (!tooltipEl) {
+      tooltipEl = document.createElement('div');
+      tooltipEl.id = 'trainer-member-note-tooltip';
+      tooltipEl.className = 'member-note-tooltip-popup';
+      document.body.appendChild(tooltipEl);
+    }
     let tooltipHideTimer = null;
 
     function showMemberNoteTooltip(anchorEl, noteText) {
@@ -776,20 +501,20 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         ? `<span class="member-note-icon" tabindex="0" data-note="${escapeHtml(att.memberNote)}" title="Hinweis anzeigen"><span class="material-icons" style="font-size:16px;">sticky_note_2</span></span>`
         : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>';
 
-      const isLateStatus = ['late_excused', 'late_unexcused'].includes(att.status);
-      const lateReasonHtml = isLateStatus && att.memberLateReason
-        ? `<span class="member-late-reason-icon" tabindex="0" title="Verspätungsgrund: ${escapeHtml(att.memberLateReason)}">
-            <span class="material-icons" style="font-size:16px;">schedule</span>
-            ${escapeHtml(att.memberLateReason)}
-          </span>`
-        : (isLateStatus
-            ? '<span style="color:var(--color-text-faint);font-size:0.8rem;">kein Grund</span>'
-            : '<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>');
-
       const statusChip = getAttendanceStatusChip(att.status);
       const setterHint = att.trainerSet
         ? `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">vom Betreuer</div>`
         : `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">selbst</div>`;
+
+      // Verspätungsgrund-Spalte
+      const isLate = ['late_excused','late_unexcused'].includes(att.status);
+      const lateReasonHtml = isLate
+        ? (att.lateReason
+            ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:0.82rem;color:var(--color-warning);" title="${escapeHtml(att.lateReason)}">
+                <span class="material-icons" style="font-size:14px;">schedule</span>${escapeHtml(att.lateReason)}
+               </span>`
+            : `<span style="font-size:0.8rem;color:var(--color-text-faint);">kein Grund</span>`)
+        : `<span style="color:var(--color-text-faint);font-size:0.8rem;">–</span>`;
 
       tr.innerHTML = `
         <td style="font-weight:500;">${u.displayName || u.email || att.userId}</td>
@@ -806,10 +531,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             ${statusOptions.map(([v,l]) => `<option value="${v}"${att.status === v ? ' selected' : ''}>${l}</option>`).join('')}
           </select>
         </td>
+        <td>${lateReasonHtml}</td>
         <td><input type="text" class="trainer-internal-note" value="${escapeHtml(att.trainerNoteInternal || '')}" placeholder="Interne Notiz…" style="width:120px;" /></td>
         <td><input type="text" class="trainer-member-note" value="${escapeHtml(att.trainerNoteMember || '')}" placeholder="Notiz an Mitglied…" style="width:130px;" /></td>
         <td>${noteIconHtml}</td>
-        <td>${lateReasonHtml}</td>
         <td></td>
       `;
 
@@ -830,18 +555,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           noteIcon.addEventListener('focus',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
           noteIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
           noteIcon.addEventListener('click',      () => showMemberNoteTooltip(noteIcon, att.memberNote));
-        }
-      }
-
-      if (isLateStatus && att.memberLateReason) {
-        const lateIcon = tr.querySelector('.member-late-reason-icon');
-        if (lateIcon) {
-          const tipText = `Verspätungsgrund: ${att.memberLateReason}`;
-          lateIcon.addEventListener('mouseenter', () => showMemberNoteTooltip(lateIcon, tipText));
-          lateIcon.addEventListener('mouseleave', () => hideMemberNoteTooltip());
-          lateIcon.addEventListener('focus',      () => showMemberNoteTooltip(lateIcon, tipText));
-          lateIcon.addEventListener('blur',       () => hideMemberNoteTooltip());
-          lateIcon.addEventListener('click',      () => showMemberNoteTooltip(lateIcon, tipText));
         }
       }
 
@@ -877,312 +590,33 @@ function renderTrainerNeedCard(needed, minReached) {
   </div>`;
 }
 
-/* ===================== ABMELDE-FLOW + VERTRETUNGSANFRAGE ===================== */
-
 function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
-  if (iAmCancelled) {
-    showModal({
-      title: 'Wieder einplanen',
-      body: `<p>Möchtest du dich wieder als ${getRoleLabel('teacher')} für diesen Termin einplanen?</p>`,
-      confirmLabel: 'Wieder einplanen',
-      onConfirm: async () => {
-        try {
+  showModal({
+    title: iAmCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden',
+    body: iAmCancelled
+      ? `<p>Möchtest du dich wieder als ${getRoleLabel('teacher')} für diesen Termin einplanen?</p>`
+      : `<p>Möchtest du dich als ${getRoleLabel('teacher')} von diesem Termin abmelden?</p>`,
+    confirmLabel: iAmCancelled ? 'Wieder einplanen' : 'Abmelden',
+    onConfirm: async () => {
+      try {
+        if (iAmCancelled) {
           await firestore.collection('events').doc(event.id).update({
             trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid)
           });
-          // Eigene offene Anfragen für diesen Termin stornieren (clientseitig gefiltert)
-          const openSnap = await firestore.collection('substitution_requests')
-            .where('eventId', '==', event.id)
-            .where('status', '==', 'open')
-            .get();
-          const batch = firestore.batch();
-          let found = false;
-          openSnap.forEach(doc => {
-            if (doc.data().requesterId === myUid) {
-              batch.update(doc.ref, { status: 'cancelled', resolution: 'trainer_found', resolvedAt: new Date() });
-              found = true;
-            }
-          });
-          if (found) {
-            await batch.commit();
-            await firestore.collection('events').doc(event.id).update({ substitutionStatus: 'none', substitutionTrainerId: null });
-          }
           showToast('Wieder eingeplant.', 'success');
-          await renderTrainerDetailView(event.id, container, options);
-        } catch (err) {
-          showToast('Fehler: ' + err.message, 'error');
+        } else {
+          await firestore.collection('events').doc(event.id).update({
+            trainerCancellations: firebase.firestore.FieldValue.arrayUnion(myUid)
+          });
+          showToast('Als Betreuer abgemeldet.', 'success');
         }
-      }
-    });
-    return;
-  }
-
-  showModal({
-    title: 'Als Betreuer abmelden',
-    body: `
-      <p>Möchtest du dich als ${getRoleLabel('teacher')} von diesem Termin abmelden?</p>
-      <label style="margin-top:8px;">Begründung (optional, für Koordinatoren sichtbar)</label>
-      <input type="text" id="self-cancel-reason" placeholder="z.B. Bin krank" />
-    `,
-    confirmLabel: 'Abmelden',
-    onConfirm: async () => {
-      const reason = document.getElementById('self-cancel-reason')?.value.trim() || '';
-      try {
-        await firestore.collection('events').doc(event.id).update({
-          trainerCancellations: firebase.firestore.FieldValue.arrayUnion(myUid)
-        });
-        showToast('Als Betreuer abgemeldet.', 'success');
-        // BUGFIX: View erst neu laden (damit iAmCancelled + showSubstBtn aktuell sind),
-        // dann Vertretungs-Dialog öffnen
         await renderTrainerDetailView(event.id, container, options);
-        await _askSubstitutionRequest(event, myUid, reason, container, options);
       } catch (err) {
         showToast('Fehler: ' + err.message, 'error');
       }
     }
   });
 }
-
-async function _askSubstitutionRequest(event, myUid, cancelReason, container, options) {
-  let allTrainers = [];
-  try {
-    const snap = await firestore.collection('users').where('roles', 'array-contains', 'teacher').get();
-    snap.forEach(doc => {
-      const d = doc.data();
-      if (doc.id !== myUid) allTrainers.push({ id: doc.id, ...d });
-    });
-  } catch (e) { /* ignore */ }
-
-  const trainerOptions = allTrainers.map(t =>
-    `<option value="${t.id}">${escapeHtml(t.displayName || t.email || t.id)}</option>`
-  ).join('');
-
-  showModal({
-    title: 'Vertretung anfragen?',
-    body: `
-      <p style="margin-bottom:14px;">Möchtest du eine Vertretung für diesen Termin anfragen?</p>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:10px;border:1px solid var(--color-border);border-radius:8px;" id="subst-option-targeted-label">
-          <input type="radio" name="subst-type" value="targeted" style="margin-top:3px;" />
-          <div>
-            <div style="font-weight:600;">Gezielt anfragen</div>
-            <div class="text-muted" style="font-size:0.85rem;">Eine bestimmte Person anfragen</div>
-          </div>
-        </label>
-        <div id="subst-trainer-select-wrap" style="display:none;padding:0 4px;">
-          <label>Person auswählen</label>
-          <select id="subst-trainer-select" style="width:100%;">
-            <option value="">– Trainer wählen –</option>
-            ${trainerOptions}
-          </select>
-        </div>
-        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:10px;border:1px solid var(--color-border);border-radius:8px;" id="subst-option-general-label">
-          <input type="radio" name="subst-type" value="general" style="margin-top:3px;" />
-          <div>
-            <div style="font-weight:600;">Allgemeine Anfrage</div>
-            <div class="text-muted" style="font-size:0.85rem;">Koordinatoren werden benachrichtigt und suchen eine Lösung</div>
-          </div>
-        </label>
-        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:10px;border:1px solid var(--color-border);border-radius:8px;">
-          <input type="radio" name="subst-type" value="none" checked style="margin-top:3px;" />
-          <div>
-            <div style="font-weight:600;">Keine Vertretung nötig</div>
-            <div class="text-muted" style="font-size:0.85rem;">Kein Handlungsbedarf</div>
-          </div>
-        </label>
-        <div>
-          <label style="margin-top:4px;">Notiz (optional)</label>
-          <input type="text" id="subst-note" placeholder="z.B. ${escapeHtml(cancelReason || 'Bin verhindert')}" value="${escapeHtml(cancelReason)}" />
-        </div>
-      </div>
-    `,
-    confirmLabel: 'Senden',
-    onConfirm: async () => {
-      const type = document.querySelector('input[name="subst-type"]:checked')?.value || 'none';
-      const note = document.getElementById('subst-note')?.value.trim() || '';
-
-      if (type === 'none') {
-        await renderTrainerDetailView(event.id, container, options);
-        return;
-      }
-
-      const targetId   = type === 'targeted' ? (document.getElementById('subst-trainer-select')?.value || null) : null;
-      const targetUser = targetId ? allTrainers.find(t => t.id === targetId) : null;
-
-      if (type === 'targeted' && !targetId) {
-        showToast('Bitte einen Trainer auswählen.', 'warning');
-        return false;
-      }
-
-      const myName = window.currentUser?.profile?.displayName || 'Trainer';
-      const deadline = window.appSettings?.registrationDeadlineMinutes ?? 60;
-      const eventDate = event.startTime?.toDate?.() || new Date();
-      const autoCancelAt = new Date(eventDate.getTime() - 2 * deadline * 60 * 1000);
-
-      const reqData = {
-        eventId: event.id,
-        eventDate: eventDate,
-        eventGroupId: event.groupId || null,
-        eventGroupName: event.groupName || event.title || 'Termin',
-        requesterId: myUid,
-        requesterName: myName,
-        targetTrainerId: targetId || null,
-        targetTrainerName: targetUser?.displayName || targetUser?.email || null,
-        note: note,
-        status: 'open',
-        resolution: null,
-        acceptedById: null,
-        acceptedByName: null,
-        resolvedAt: null,
-        autoCancelAt: autoCancelAt,
-        autoCancelNotified: false,
-        createdAt: new Date()
-      };
-
-      try {
-        const reqRef = await firestore.collection('substitution_requests').add(reqData);
-        await firestore.collection('events').doc(event.id).update({
-          substitutionStatus: 'requested',
-          substitutionTrainerId: null
-        });
-        await _sendSubstitutionMessage({ ...reqData, id: reqRef.id }, 'created', null);
-        showToast(
-          type === 'targeted'
-            ? `Anfrage an ${targetUser?.displayName || 'Trainer'} gesendet.`
-            : 'Allgemeine Anfrage an Koordinatoren gesendet.',
-          'success'
-        );
-        await renderTrainerDetailView(event.id, container, options);
-      } catch (err) {
-        showToast('Fehler: ' + err.message, 'error');
-        return false;
-      }
-    }
-  });
-
-  setTimeout(() => {
-    document.querySelectorAll('input[name="subst-type"]').forEach(radio => {
-      radio.addEventListener('change', () => {
-        const wrap = document.getElementById('subst-trainer-select-wrap');
-        if (wrap) wrap.style.display = radio.value === 'targeted' ? 'block' : 'none';
-      });
-    });
-  }, 50);
-}
-
-/* ===================== SYSTEM-MESSAGES HELFER ===================== */
-
-async function _sendSubstitutionMessage(req, type, actorName) {
-  try {
-    const coordsSnap = await firestore.collection('users').where('roles', 'array-contains', 'coordinator').get();
-    const coordIds = [];
-    coordsSnap.forEach(doc => coordIds.push(doc.id));
-
-    const dateStr = req.eventDate?.toDate
-      ? formatDate(req.eventDate.toDate())
-      : (req.eventDate ? formatDate(new Date(req.eventDate)) : '–');
-
-    const messages = [];
-
-    if (type === 'created') {
-      const text = req.targetTrainerId
-        ? `Vertretungsanfrage: ${req.requesterName} hat sich vom Termin "${req.eventGroupName}" am ${dateStr} abgemeldet und ${req.targetTrainerName} als Vertretung angefragt.`
-        : `Vertretungsanfrage: ${req.requesterName} hat sich vom Termin "${req.eventGroupName}" am ${dateStr} abgemeldet und sucht eine Vertretung.`;
-      for (const cid of coordIds) {
-        messages.push({ recipientId: cid, text, type: 'substitution_request', linkedRequestId: req.id, expiresWhen: 'substitution_resolved', createdAt: new Date(), read: false });
-      }
-      if (req.targetTrainerId) {
-        messages.push({
-          recipientId: req.targetTrainerId,
-          text: `${req.requesterName} bittet dich um Vertretung für "${req.eventGroupName}" am ${dateStr}.${req.note ? ' Notiz: ' + req.note : ''}`,
-          type: 'substitution_request', linkedRequestId: req.id, expiresWhen: 'substitution_resolved', createdAt: new Date(), read: false
-        });
-      }
-    } else if (type === 'accepted') {
-      messages.push({
-        recipientId: req.requesterId,
-        text: `${actorName} hat deine Vertretungsanfrage für "${req.eventGroupName}" am ${dateStr} angenommen.`,
-        type: 'substitution_accepted', linkedRequestId: req.id, createdAt: new Date(), read: false
-      });
-      for (const cid of coordIds) {
-        messages.push({ recipientId: cid, text: `${actorName} übernimmt die Vertretung für "${req.eventGroupName}" am ${dateStr} (angefragt von ${req.requesterName}).`, type: 'substitution_accepted', linkedRequestId: req.id, createdAt: new Date(), read: false });
-      }
-    } else if (type === 'declined_to_general') {
-      for (const cid of coordIds) {
-        messages.push({ recipientId: cid, text: `Gezielte Vertretungsanfrage für "${req.eventGroupName}" am ${dateStr} wurde abgelehnt. Bitte eine Lösung finden.`, type: 'substitution_request', linkedRequestId: req.id, expiresWhen: 'substitution_resolved', createdAt: new Date(), read: false });
-      }
-    } else if (type === 'auto_cancelled') {
-      messages.push({
-        recipientId: req.requesterId,
-        text: `Der Termin "${req.eventGroupName}" am ${dateStr} wurde automatisch abgesagt, da keine Vertretung gefunden wurde.`,
-        type: 'substitution_auto_cancelled', linkedRequestId: req.id, createdAt: new Date(), read: false
-      });
-      for (const cid of coordIds) {
-        messages.push({ recipientId: cid, text: `Termin "${req.eventGroupName}" am ${dateStr} automatisch abgesagt (keine Vertretung, Anmeldefrist abgelaufen).`, type: 'substitution_auto_cancelled', linkedRequestId: req.id, createdAt: new Date(), read: false });
-      }
-      if (req.eventGroupId) {
-        const gDoc = await firestore.collection('groups').doc(req.eventGroupId).get();
-        const memberIds = gDoc.exists ? (gDoc.data().members || []) : [];
-        for (const mid of memberIds) {
-          messages.push({ recipientId: mid, text: `Der Termin "${req.eventGroupName}" am ${dateStr} fällt aus – keine Vertretung gefunden.`, type: 'event_cancelled', linkedRequestId: req.id, createdAt: new Date(), read: false });
-        }
-      }
-    }
-
-    const batch = firestore.batch();
-    for (const msg of messages) {
-      batch.set(firestore.collection('system_messages').doc(), msg);
-    }
-    await batch.commit();
-  } catch (e) {
-    console.error('_sendSubstitutionMessage error:', e);
-  }
-}
-
-/* ===================== AUTO-CANCEL CHECK ===================== */
-
-async function _checkAutoCancelRequests() {
-  try {
-    const now = new Date();
-    // Nur ein einziges where() → kein Composite-Index nötig
-    // autoCancelNotified wird clientseitig gefiltert
-    const snap = await firestore.collection('substitution_requests')
-      .where('status', '==', 'open')
-      .get();
-
-    const toCancel = [];
-    snap.forEach(doc => {
-      const d = doc.data();
-      // Clientseitiger Filter: autoCancelNotified === false
-      if (d.autoCancelNotified === true) return;
-      const cancelAt = d.autoCancelAt?.toDate?.();
-      if (cancelAt && now >= cancelAt) {
-        toCancel.push({ id: doc.id, ...d });
-      }
-    });
-
-    for (const req of toCancel) {
-      const batch = firestore.batch();
-      batch.update(firestore.collection('substitution_requests').doc(req.id), {
-        status: 'cancelled',
-        resolution: 'event_cancelled',
-        autoCancelNotified: true,
-        resolvedAt: now
-      });
-      batch.update(firestore.collection('events').doc(req.eventId), {
-        status: 'cancelled',
-        substitutionStatus: 'cancelled',
-        cancellationReason: 'Automatisch abgesagt – keine Vertretung gefunden.'
-      });
-      await batch.commit();
-      await _sendSubstitutionMessage(req, 'auto_cancelled', null);
-    }
-  } catch (e) {
-    console.error('_checkAutoCancelRequests error:', e);
-  }
-}
-
-/* ===================== BESTEHENDE AKTIONEN ===================== */
 
 function _cancelEvent(event, container, options) {
   showModal({
@@ -1201,3 +635,38 @@ function _cancelEvent(event, container, options) {
         });
         showToast('Termin abgesagt.', 'success');
         await renderTrainerDetailView(event.id, container, options);
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      }
+    }
+  });
+}
+
+function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, container, options) {
+  showModal({
+    title: currentLateMinutes ? 'Verspätung ändern' : 'Verspätung melden',
+    body: `
+      <p>Wie viele Minuten wirst du voraussichtlich zu spät sein?</p>
+      <label>Minuten</label>
+      <input type="number" id="late-minutes-input" min="1" max="120" value="${currentLateMinutes || 15}" style="width:100px;" />
+      <label style="margin-top:10px;">Begründung (optional, für Mitglieder sichtbar)</label>
+      <input type="text" id="late-note-input" placeholder="z.B. Zug hat Verspätung" value="${escapeHtml(currentLateNote || '')}" />
+    `,
+    confirmLabel: 'Speichern',
+    onConfirm: async () => {
+      const minutes = parseInt(document.getElementById('late-minutes-input')?.value || '0', 10);
+      const note    = document.getElementById('late-note-input')?.value.trim() || '';
+      if (!minutes || minutes < 1) { showToast('Bitte eine gültige Minutenzahl eingeben.', 'warning'); return; }
+      try {
+        await firestore.collection('events').doc(event.id).update({
+          [`trainerLateMinutes.${myUid}`]: minutes,
+          [`trainerLateNotes.${myUid}`]:   note || firebase.firestore.FieldValue.delete()
+        });
+        showToast(`Verspätung von ~${minutes} Min. gemeldet.`, 'success');
+        await renderTrainerDetailView(event.id, container, options);
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      }
+    }
+  });
+}
