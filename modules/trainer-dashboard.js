@@ -753,8 +753,9 @@ function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, c
 }
 
 /**
- * Sendet eine system_message an alle Koordinatoren/Admins,
+ * Sendet eine systemMessage an alle Koordinatoren/Admins,
  * dass ein Termin ohne aktiven Betreuer ist.
+ * Schreibt in die 'systemMessages'-Kollektion, damit der Banner es anzeigt.
  */
 async function _notifyCoordinatorNoTrainer(event) {
   const start = event.startTime?.toDate?.();
@@ -777,22 +778,26 @@ async function _notifyCoordinatorNoTrainer(event) {
       return;
     }
 
-    const batch = firestore.batch();
-    coordinators.forEach(coord => {
-      const ref = firestore.collection('system_messages').doc();
-      batch.set(ref, {
-        toUid:      coord.id,
-        fromUid:    window.currentUser?.firebaseUser?.uid || null,
-        type:       'no_trainer_alert',
-        eventId:    event.id,
-        eventTitle: event.title || '',
-        eventDate:  event.startTime || null,
-        message:    `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`,
-        read:       false,
-        createdAt:  firebase.firestore.FieldValue.serverTimestamp()
-      });
+    const coordUids = coordinators.map(c => c.id);
+    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
+
+    // Direkt in systemMessages schreiben – sichtbar im Banner für die Koordinatoren
+    await firestore.collection('systemMessages').add({
+      type:            'warning',
+      title:           'Kein Betreuer!',
+      message:         msgText,
+      recipients:      'users',
+      recipientUsers:  coordUids,
+      active:          true,
+      highlight:       true,
+      createdAt:       firebase.firestore.FieldValue.serverTimestamp(),
+      // Metadaten für spätere Nachverfolgung
+      _eventId:        event.id,
+      _eventTitle:     event.title || '',
+      _fromUid:        window.currentUser?.firebaseUser?.uid || null,
+      _msgType:        'no_trainer_alert'
     });
-    await batch.commit();
+
     showToast(`Koordinator${coordinators.length > 1 ? 'en' : ''} informiert.`, 'success');
   } catch (err) {
     showToast('Fehler beim Senden: ' + err.message, 'error');
@@ -801,7 +806,8 @@ async function _notifyCoordinatorNoTrainer(event) {
 
 /**
  * Öffnet einen Dialog, mit dem der Trainer JEDEN Betreuer (auch gruppenfremde)
- * als Vertretung benachrichtigen kann. Schreibt eine system_message in Firestore.
+ * als Vertretung benachrichtigen kann.
+ * Schreibt in die 'systemMessages'-Kollektion, damit der Banner es anzeigt.
  */
 async function _openReplacementModal(event, requestingUid) {
   const start = event.startTime?.toDate?.();
@@ -866,16 +872,21 @@ async function _openReplacementModal(event, requestingUid) {
         || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
-        await firestore.collection('system_messages').add({
-          toUid:     targetUid,
-          fromUid:   requestingUid,
-          type:      'replacement_request',
-          eventId:   event.id,
-          eventTitle: event.title || '',
-          eventDate: event.startTime || null,
-          message:   messageText,
-          read:      false,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        // In systemMessages schreiben – sichtbar im Banner für den angefragten Betreuer
+        await firestore.collection('systemMessages').add({
+          type:           'info',
+          title:          'Vertretungsanfrage',
+          message:        messageText,
+          recipients:     'users',
+          recipientUsers: [targetUid],
+          active:         true,
+          highlight:      true,
+          createdAt:      firebase.firestore.FieldValue.serverTimestamp(),
+          // Metadaten für spätere Nachverfolgung
+          _eventId:       event.id,
+          _eventTitle:    event.title || '',
+          _fromUid:       requestingUid,
+          _msgType:       'replacement_request'
         });
         showToast(`Anfrage an ${targetUser.displayName || 'Betreuer'} gesendet.`, 'success');
       } catch (err) {
