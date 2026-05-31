@@ -323,13 +323,14 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             </button>
           </div>
         </div>
-        <table style="width:100%;min-width:1050px;">
+        <table style="width:100%;min-width:1150px;">
           <thead>
             <tr>
               <th>Name</th>
               <th>Status</th>
               <th>Schnell-Check</th>
               <th>Detailstatus</th>
+              <th>Versp.-Grund</th>
               <th>Interne Notiz</th>
               <th>Notiz an Mitglied</th>
               <th>Hinweis v. Mitglied</th>
@@ -408,12 +409,19 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       try {
         const updates = [];
         document.getElementById('trainer-attendance-body').querySelectorAll('tr[data-att-id]').forEach(row => {
-          updates.push(firestore.collection('eventAttendance').doc(row.dataset.attId).update({
+          const lateReasonVal = row.querySelector('.trainer-late-reason')?.value.trim() || '';
+          const updatePayload = {
             status: row.querySelector('.trainer-status-select').value,
             trainerNoteInternal: row.querySelector('.trainer-internal-note').value.trim(),
             trainerNoteMember: row.querySelector('.trainer-member-note').value.trim(),
             trainerSet: true, trainerSetAt: new Date()
-          }));
+          };
+          if (lateReasonVal) {
+            updatePayload.lateReason = lateReasonVal;
+          } else {
+            updatePayload.lateReason = firebase.firestore.FieldValue.delete();
+          }
+          updates.push(firestore.collection('eventAttendance').doc(row.dataset.attId).update(updatePayload));
         });
         await Promise.all(updates);
         showToast('Anwesenheit gespeichert.', 'success');
@@ -491,6 +499,8 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       ['confirmation_pending','Ausst. Bestätigung']
     ];
 
+    const isLateStatus = s => s === 'late_excused' || s === 'late_unexcused';
+
     for (const att of memberAttendances) {
       const u = userMap[att.userId] || { displayName: att.userId };
       const tr = document.createElement('tr');
@@ -504,6 +514,8 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       const setterHint = att.trainerSet
         ? `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">vom Betreuer</div>`
         : `<div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:3px;">selbst</div>`;
+
+      const showLate = isLateStatus(att.status);
 
       tr.innerHTML = `
         <td style="font-weight:500;">${u.displayName || u.email || att.userId}</td>
@@ -520,6 +532,11 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             ${statusOptions.map(([v,l]) => `<option value="${v}"${att.status === v ? ' selected' : ''}>${l}</option>`).join('')}
           </select>
         </td>
+        <td>
+          <input type="text" class="trainer-late-reason" value="${escapeHtml(att.lateReason || '')}"
+            placeholder="Grund…"
+            style="width:110px;${showLate ? '' : 'opacity:0.35;pointer-events:none;'}" />
+        </td>
         <td><input type="text" class="trainer-internal-note" value="${escapeHtml(att.trainerNoteInternal || '')}" placeholder="Interne Notiz…" style="width:120px;" /></td>
         <td><input type="text" class="trainer-member-note" value="${escapeHtml(att.trainerNoteMember || '')}" placeholder="Notiz an Mitglied…" style="width:130px;" /></td>
         <td>${noteIconHtml}</td>
@@ -528,11 +545,22 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
 
       const presentCheck  = tr.querySelector('.trainer-present-check');
       const statusSelect  = tr.querySelector('.trainer-status-select');
+      const lateReasonEl  = tr.querySelector('.trainer-late-reason');
+
+      const syncLateReason = () => {
+        const late = isLateStatus(statusSelect.value);
+        lateReasonEl.style.opacity = late ? '1' : '0.35';
+        lateReasonEl.style.pointerEvents = late ? 'auto' : 'none';
+        if (!late) lateReasonEl.value = '';
+      };
+
       presentCheck.onchange = () => {
         statusSelect.value = presentCheck.checked ? 'present' : 'registered';
+        syncLateReason();
       };
       statusSelect.onchange = () => {
         presentCheck.checked = ['present','late_excused','late_unexcused'].includes(statusSelect.value);
+        syncLateReason();
       };
 
       if (att.memberNote) {
