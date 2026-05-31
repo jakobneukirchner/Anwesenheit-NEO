@@ -370,6 +370,45 @@ function confirmDeleteGroup(group, parentEl) {
 }
 
 /* ===================== SCHEDULE TAB ===================== */
+
+/* ── Auto-Absage: offene Anfragen nach Frist als abwesend markieren ─────────── */
+async function _checkAutoCancelRequests() {
+  try {
+    const fristMin = window.appSettings?.autoCancelRequestMinutes ?? 0;
+    if (!fristMin || fristMin <= 0) return;
+
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - fristMin * 60 * 1000);
+
+    // Alle vergangenen Events laden (startTime < cutoff)
+    const evSnap = await firestore.collection('events')
+      .where('startTime', '<', cutoff)
+      .get();
+    if (evSnap.empty) return;
+
+    const eventIds = [];
+    evSnap.forEach(doc => eventIds.push(doc.id));
+
+    // In Chunks von 10 (Firestore 'in'-Limit)
+    const chunks = [];
+    for (let i = 0; i < eventIds.length; i += 10) chunks.push(eventIds.slice(i, i + 10));
+
+    for (const chunk of chunks) {
+      const regSnap = await firestore.collection('registrations')
+        .where('eventId', 'in', chunk)
+        .where('status', '==', 'requested')
+        .get();
+      if (regSnap.empty) continue;
+      const batch = firestore.batch();
+      regSnap.forEach(doc => batch.update(doc.ref, { status: 'absent', autoCancelled: true }));
+      await batch.commit();
+    }
+  } catch (e) {
+    // Nicht-kritisch: Fehler nur loggen, Tab trotzdem laden
+    console.warn('_checkAutoCancelRequests fehlgeschlagen:', e);
+  }
+}
+
 async function renderScheduleTab(el) {
   el.innerHTML = `<div class="loading-center">Lade Termine...</div>`;
   try {
