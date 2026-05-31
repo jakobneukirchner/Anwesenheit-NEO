@@ -369,6 +369,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <span class="material-icons" style="font-size:16px;">schedule</span>
               ${myLateMinutes ? `Verspätung ändern` : 'Verspätung melden'}
             </button>
+            <button class="btn-secondary" id="trainer-find-replacement-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
+              <span class="material-icons" style="font-size:16px;">people</span>
+              Nach Vertretung suchen
+            </button>
           ` : ''}
         </div>
       </div>
@@ -436,6 +440,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       document.getElementById('trainer-cancel-self-btn').onclick = () => _toggleTrainerSelf(event, myUid, iAmCancelled, container, options);
       document.getElementById('trainer-cancel-event-btn').onclick = () => _cancelEvent(event, container, options);
       document.getElementById('trainer-late-btn').onclick = () => _reportTrainerLate(event, myUid, myLateMinutes, myLateNote, container, options);
+      document.getElementById('trainer-find-replacement-btn').onclick = () => _openReplacementModal(event, myUid);
 
       const revokeBtn = document.getElementById('trainer-revoke-late-btn');
       if (revokeBtn) revokeBtn.onclick = () => {
@@ -626,10 +631,8 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
           });
           showToast('Als Betreuer abgemeldet.', 'success');
 
-          // Erst die View sauber neu laden, damit der Button-Zustand stimmt.
           await renderTrainerDetailView(event.id, container, options);
 
-          // Dann optional Vertretungs-Dialog anbieten.
           if ((event.trainers || []).length > 1) {
             setTimeout(() => {
               showModal({
@@ -716,7 +719,6 @@ async function _openReplacementModal(event, requestingUid) {
   const start = event.startTime?.toDate?.();
   const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
 
-  // Alle anderen Trainer des Termins laden (nicht der anfragende selbst)
   const otherTrainerUids = (event.trainers || []).filter(uid => uid !== requestingUid);
 
   if (!otherTrainerUids.length) {
@@ -729,7 +731,6 @@ async function _openReplacementModal(event, requestingUid) {
     return;
   }
 
-  // Nutzerdaten laden
   const userMap = {};
   await Promise.all(otherTrainerUids.map(async uid => {
     const doc = await firestore.collection('users').doc(uid).get();
