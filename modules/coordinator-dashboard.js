@@ -731,7 +731,7 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
           <tr>
             <th style="width:32px;"></th>
             <th class="sortable-header" data-sort="title" style="cursor:pointer;user-select:none;">Titel <span class="sort-indicator" data-col="title"></span></th>
-            <th class="sortable-header" data-sort="date"  style="cursor:pointer;user-select:none;">Datum <span class="sort-indicator" data-col="date">▼</span></th>
+            <th class="sortable-header" data-sort="date"  style="cursor:pointer;user-select:none;">Datum <span class="sort-indicator" data-col="date"></span></th>
             <th class="sortable-header" data-sort="group" style="cursor:pointer;user-select:none;">Gruppe <span class="sort-indicator" data-col="group"></span></th>
             <th>Modus</th>
             <th>Status</th>
@@ -758,7 +758,6 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     const q       = searchEl.value.toLowerCase();
     const gFilter = groupFil.value;
     const sFilter = statFil.value;
-    // Auswahl NICHT löschen beim Filtern/Sortieren
     tbody.innerHTML = '';
 
     const filtered = events.filter(ev => {
@@ -851,6 +850,8 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     updateBulk();
   };
 
+  // Sortier-Indikatoren vor initialem Render setzen
+  updateSortIndicators();
   renderRows();
 }
 
