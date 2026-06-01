@@ -21,7 +21,6 @@ async function loadCoordinatorDashboard() {
     <div id="tab-messages" hidden></div>
   `;
 
-  // systemMessages für den aktuellen Koordinator laden und als Banner anzeigen
   _renderCoordSystemMessagesBanner(document.getElementById('coord-system-messages-banner'));
 
   const tabs   = { users: null, groups: null, schedule: null, settings: null, messages: null};
@@ -66,7 +65,6 @@ async function _renderCoordSystemMessagesBanner(bannerEl) {
     const messages = [];
     snap.forEach(doc => {
       const d = doc.data();
-      // Nachricht gilt wenn: recipients='all' oder (recipients='users' und uid in recipientUsers)
       if (d.recipients === 'all' || (d.recipients === 'users' && (d.recipientUsers || []).includes(uid))) {
         messages.push({ id: doc.id, ...d });
       }
@@ -491,7 +489,6 @@ async function renderScheduleTab(el) {
     });
     window._allTrainers = allTrainers;
 
-    // IDs der Termine laden, für die eine aktive no_trainer_alert-Meldung existiert
     const alertSnap = await firestore.collection('systemMessages')
       .where('active', '==', true)
       .where('_msgType', '==', 'no_trainer_alert')
@@ -686,10 +683,25 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
   const groupMap = {};
   groups.forEach(g => groupMap[g.id] = g.name);
 
-  const sorted = [...events].sort((a,b) => {
-    const ta = a.startTime?.toDate ? a.startTime.toDate() : new Date(a.startTime);
-    const tb = b.startTime?.toDate ? b.startTime.toDate() : new Date(b.startTime);
-    return tb - ta;
+  // Sortierzustand
+  let sortCol = 'date';   // 'date' | 'title' | 'group'
+  let sortDir = 'desc';   // 'asc' | 'desc'
+
+  const getSortedEvents = (list) => [...list].sort((a, b) => {
+    let valA, valB;
+    if (sortCol === 'date') {
+      valA = (a.startTime?.toDate ? a.startTime.toDate() : new Date(a.startTime)).getTime();
+      valB = (b.startTime?.toDate ? b.startTime.toDate() : new Date(b.startTime)).getTime();
+    } else if (sortCol === 'title') {
+      valA = (a.title || '').toLowerCase();
+      valB = (b.title || '').toLowerCase();
+    } else if (sortCol === 'group') {
+      valA = (groupMap[a.groupId] || '').toLowerCase();
+      valB = (groupMap[b.groupId] || '').toLowerCase();
+    }
+    if (valA < valB) return sortDir === 'asc' ? -1 : 1;
+    if (valA > valB) return sortDir === 'asc' ? 1 : -1;
+    return 0;
   });
 
   const groupOptions = groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
@@ -718,9 +730,9 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
         <thead>
           <tr>
             <th style="width:32px;"></th>
-            <th>Titel</th>
-            <th>Datum</th>
-            <th>Gruppe</th>
+            <th class="sortable-header" data-sort="title" style="cursor:pointer;user-select:none;">Titel <span class="sort-indicator" data-col="title"></span></th>
+            <th class="sortable-header" data-sort="date"  style="cursor:pointer;user-select:none;">Datum <span class="sort-indicator" data-col="date">▼</span></th>
+            <th class="sortable-header" data-sort="group" style="cursor:pointer;user-select:none;">Gruppe <span class="sort-indicator" data-col="group"></span></th>
             <th>Modus</th>
             <th>Status</th>
             <th>Aktionen</th>
@@ -735,21 +747,29 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
   const groupFil = el.querySelector('#ev-filter-group');
   const statFil  = el.querySelector('#ev-filter-status');
 
+  const updateSortIndicators = () => {
+    el.querySelectorAll('.sort-indicator').forEach(span => {
+      const col = span.dataset.col;
+      span.textContent = col === sortCol ? (sortDir === 'asc' ? '▲' : '▼') : '';
+    });
+  };
+
   const renderRows = () => {
     const q       = searchEl.value.toLowerCase();
     const gFilter = groupFil.value;
     const sFilter = statFil.value;
+    // Auswahl NICHT löschen beim Filtern/Sortieren
     tbody.innerHTML = '';
-    selected.clear();
-    updateBulk();
 
-    const visible = sorted.filter(ev => {
+    const filtered = events.filter(ev => {
       const matchTitle  = !q       || (ev.title||'').toLowerCase().includes(q);
       const matchGroup  = !gFilter || ev.groupId === gFilter;
       const isSkipped   = ev.status === 'skipped';
       const matchStatus = !sFilter || (sFilter==='skipped' ? isSkipped : !isSkipped);
       return matchTitle && matchGroup && matchStatus;
     });
+
+    const visible = getSortedEvents(filtered);
 
     if (!visible.length) {
       tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--color-text-muted);">Keine Termine gefunden.</td></tr>`;
@@ -763,7 +783,6 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
       const row = document.createElement('tr');
 
       if (isSkipped) row.style.opacity = '0.6';
-      // Hervorheben wenn kein aktiver Betreuer gemeldet
       if (hasAlert && !isSkipped) {
         row.style.background = 'rgba(245,124,0,0.08)';
         row.style.borderLeft = '3px solid var(--color-warning,#f57c00)';
@@ -774,7 +793,7 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
         : '';
 
       row.innerHTML = `
-        <td><input type="checkbox" class="ev-check" data-id="${ev.id}" /></td>
+        <td><input type="checkbox" class="ev-check" data-id="${ev.id}" ${selected.has(ev.id) ? 'checked' : ''} /></td>
         <td>
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             ${isSkipped ? '<span class="material-icons" style="font-size:14px;color:var(--color-error);" title="Ausgefallen">event_busy</span>' : ''}
@@ -801,7 +820,24 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
       };
       tbody.appendChild(row);
     });
+
+    updateBulk();
   };
+
+  // Sortier-Header klickbar machen
+  el.querySelectorAll('.sortable-header').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      if (sortCol === col) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortCol = col;
+        sortDir = col === 'date' ? 'desc' : 'asc';
+      }
+      updateSortIndicators();
+      renderRows();
+    });
+  });
 
   searchEl.addEventListener('input', renderRows);
   groupFil.addEventListener('change', renderRows);
