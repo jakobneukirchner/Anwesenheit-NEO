@@ -22,6 +22,24 @@ async function loadTrainerDashboard() {
     const futureEnd = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
     const pastStart = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000);
 
+    // systemMessages für diesen User laden
+    let systemMessages = [];
+    try {
+      const msgSnap = await firestore.collection('systemMessages')
+        .where('active', '==', true)
+        .orderBy('createdAt', 'desc')
+        .limit(20)
+        .get();
+      msgSnap.forEach(doc => {
+        const d = { id: doc.id, ...doc.data() };
+        const isGlobal = d.recipients === 'all' || !d.recipients;
+        const isForUser = d.recipients === 'users' && Array.isArray(d.recipientUsers) && d.recipientUsers.includes(uid);
+        if (isGlobal || isForUser) systemMessages.push(d);
+      });
+    } catch (e) {
+      console.warn('systemMessages konnten nicht geladen werden:', e);
+    }
+
     const [asTrainerSnap, cancelledSnap] = await Promise.all([
       firestore.collection('events').where('trainers', 'array-contains', uid).get(),
       firestore.collection('events').where('trainerCancellations', 'array-contains', uid).get()
@@ -49,12 +67,39 @@ async function loadTrainerDashboard() {
     const untilText = formatDate(futureEnd);
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
+    // systemMessages-Banner HTML
+    const bannerHtml = systemMessages.length ? `
+      <div id="trainer-system-messages" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+        ${systemMessages.map(msg => {
+          const isWarning   = msg.type === 'warning'  || msg.type === 'error';
+          const isSuccess   = msg.type === 'success';
+          const isNoTrainer = msg._msgType === 'no_trainer_alert';
+          const bgColor     = isWarning ? 'rgba(161,44,123,0.08)' : isSuccess ? 'rgba(67,122,34,0.08)' : 'rgba(0,105,111,0.08)';
+          const borderColor = isWarning ? 'var(--color-error)' : isSuccess ? 'var(--color-success)' : 'var(--color-primary)';
+          const iconColor   = isWarning ? 'var(--color-error)' : isSuccess ? 'var(--color-success)' : 'var(--color-primary)';
+          const icon        = isWarning ? 'warning' : isSuccess ? 'check_circle' : 'info';
+          return `
+            <div style="background:${bgColor};border-left:4px solid ${borderColor};border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;" data-msg-id="${msg.id}">
+              <span class="material-icons" style="font-size:20px;color:${iconColor};flex-shrink:0;margin-top:1px;">${icon}</span>
+              <div style="flex:1;min-width:0;">
+                ${msg.title ? `<strong style="color:${iconColor};display:block;margin-bottom:2px;">${escapeHtml(msg.title)}</strong>` : ''}
+                <div style="font-size:0.88rem;color:var(--color-text);">${escapeHtml(msg.message || '')}</div>
+              </div>
+              <button class="btn-text trainer-msg-dismiss" data-msg-id="${msg.id}" style="flex-shrink:0;padding:2px 6px;font-size:0.8rem;color:var(--color-text-muted);" title="Ausblenden">
+                <span class="material-icons" style="font-size:16px;">close</span>
+              </button>
+            </div>`;
+        }).join('')}
+      </div>` : '';
+
     const newHtml = `
       <div id="trainer-list-view">
         <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px;">
           <h2 style="margin:0;">${getRoleLabel('teacher')}-Dashboard</h2>
           <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
         </div>
+
+        ${bannerHtml}
 
         <div class="tabs" style="margin-bottom:16px;">
           <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
@@ -76,6 +121,23 @@ async function loadTrainerDashboard() {
     const scrollY = container.scrollTop;
     container.innerHTML = newHtml;
     container.scrollTop = scrollY;
+
+    // Banner-Dismiss-Handler
+    container.querySelectorAll('.trainer-msg-dismiss').forEach(btn => {
+      btn.onclick = async () => {
+        const msgId = btn.dataset.msgId;
+        const bannerEl = container.querySelector(`[data-msg-id="${msgId}"]`);
+        if (bannerEl) bannerEl.remove();
+        const wrapper = document.getElementById('trainer-system-messages');
+        if (wrapper && !wrapper.querySelector('[data-msg-id]')) wrapper.remove();
+        // Nachricht in Firestore als inaktiv markieren
+        try {
+          await firestore.collection('systemMessages').doc(msgId).update({ active: false });
+        } catch(e) {
+          console.warn('systemMessage konnte nicht deaktiviert werden:', e);
+        }
+      };
+    });
 
     container.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => {
@@ -121,6 +183,11 @@ async function renderTrainerOverviewCard(event, isPast) {
   const present    = rows.filter(r => ['present','late_excused','late_unexcused'].includes(r.status)).length;
   const missing    = Math.max(0, (event.minParticipants || 0) - registered);
   const needsBadge = !isPast && missing > 0;
+
+  // Kein-aktiver-Betreuer-Badge: zeigen wenn keine Trainer mehr aktiv sind (und Termin nicht vorbei)
+  const activeTrainers = (event.trainers || []).filter(uid => !(event.trainerCancellations || []).includes(uid));
+  const noTrainerBadge = !isPast && activeTrainers.length === 0 && (event.trainers || []).length > 0;
+
   const activeLabel = event.status === 'cancelled' ? 'Abgesagt' : event.status === 'skipped' ? 'Ausgefallen' : 'Aktiv';
   const activeClass = event.status === 'cancelled' ? 'chip-error' : event.status === 'skipped' ? 'chip-warning' : 'chip-success';
 
@@ -132,6 +199,7 @@ async function renderTrainerOverviewCard(event, isPast) {
         <div class="text-muted" style="font-size:0.92rem;">${registered} / ${total} Teilnehmer angemeldet${isPast ? ` · ${present} anwesend` : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+        ${noTrainerBadge ? `<span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;" title="Kein aktiver Betreuer – alle haben sich abgemeldet"><span class="material-icons" style="font-size:14px;">person_off</span>Kein Betreuer</span>` : ''}
         ${needsBadge ? `<span class="chip chip-warning" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span>Noch ${missing} Person${missing === 1 ? '' : 'en'} benötigt</span>` : ''}
         <span class="chip ${activeClass}" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">${event.status === 'cancelled' ? 'cancel' : 'check_circle'}</span>${activeLabel}</span>
         <button class="btn-primary" data-open-detail="${event.id}" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
@@ -367,7 +435,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
               <span class="material-icons" style="font-size:16px;">schedule</span>
               Deine Verspätung: <strong>~${myLateMinutes} Min.</strong>${myLateNote ? ' – ' + escapeHtml(myLateNote) : ''}
             </span>
-            <button class="btn-secondary" id="trainer-revoke-late-btn" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:4px;">
+            <button class="btn-secondary" id="trainer-revoke-late-btn" style="padding:5px 14px;font-size:0.85rem;display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:15px;">undo</span> Widerrufen
             </button>
           </div>
