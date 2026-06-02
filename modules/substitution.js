@@ -7,8 +7,8 @@
  * @param {Object} ev – Event-Objekt aus Firestore
  */
 async function openSubstitutionRequestModal(ev) {
-  const coordinatorUid   = window.currentUser?.firebaseUser?.uid;
-  const coordinatorName  = window.currentUser?.profile?.displayName || 'Koordinator';
+  const coordinatorUid  = window.currentUser?.firebaseUser?.uid;
+  const coordinatorName = window.currentUser?.profile?.displayName || 'Koordinator';
   const coordinatorRoles = window.currentUser?.profile?.roles || [];
 
   if (!coordinatorUid) {
@@ -16,12 +16,10 @@ async function openSubstitutionRequestModal(ev) {
     return;
   }
 
-  // Rolle des Anfragenden als lesbares Label ermitteln
-  const roleLabel = coordinatorRoles.includes('admin')       ? 'Administrator'
-                  : coordinatorRoles.includes('coordinator') ? 'Koordinator'
-                  : coordinatorRoles.includes('teacher')     ? 'Trainer'
-                  : coordinatorRoles.includes('member')      ? 'Mitglied'
-                  : 'Benutzer';
+  // Rolle als lesbaren Label für requestedByName zusammenbauen
+  const roleLabel = coordinatorRoles.length
+    ? coordinatorRoles.map(r => getRoleLabel(r)).join(', ')
+    : 'Koordinator';
   const requesterLabel = `${coordinatorName} (${roleLabel})`;
 
   // Trainer-Liste aus window._allTrainers (wird in renderScheduleTab befüllt)
@@ -120,7 +118,7 @@ async function openSubstitutionRequestModal(ev) {
           createdAt:         firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // Systemnachricht für Koordinatoren erstellen
+        // Systemnachricht für Koordinatoren-Dashboard erzeugen
         await _createSubstitutionSystemMessage(ev, trainer, requesterLabel);
 
         showToast(`Anfrage an ${trainer.displayName || trainer.email} gesendet.`, 'success');
