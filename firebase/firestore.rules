@@ -53,7 +53,6 @@ service cloud.firestore {
     }
 
     function onlyTrainerSafeFields() {
-      // Erlaubte Felder die ein Trainer auf einem Event aktualisieren darf
       let allowed = [
         'status', 'cancellationReason', 'skipReason',
         'trainerLateMinutes', 'trainerLateNotes',
@@ -77,7 +76,7 @@ service cloud.firestore {
                        request.auth.uid == resource.data.userId;
     }
 
-    // TRAINER ATTENDANCE (Verspätung, Abmeldung des Betreuers)
+    // TRAINER ATTENDANCE
     match /trainerAttendance/{docId} {
       allow read:   if isSignedIn();
       allow create: if hasRole('teacher') || isPrivileged();
@@ -86,29 +85,14 @@ service cloud.firestore {
     }
 
     // SUBSTITUTION REQUESTS
-    // Collection-Name: substitution_requests (mit Unterstrich)
     match /substitution_requests/{docId} {
-      // Jeder eingeloggte privilegierte Nutzer darf lesen
-      allow read: if isPrivileged();
-      // Trainer dürfen neue Anfragen erstellen
+      allow read:   if isPrivileged();
       allow create: if hasRole('teacher') || isPrivileged();
-      // Update erlaubt für:
-      //   - Koordinatoren/Admins (voller Zugriff)
-      //   - Den anfragenden Trainer (z.B. Anfrage stornieren)
-      //   - Den Zieltrainer (z.B. annehmen/ablehnen)
-      //   - Jeden Trainer für Auto-Cancel-Flag (autoCancelNotified)
-      //     → wird beim Lazy-Check von beliebigem Dashboard-Opener gesetzt
+      // Update: Koordinator/Admin ODER der anfragende Koordinator ODER der angefragte Trainer (requestedTo)
       allow update: if isPrivileged() ||
-                       request.auth.uid == resource.data.requesterId ||
-                       request.auth.uid == resource.data.targetTrainerId ||
-                       (hasRole('teacher') && onlyAutoCancelNotifiedField());
+                       request.auth.uid == resource.data.requestedBy ||
+                       request.auth.uid == resource.data.requestedTo;
       allow delete: if isPrivileged();
-    }
-
-    // Nur das autoCancelNotified-Flag darf von jedem Teacher gesetzt werden
-    function onlyAutoCancelNotifiedField() {
-      return request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['autoCancelNotified', 'status', 'resolution', 'resolvedAt']);
     }
 
     // SETTINGS
@@ -119,22 +103,18 @@ service cloud.firestore {
     }
 
     // SYSTEM MESSAGES
-    // Collection-Name: system_messages (mit Unterstrich)
     match /system_messages/{msgId} {
-      // Jeder eingeloggte Nutzer darf eigene Nachrichten lesen
       allow read: if isSignedIn() && (
         isPrivileged() ||
         request.auth.uid == resource.data.recipientId
       );
-      // Erstellen: privilegierte Nutzer (Koordinatoren, Trainer für Auto-Cancel)
       allow create: if isPrivileged();
-      // Update (z.B. als gelesen markieren): Empfänger oder Privilegierte
       allow update: if isPrivileged() ||
                        request.auth.uid == resource.data.recipientId;
       allow delete: if isPrivileged();
     }
 
-    // LEGACY: systemMessages (alter Collection-Name, falls noch in Benutzung)
+    // LEGACY: systemMessages
     match /systemMessages/{msgId} {
       allow read:   if isSignedIn();
       allow create: if isPrivileged();

@@ -34,10 +34,24 @@ async function loadTrainerDashboard() {
         const d = { id: doc.id, ...doc.data() };
         const isGlobal = d.recipients === 'all' || !d.recipients;
         const isForUser = d.recipients === 'users' && Array.isArray(d.recipientUsers) && d.recipientUsers.includes(uid);
-        if (isGlobal || isForUser) systemMessages.push(d);
+        // Vertretungsanfragen NICHT im Banner anzeigen – die haben eigenen Tab
+        if ((isGlobal || isForUser) && d._msgType !== 'replacement_request') systemMessages.push(d);
       });
     } catch (e) {
       console.warn('systemMessages konnten nicht geladen werden:', e);
+    }
+
+    // Offene Vertretungsanfragen für diesen Trainer laden
+    let pendingRequests = [];
+    try {
+      const reqSnap = await firestore.collection('substitution_requests')
+        .where('requestedTo', '==', uid)
+        .where('status', '==', 'pending')
+        .orderBy('createdAt', 'desc')
+        .get();
+      reqSnap.forEach(doc => pendingRequests.push({ id: doc.id, ...doc.data() }));
+    } catch (e) {
+      console.warn('Vertretungsanfragen konnten nicht geladen werden:', e);
     }
 
     const [asTrainerSnap, cancelledSnap] = await Promise.all([
@@ -73,7 +87,6 @@ async function loadTrainerDashboard() {
         ${systemMessages.map(msg => {
           const isWarning   = msg.type === 'warning'  || msg.type === 'error';
           const isSuccess   = msg.type === 'success';
-          const isNoTrainer = msg._msgType === 'no_trainer_alert';
           const bgColor     = isWarning ? 'rgba(161,44,123,0.08)' : isSuccess ? 'rgba(67,122,34,0.08)' : 'rgba(0,105,111,0.08)';
           const borderColor = isWarning ? 'var(--color-error)' : isSuccess ? 'var(--color-success)' : 'var(--color-primary)';
           const iconColor   = isWarning ? 'var(--color-error)' : isSuccess ? 'var(--color-success)' : 'var(--color-primary)';
@@ -91,6 +104,10 @@ async function loadTrainerDashboard() {
             </div>`;
         }).join('')}
       </div>` : '';
+
+    const requestsBadge = pendingRequests.length
+      ? `<span class="chip chip-warning" style="margin-left:4px;">${pendingRequests.length}</span>`
+      : '';
 
     const newHtml = `
       <div id="trainer-list-view">
@@ -111,10 +128,16 @@ async function loadTrainerDashboard() {
             <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">history</span>
             Vergangene Termine
           </button>
+          <button class="tab-btn${activeTab === 'requests' ? ' active' : ''}" data-tab="requests">
+            <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">swap_horiz</span>
+            Vertretungsanfragen
+            ${requestsBadge}
+          </button>
         </div>
 
         <div id="trainer-overview-upcoming" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'upcoming' ? ' hidden' : ''}></div>
         <div id="trainer-overview-past"     style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'past'     ? ' hidden' : ''}></div>
+        <div id="trainer-overview-requests" style="display:flex;flex-direction:column;gap:12px;"${activeTab !== 'requests' ? ' hidden' : ''}></div>
       </div>
     `;
 
@@ -130,7 +153,6 @@ async function loadTrainerDashboard() {
         if (bannerEl) bannerEl.remove();
         const wrapper = document.getElementById('trainer-system-messages');
         if (wrapper && !wrapper.querySelector('[data-msg-id]')) wrapper.remove();
-        // Nachricht in Firestore als inaktiv markieren
         try {
           await firestore.collection('systemMessages').doc(msgId).update({ active: false });
         } catch(e) {
@@ -145,11 +167,13 @@ async function loadTrainerDashboard() {
         btn.classList.add('active');
         document.getElementById('trainer-overview-upcoming').hidden = btn.dataset.tab !== 'upcoming';
         document.getElementById('trainer-overview-past').hidden     = btn.dataset.tab !== 'past';
+        document.getElementById('trainer-overview-requests').hidden = btn.dataset.tab !== 'requests';
       };
     });
 
-    const upEl = document.getElementById('trainer-overview-upcoming');
-    const paEl = document.getElementById('trainer-overview-past');
+    const upEl  = document.getElementById('trainer-overview-upcoming');
+    const paEl  = document.getElementById('trainer-overview-past');
+    const reqEl = document.getElementById('trainer-overview-requests');
 
     if (!upcoming.length) upEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine kommenden Termine.</p></div>`;
     if (!past.length)     paEl.innerHTML = `<div class="card"><p class="text-muted" style="margin:0;">Keine vergangenen Termine.</p></div>`;
@@ -157,11 +181,183 @@ async function loadTrainerDashboard() {
     for (const ev of upcoming) upEl.appendChild(await renderTrainerOverviewCard(ev, false));
     for (const ev of past)     paEl.appendChild(await renderTrainerOverviewCard(ev, true));
 
+    // Vertretungsanfragen rendern
+    renderSubstitutionRequestsTab(reqEl, pendingRequests, uid);
+
   } catch (e) {
     console.error(e);
     if (!window._silentRefresh) {
       container.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
     }
+  }
+}
+
+/**
+ * Rendert den Tab mit offenen Vertretungsanfragen für diesen Trainer.
+ */
+function renderSubstitutionRequestsTab(container, requests, myUid) {
+  if (!requests.length) {
+    container.innerHTML = `
+      <div class="card" style="text-align:center;padding:32px 16px;">
+        <span class="material-icons" style="font-size:40px;color:var(--color-text-faint);margin-bottom:12px;display:block;">swap_horiz</span>
+        <p class="text-muted" style="margin:0;">Keine offenen Vertretungsanfragen.</p>
+      </div>`;
+    return;
+  }
+
+  requests.forEach(req => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.borderLeft = '4px solid var(--color-warning)';
+
+    const eventDate = req.eventDate?.toDate ? req.eventDate.toDate() : (req.eventDate ? new Date(req.eventDate) : null);
+    const dateStr   = eventDate ? `${formatDate(eventDate)}, ${formatTime(eventDate)}` : '–';
+    const createdAt = req.createdAt?.toDate ? req.createdAt.toDate() : null;
+    const createdStr = createdAt ? formatDate(createdAt) : '';
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+            <span class="material-icons" style="font-size:18px;color:var(--color-warning);">swap_horiz</span>
+            <strong style="font-size:1.05rem;">Vertretungsanfrage</strong>
+            <span class="chip chip-warning" style="font-size:0.75rem;">Offen</span>
+          </div>
+          <div style="font-size:0.95rem;font-weight:600;margin-bottom:4px;">${escapeHtml(req.eventTitle || 'Termin')}</div>
+          <div class="text-muted" style="font-size:0.88rem;margin-bottom:4px;">
+            <span class="material-icons" style="font-size:14px;vertical-align:middle;">event</span>
+            ${dateStr}
+          </div>
+          ${req.groupName ? `<div class="text-muted" style="font-size:0.85rem;margin-bottom:4px;">
+            <span class="material-icons" style="font-size:14px;vertical-align:middle;">group</span>
+            ${escapeHtml(req.groupName)}
+          </div>` : ''}
+          <div class="text-muted" style="font-size:0.85rem;margin-bottom:${req.note ? '8px' : '0'};">
+            <span class="material-icons" style="font-size:14px;vertical-align:middle;">person</span>
+            Angefragt von: <strong>${escapeHtml(req.requestedByName || 'Koordinator')}</strong>
+            ${createdStr ? `<span style="margin-left:6px;color:var(--color-text-faint);">(${createdStr})</span>` : ''}
+          </div>
+          ${req.note ? `
+            <div style="background:var(--color-surface-offset);border-radius:var(--radius-md);padding:8px 12px;font-size:0.88rem;color:var(--color-text);margin-top:4px;">
+              <span class="material-icons" style="font-size:14px;vertical-align:middle;color:var(--color-primary);">chat_bubble_outline</span>
+              ${escapeHtml(req.note)}
+            </div>` : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0;">
+          <button class="btn-primary sub-req-accept" data-req-id="${req.id}" style="padding:8px 18px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">check_circle</span>Annehmen
+          </button>
+          <button class="btn-secondary sub-req-decline" data-req-id="${req.id}" style="padding:8px 18px;display:inline-flex;align-items:center;gap:6px;">
+            <span class="material-icons" style="font-size:16px;">cancel</span>Ablehnen
+          </button>
+        </div>
+      </div>
+    `;
+
+    // Annehmen
+    card.querySelector('.sub-req-accept').onclick = () => {
+      showModal({
+        title: 'Vertretung annehmen',
+        body: `
+          <p>Möchtest du die Vertretung für <strong>${escapeHtml(req.eventTitle || 'diesen Termin')}</strong> am <strong>${dateStr}</strong> wirklich übernehmen?</p>
+          <label style="margin-top:10px;">Nachricht an Koordinator (optional)</label>
+          <textarea id="sub-accept-note" rows="2" placeholder="z.B. Ich bin dabei!" style="width:100%;"></textarea>
+        `,
+        confirmLabel: 'Ja, übernehmen',
+        onConfirm: async () => {
+          const note = document.getElementById('sub-accept-note')?.value.trim() || '';
+          await _resolveSubstitutionRequest(req, 'accepted', note, myUid);
+        }
+      });
+    };
+
+    // Ablehnen
+    card.querySelector('.sub-req-decline').onclick = () => {
+      showModal({
+        title: 'Vertretung ablehnen',
+        body: `
+          <p>Möchtest du die Vertretungsanfrage für <strong>${escapeHtml(req.eventTitle || 'diesen Termin')}</strong> ablehnen?</p>
+          <label style="margin-top:10px;">Begründung (optional)</label>
+          <textarea id="sub-decline-note" rows="2" placeholder="z.B. Ich bin verhindert." style="width:100%;"></textarea>
+        `,
+        confirmLabel: 'Ablehnen',
+        onConfirm: async () => {
+          const note = document.getElementById('sub-decline-note')?.value.trim() || '';
+          await _resolveSubstitutionRequest(req, 'declined', note, myUid);
+        }
+      });
+    };
+
+    container.appendChild(card);
+  });
+}
+
+/**
+ * Verarbeitet Annehmen oder Ablehnen einer Vertretungsanfrage:
+ * 1. Status in substitution_requests updaten
+ * 2. systemMessage an den Koordinator senden
+ * 3. Bei Annehmen: Trainer zum Event hinzufügen
+ * 4. Dashboard neu laden
+ */
+async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
+  const myName = window.currentUser?.profile?.displayName || 'Betreuer';
+  const isAccepted = resolution === 'accepted';
+
+  try {
+    // 1. substitution_requests aktualisieren
+    await firestore.collection('substitution_requests').doc(req.id).update({
+      status:      resolution,
+      resolution:  resolution,
+      resolvedAt:  firebase.firestore.FieldValue.serverTimestamp(),
+      resolvedNote: note || ''
+    });
+
+    // 2. Bei Annehmen: Trainer zum Event hinzufügen
+    if (isAccepted) {
+      try {
+        await firestore.collection('events').doc(req.eventId).update({
+          trainers: firebase.firestore.FieldValue.arrayUnion(myUid),
+          trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid)
+        });
+      } catch (e) {
+        console.warn('Event konnte nicht aktualisiert werden:', e);
+      }
+    }
+
+    // 3. systemMessage an den anfragenden Koordinator senden
+    const eventDate = req.eventDate?.toDate ? req.eventDate.toDate() : null;
+    const dateStr   = eventDate ? `${formatDate(eventDate)}, ${formatTime(eventDate)}` : '–';
+
+    const msgText = isAccepted
+      ? `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) angenommen.${note ? ' Nachricht: ' + note : ''}`
+      : `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) abgelehnt.${note ? ' Begründung: ' + note : ''}`;
+
+    await firestore.collection('systemMessages').add({
+      type:           isAccepted ? 'success' : 'warning',
+      title:          isAccepted ? 'Vertretung angenommen' : 'Vertretung abgelehnt',
+      message:        msgText,
+      recipients:     'users',
+      recipientUsers: [req.requestedBy],
+      active:         true,
+      highlight:      true,
+      createdAt:      firebase.firestore.FieldValue.serverTimestamp(),
+      _eventId:       req.eventId,
+      _eventTitle:    req.eventTitle || '',
+      _fromUid:       myUid,
+      _msgType:       'replacement_response'
+    });
+
+    showToast(
+      isAccepted ? 'Vertretung angenommen. Koordinator wurde informiert.' : 'Anfrage abgelehnt. Koordinator wurde informiert.',
+      isAccepted ? 'success' : 'info'
+    );
+
+    // Dashboard neu laden
+    await loadTrainerDashboard();
+
+  } catch (err) {
+    console.error(err);
+    showToast('Fehler: ' + err.message, 'error');
   }
 }
 
@@ -184,7 +380,6 @@ async function renderTrainerOverviewCard(event, isPast) {
   const missing    = Math.max(0, (event.minParticipants || 0) - registered);
   const needsBadge = !isPast && missing > 0;
 
-  // Kein-aktiver-Betreuer-Badge: zeigen wenn keine Trainer mehr aktiv sind (und Termin nicht vorbei)
   const activeTrainers = (event.trainers || []).filter(uid => !(event.trainerCancellations || []).includes(uid));
   const noTrainerBadge = !isPast && activeTrainers.length === 0 && (event.trainers || []).length > 0;
 
@@ -221,9 +416,6 @@ function openTrainerDetailPage(eventId) {
   });
 }
 
-/**
- * Gibt einen lesbaren Label + CSS-Klasse für einen Anwesenheitsstatus zurück.
- */
 function getAttendanceStatusChip(status) {
   const map = {
     registered:            { label: 'Angemeldet',             cls: 'chip-primary'  },
@@ -295,7 +487,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const myLateMinutes = event.trainerLateMinutes?.[myUid] || null;
     const myLateNote    = event.trainerLateNotes?.[myUid]   || null;
 
-    // Prüfen ob Termin ohne aktive Trainer ist (alle abgemeldet oder keine eingetragen)
     const activeTrainers = (event.trainers || []).filter(uid => !(event.trainerCancellations || []).includes(uid));
     const noTrainerWarning = activeTrainers.length === 0 && (event.trainers || []).length > 0;
 
@@ -520,7 +711,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       }
     };
 
-    // "Koordinator informieren"-Button (nur wenn kein aktiver Trainer)
     const notifyCoordBtn = document.getElementById('trainer-notify-coord-btn');
     if (notifyCoordBtn) {
       notifyCoordBtn.onclick = () => _notifyCoordinatorNoTrainer(event);
@@ -723,13 +913,11 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
 
           await renderTrainerDetailView(event.id, container, options);
 
-          // Prüfen ob nach Abmeldung noch aktive Trainer übrig sind
           const freshDoc = await firestore.collection('events').doc(event.id).get();
           const freshEvent = freshDoc.exists ? { id: freshDoc.id, ...freshDoc.data() } : event;
           const stillActive = (freshEvent.trainers || []).filter(uid => !(freshEvent.trainerCancellations || []).includes(uid));
 
           if (stillActive.length === 0) {
-            // Keine Trainer mehr → Koordinator-Benachrichtigung anbieten
             setTimeout(() => {
               showModal({
                 title: 'Kein Betreuer mehr!',
@@ -820,18 +1008,12 @@ function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, c
   });
 }
 
-/**
- * Sendet eine systemMessage an alle Koordinatoren/Admins,
- * dass ein Termin ohne aktiven Betreuer ist.
- * Schreibt in die 'systemMessages'-Kollektion, damit der Banner es anzeigt.
- */
 async function _notifyCoordinatorNoTrainer(event) {
   const start = event.startTime?.toDate?.();
   const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
   const myName = window.currentUser?.profile?.displayName || 'Ein Betreuer';
 
   try {
-    // Alle Koordinatoren und Admins laden
     const coordSnap = await firestore.collection('users').get();
     const coordinators = [];
     coordSnap.forEach(doc => {
@@ -849,7 +1031,6 @@ async function _notifyCoordinatorNoTrainer(event) {
     const coordUids = coordinators.map(c => c.id);
     const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
 
-    // Direkt in systemMessages schreiben – sichtbar im Banner für die Koordinatoren
     await firestore.collection('systemMessages').add({
       type:            'warning',
       title:           'Kein Betreuer!',
@@ -859,7 +1040,6 @@ async function _notifyCoordinatorNoTrainer(event) {
       active:          true,
       highlight:       true,
       createdAt:       firebase.firestore.FieldValue.serverTimestamp(),
-      // Metadaten für spätere Nachverfolgung
       _eventId:        event.id,
       _eventTitle:     event.title || '',
       _fromUid:        window.currentUser?.firebaseUser?.uid || null,
@@ -872,16 +1052,10 @@ async function _notifyCoordinatorNoTrainer(event) {
   }
 }
 
-/**
- * Öffnet einen Dialog, mit dem der Trainer JEDEN Betreuer (auch gruppenfremde)
- * als Vertretung benachrichtigen kann.
- * Schreibt in die 'systemMessages'-Kollektion, damit der Banner es anzeigt.
- */
 async function _openReplacementModal(event, requestingUid) {
   const start = event.startTime?.toDate?.();
   const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
 
-  // Alle Benutzer mit Trainer-Rolle laden (nicht nur die des Events)
   let allTrainers = [];
   try {
     const snap = await firestore.collection('users').orderBy('displayName').get();
@@ -908,9 +1082,8 @@ async function _openReplacementModal(event, requestingUid) {
   const myProfile = window.currentUser?.profile;
   const myName = myProfile?.displayName || 'Ein Betreuer';
 
-  // Gruppen-eigene Trainer als erstes anzeigen (als Hint markieren)
   const eventTrainerUids = new Set((event.trainers || []).filter(uid => uid !== requestingUid));
-  const ownTrainers  = allTrainers.filter(u => eventTrainerUids.has(u.id));
+  const ownTrainers   = allTrainers.filter(u => eventTrainerUids.has(u.id));
   const otherTrainers = allTrainers.filter(u => !eventTrainerUids.has(u.id));
 
   const buildOptions = (list, groupLabel) => list.length
@@ -940,7 +1113,6 @@ async function _openReplacementModal(event, requestingUid) {
         || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
-        // In systemMessages schreiben – sichtbar im Banner für den angefragten Betreuer
         await firestore.collection('systemMessages').add({
           type:           'info',
           title:          'Vertretungsanfrage',
@@ -950,7 +1122,6 @@ async function _openReplacementModal(event, requestingUid) {
           active:         true,
           highlight:      true,
           createdAt:      firebase.firestore.FieldValue.serverTimestamp(),
-          // Metadaten für spätere Nachverfolgung
           _eventId:       event.id,
           _eventTitle:    event.title || '',
           _fromUid:       requestingUid,
