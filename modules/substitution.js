@@ -1,5 +1,5 @@
 // modules/substitution.js
-// Vertretungsanfragen – Turn 1: Koordinator-Button + Modal + Anfrage senden
+// Vertretungsanfragen – Koordinator-Button + Modal + Anfrage senden
 
 /**
  * Öffnet das Modal zum Senden einer Vertretungsanfrage für einen Termin.
@@ -28,7 +28,7 @@ async function openSubstitutionRequestModal(ev) {
   // Bereits ausstehende Anfragen für diesen Termin laden
   let existingPending = [];
   try {
-    const snap = await firestore.collection('substitutions')
+    const snap = await firestore.collection('substitution_requests')
       .where('eventId', '==', ev.id)
       .where('status', '==', 'pending')
       .get();
@@ -96,7 +96,7 @@ async function openSubstitutionRequestModal(ev) {
       }
 
       try {
-        await firestore.collection('substitutions').add({
+        await firestore.collection('substitution_requests').add({
           eventId:           ev.id,
           eventTitle:        ev.title || '',
           eventDate:         ev.startTime,
