@@ -7,13 +7,22 @@
  * @param {Object} ev – Event-Objekt aus Firestore
  */
 async function openSubstitutionRequestModal(ev) {
-  const coordinatorUid  = window.currentUser?.firebaseUser?.uid;
-  const coordinatorName = window.currentUser?.profile?.displayName || 'Koordinator';
+  const coordinatorUid   = window.currentUser?.firebaseUser?.uid;
+  const coordinatorName  = window.currentUser?.profile?.displayName || 'Koordinator';
+  const coordinatorRoles = window.currentUser?.profile?.roles || [];
 
   if (!coordinatorUid) {
     showToast('Nicht angemeldet.', 'error');
     return;
   }
+
+  // Rolle des Anfragenden als lesbares Label ermitteln
+  const roleLabel = coordinatorRoles.includes('admin')       ? 'Administrator'
+                  : coordinatorRoles.includes('coordinator') ? 'Koordinator'
+                  : coordinatorRoles.includes('teacher')     ? 'Trainer'
+                  : coordinatorRoles.includes('member')      ? 'Mitglied'
+                  : 'Benutzer';
+  const requesterLabel = `${coordinatorName} (${roleLabel})`;
 
   // Trainer-Liste aus window._allTrainers (wird in renderScheduleTab befüllt)
   const allTrainers = window._allTrainers || [];
@@ -105,11 +114,14 @@ async function openSubstitutionRequestModal(ev) {
           requestedTo:       trainerId,
           requestedToName:   trainer.displayName || trainer.email || '',
           requestedBy:       coordinatorUid,
-          requestedByName:   coordinatorName,
+          requestedByName:   requesterLabel,
           status:            'pending',
           note:              note || '',
           createdAt:         firebase.firestore.FieldValue.serverTimestamp()
         });
+
+        // Systemnachricht für Koordinatoren erstellen
+        await _createSubstitutionSystemMessage(ev, trainer, requesterLabel);
 
         showToast(`Anfrage an ${trainer.displayName || trainer.email} gesendet.`, 'success');
       } catch (e) {
