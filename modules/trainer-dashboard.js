@@ -42,16 +42,25 @@ async function loadTrainerDashboard() {
     }
 
     // Offene Vertretungsanfragen für diesen Trainer laden
+    // Nur nach requestedTo filtern (kein zusammengesetzter Index nötig),
+    // Status-Filter und Sortierung im JS erledigen.
     let pendingRequests = [];
     try {
       const reqSnap = await firestore.collection('substitution_requests')
         .where('requestedTo', '==', uid)
-        .where('status', '==', 'pending')
-        .orderBy('createdAt', 'desc')
         .get();
-      reqSnap.forEach(doc => pendingRequests.push({ id: doc.id, ...doc.data() }));
+      reqSnap.forEach(doc => {
+        const d = { id: doc.id, ...doc.data() };
+        if (d.status === 'pending') pendingRequests.push(d);
+      });
+      // Neueste zuerst
+      pendingRequests.sort((a, b) => {
+        const ta = a.createdAt?.toMillis?.() || 0;
+        const tb = b.createdAt?.toMillis?.() || 0;
+        return tb - ta;
+      });
     } catch (e) {
-      console.warn('Vertretungsanfragen konnten nicht geladen werden:', e);
+      console.error('Vertretungsanfragen konnten nicht geladen werden:', e);
     }
 
     const [asTrainerSnap, cancelledSnap] = await Promise.all([
@@ -1056,12 +1065,13 @@ async function _openReplacementModal(event, requestingUid) {
   const start = event.startTime?.toDate?.();
   const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
 
+  // Alle Trainer laden – sich selbst EINSCHLIESSEN (Selbst-Anfrage erlaubt)
   let allTrainers = [];
   try {
     const snap = await firestore.collection('users').orderBy('displayName').get();
     snap.forEach(doc => {
       const d = doc.data();
-      if ((d.roles || []).includes('teacher') && doc.id !== requestingUid) {
+      if ((d.roles || []).includes('teacher')) {
         allTrainers.push({ id: doc.id, ...d });
       }
     });
@@ -1072,7 +1082,7 @@ async function _openReplacementModal(event, requestingUid) {
   if (!allTrainers.length) {
     showModal({
       title: 'Keine Betreuer verfügbar',
-      body: `<p>Es sind keine weiteren ${getRoleLabel('teacher')} im System eingetragen.</p>`,
+      body: `<p>Es sind keine ${getRoleLabel('teacher')} im System eingetragen.</p>`,
       confirmLabel: 'OK',
       onConfirm: () => {}
     });
@@ -1082,12 +1092,12 @@ async function _openReplacementModal(event, requestingUid) {
   const myProfile = window.currentUser?.profile;
   const myName = myProfile?.displayName || 'Ein Betreuer';
 
-  const eventTrainerUids = new Set((event.trainers || []).filter(uid => uid !== requestingUid));
+  const eventTrainerUids = new Set((event.trainers || []));
   const ownTrainers   = allTrainers.filter(u => eventTrainerUids.has(u.id));
   const otherTrainers = allTrainers.filter(u => !eventTrainerUids.has(u.id));
 
   const buildOptions = (list, groupLabel) => list.length
-    ? `<optgroup label="${groupLabel}">${list.map(u => `<option value="${u.id}">${u.displayName || u.email || u.id}</option>`).join('')}</optgroup>`
+    ? `<optgroup label="${groupLabel}">${list.map(u => `<option value="${u.id}">${u.displayName || u.email || u.id}${u.id === requestingUid ? ' (du)' : ''}</option>`).join('')}</optgroup>`
     : '';
 
   const optionsHtml = buildOptions(ownTrainers, 'Am Termin eingeplant')
@@ -1113,8 +1123,7 @@ async function _openReplacementModal(event, requestingUid) {
         || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
-        // 1. Dokument in substitution_requests anlegen (damit der angefragte Betreuer
-        //    die Anfrage in seinem Dashboard sieht)
+        // 1. Dokument in substitution_requests anlegen
         await firestore.collection('substitution_requests').add({
           eventId:          event.id,
           eventTitle:       event.title || '',
