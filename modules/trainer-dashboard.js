@@ -1113,6 +1113,22 @@ async function _openReplacementModal(event, requestingUid) {
         || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
+        // 1. Dokument in substitution_requests anlegen (damit der angefragte Betreuer
+        //    die Anfrage in seinem Dashboard sieht)
+        await firestore.collection('substitution_requests').add({
+          eventId:          event.id,
+          eventTitle:       event.title || '',
+          eventDate:        event.startTime || null,
+          groupName:        event.groupName || event.category || '',
+          requestedBy:      requestingUid,
+          requestedByName:  myName,
+          requestedTo:      targetUid,
+          note:             messageText,
+          status:           'pending',
+          createdAt:        firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 2. systemMessage als Benachrichtigung senden
         await firestore.collection('systemMessages').add({
           type:           'info',
           title:          'Vertretungsanfrage',
@@ -1127,6 +1143,7 @@ async function _openReplacementModal(event, requestingUid) {
           _fromUid:       requestingUid,
           _msgType:       'replacement_request'
         });
+
         showToast(`Anfrage an ${targetUser.displayName || 'Betreuer'} gesendet.`, 'success');
       } catch (err) {
         showToast('Fehler beim Senden: ' + err.message, 'error');
