@@ -213,7 +213,6 @@ async function renderSystemMessageBanner() {
   const allActive = msgs
     .filter(m => _msgIsActive(m) && _msgMatchesUser(m))
     .sort((a, b) => {
-      // Hervorgehobene zuerst, dann nach Typ-Priorität
       if (b.highlight && !a.highlight) return 1;
       if (a.highlight && !b.highlight) return -1;
       const order = { danger:0, warning:1, info:2, success:3 };
@@ -230,7 +229,6 @@ async function renderSystemMessageBanner() {
   const rest = bannerMsgs.slice(1);
   const cfg  = MSG_TYPES[main.type] || MSG_TYPES.info;
 
-  // Hervorgehoben + erster Ladevorgang → Banner groß + wackeln
   const doHighlight = main.highlight === true && isFirst;
 
   const banner = document.createElement('div');
@@ -267,15 +265,12 @@ async function renderSystemMessageBanner() {
 
   appBar.insertAdjacentElement('afterend', banner);
 
-  // Hervorheben: Banner kurz groß machen + wackeln, dann wieder normal
   if (doHighlight) {
     setTimeout(() => {
       banner.classList.add('smb-highlight', 'smb-wiggle');
-      // Wackeln-Klasse nach Ende der Animation entfernen
       banner.addEventListener('animationend', () => {
         banner.classList.remove('smb-wiggle');
       }, { once: true });
-      // Nach 3s wieder auf Normalgröße schrumpfen
       setTimeout(() => {
         banner.classList.remove('smb-highlight');
       }, 3000);
@@ -408,6 +403,7 @@ async function renderSystemMessagesTab(el) {
 
 function _renderMsgTable(msgs) {
   const rows = msgs.map(m => {
+    const isSystem = m._msgType === 'substitution';
     const cfg   = MSG_TYPES[m.type] || MSG_TYPES.info;
     const start = m.startAt ? _formatMsgDate(m.startAt) : '–';
     const end   = m.endAt   ? _formatMsgDate(m.endAt)   : '∞';
@@ -417,6 +413,25 @@ function _renderMsgTable(msgs) {
     const highlightBadge = m.highlight
       ? `<span class="chip" style="font-size:0.72rem;margin-left:4px;background:var(--color-warning-highlight);color:var(--color-warning);border:1px solid var(--color-warning);">Hervorgehoben</span>`
       : '';
+    const systemBadge = isSystem
+      ? `<span class="chip" style="font-size:0.72rem;margin-left:4px;background:var(--color-surface-offset);color:var(--color-text-muted);border:1px solid var(--color-border);">Systemnachricht</span>`
+      : '';
+
+    // Aktions-Buttons: Systemnachrichten können nicht bearbeitet werden
+    const actionButtons = isSystem
+      ? `
+        <button class="btn-secondary" data-sm-action="toggle" data-id="${m.id}" data-active="${m.active}"
+          style="padding:3px 10px;font-size:0.8rem;">${m.active ? 'Deaktivieren' : 'Aktivieren'}</button>
+        <button class="btn-danger" data-sm-action="delete" data-id="${m.id}"
+          style="padding:3px 10px;font-size:0.8rem;margin-left:4px;">Löschen</button>`
+      : `
+        <button class="btn-secondary" data-sm-action="toggle" data-id="${m.id}" data-active="${m.active}"
+          style="padding:3px 10px;font-size:0.8rem;">${m.active ? 'Deaktivieren' : 'Aktivieren'}</button>
+        <button class="btn-secondary" data-sm-action="edit" data-id="${m.id}"
+          style="padding:3px 10px;font-size:0.8rem;margin-left:4px;">Bearbeiten</button>
+        <button class="btn-danger" data-sm-action="delete" data-id="${m.id}"
+          style="padding:3px 10px;font-size:0.8rem;margin-left:4px;">Löschen</button>`;
+
     return `
       <tr>
         <td>
@@ -425,6 +440,7 @@ function _renderMsgTable(msgs) {
             ${cfg.label}
           </span>
           ${highlightBadge}
+          ${systemBadge}
         </td>
         <td>
           <strong>${m.title || '–'}</strong>
@@ -437,14 +453,7 @@ function _renderMsgTable(msgs) {
             ? `<span style="color:var(--color-success);font-size:0.82rem;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">check_circle</span>Aktiv</span>`
             : `<span style="color:var(--color-text-muted);font-size:0.82rem;display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">pause_circle</span>Inaktiv</span>`}
         </td>
-        <td style="white-space:nowrap;">
-          <button class="btn-secondary" data-sm-action="toggle" data-id="${m.id}" data-active="${m.active}"
-            style="padding:3px 10px;font-size:0.8rem;">${m.active ? 'Deaktivieren' : 'Aktivieren'}</button>
-          <button class="btn-secondary" data-sm-action="edit" data-id="${m.id}"
-            style="padding:3px 10px;font-size:0.8rem;margin-left:4px;">Bearbeiten</button>
-          <button class="btn-danger" data-sm-action="delete" data-id="${m.id}"
-            style="padding:3px 10px;font-size:0.8rem;margin-left:4px;">Löschen</button>
-        </td>
+        <td style="white-space:nowrap;">${actionButtons}</td>
       </tr>`;
   }).join('');
 
@@ -703,4 +712,44 @@ async function _loadUsersForMsgForm(selected) {
     const q = this.value.toLowerCase();
     renderUsers(allUsers.filter(u => (u.displayName||u.email||'').toLowerCase().includes(q)));
   });
+}
+
+/* ─── Automatische Vertretungs-Systemnachricht ───────────────────────────────── */
+/**
+ * Erstellt eine automatische Systemnachricht wenn eine Vertretungsanfrage gesendet wird.
+ * Wird in substitution.js nach dem Speichern der Anfrage aufgerufen.
+ *
+ * @param {Object} ev             – Event-Objekt aus Firestore
+ * @param {Object} trainer        – Trainer-Objekt { id, displayName, email }
+ * @param {string} requesterLabel – z.B. "Max Muster (Koordinator)"
+ */
+async function _createSubstitutionSystemMessage(ev, trainer, requesterLabel) {
+  const startDate = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+  const dateStr   = startDate.toLocaleString('de-DE', {
+    weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+
+  const trainerName = trainer.displayName || trainer.email || 'Unbekannt';
+  const eventTitle  = ev.title || '(kein Titel)';
+
+  // Nachricht läuft automatisch 7 Tage ab Ereignisdatum ab
+  const endAt = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const payload = {
+    _msgType:    'substitution',          // Marker: diese Nachricht ist automatisch erzeugt
+    type:        'warning',
+    title:       'Vertretung angefragt',
+    message:     `${requesterLabel} hat eine Vertretungsanfrage für „${eventTitle}" (${dateStr}) an ${trainerName} gesendet.`,
+    recipients:  'all',
+    active:      true,
+    highlight:   false,
+    endAt:       endAt,
+    createdAt:   firebase.firestore.FieldValue.serverTimestamp(),
+    // Referenz-IDs für spätere Auflösung im coordinator-dashboard
+    _eventId:    ev.id || null,
+    _trainerId:  trainer.id || null,
+  };
+
+  await firestore.collection('systemMessages').add(payload);
 }
