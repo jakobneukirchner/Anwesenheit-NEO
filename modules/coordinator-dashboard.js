@@ -488,6 +488,8 @@ async function renderScheduleTab(el) {
       if ((d.roles||[]).includes('teacher')) allTrainers.push({ id: doc.id, ...d });
     });
     window._allTrainers = allTrainers;
+    // Gruppen global verfügbar machen (für substitution.js)
+    window._allGroups = groups;
 
     const alertSnap = await firestore.collection('systemMessages')
       .where('active', '==', true)
@@ -726,7 +728,7 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
       </label>
     </div>
     <div style="width:100%;overflow-x:auto;">
-      <table style="width:100%;min-width:600px;">
+      <table style="width:100%;min-width:680px;">
         <thead>
           <tr>
             <th style="width:32px;"></th>
@@ -807,12 +809,19 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
         <td><span class="chip" style="font-size:0.78rem;">${translateMode(ev.mode||'open')}</span></td>
         <td>${isSkipped ? '<span style="color:var(--color-error);font-size:0.82rem;">Ausgefallen</span>' : '<span style="color:var(--color-success);font-size:0.82rem;">Aktiv</span>'}</td>
         <td style="white-space:nowrap;">
-          <button class="btn-secondary" data-action="edit" style="padding:4px 10px;font-size:0.82rem;">Bearbeiten</button>
-          <button class="btn-danger"    data-action="del"  style="padding:4px 10px;font-size:0.82rem;margin-left:4px;">Löschen</button>
+          <button class="btn-secondary" data-action="edit" style="padding:4px 8px;font-size:0.82rem;">Bearbeiten</button>
+          <button class="btn-secondary" data-action="sub" title="Vertretung anfragen"
+            style="padding:4px 8px;font-size:0.82rem;margin-left:4px;${isSkipped?'opacity:0.4;pointer-events:none;':''}">
+            <span class="material-icons" style="font-size:14px;vertical-align:middle;">swap_horiz</span> Vertretung
+          </button>
+          <button class="btn-danger" data-action="del" style="padding:4px 8px;font-size:0.82rem;margin-left:4px;">Löschen</button>
         </td>`;
 
       row.querySelector('[data-action="edit"]').onclick = () => showEventForm(ev, groups, parentEl);
       row.querySelector('[data-action="del"]').onclick  = () => confirmDeleteEvents(new Set([ev.id]), events, parentEl);
+      if (!isSkipped) {
+        row.querySelector('[data-action="sub"]').onclick = () => openSubstitutionRequestModal(ev);
+      }
       row.querySelector('.ev-check').onchange = function() {
         this.checked ? selected.add(ev.id) : selected.delete(ev.id);
         updateBulk();
@@ -1107,7 +1116,7 @@ async function showEventForm(event, groups, parentEl) {
             dates.forEach(({start, end}) => {
               const ref = firestore.collection('events').doc();
               const p = { ...payloadNew, startTime: start, recurrenceId };
-              if (end) p.endTime = end; else delete p.endTime;
+              if (end) p.endTime = end;
               batch.set(ref, p);
             });
             await batch.commit();
@@ -1117,57 +1126,33 @@ async function showEventForm(event, groups, parentEl) {
             showToast('Termin angelegt.', 'success');
           }
         } else {
+          // Wiederholungs-Scope prüfen
           if (event.recurrenceId) {
-            const eventDate = event.startTime?.toDate ? event.startTime.toDate() : new Date(event.startTime);
-            const scope = await askRecurrenceScope(eventDate);
+            const scope = await askRecurrenceScope(startTime);
             if (!scope) return false;
 
-            if (scope === 'all') {
-              const seriesSnap = await firestore.collection('events')
-                .where('recurrenceId', '==', event.recurrenceId).get();
-              const b = firestore.batch();
-              seriesSnap.forEach(doc => b.update(doc.ref, {
-                title, groupId: groupId||null, mode,
-                location: location||firebase.firestore.FieldValue.delete(),
-                description: desc||firebase.firestore.FieldValue.delete(),
-                trainers, members: extraMembers,
-                cancellationWindowMinutes: payload.cancellationWindowMinutes
-              }));
-              await b.commit();
-              showToast('Alle Termine der Reihe aktualisiert.', 'success');
-
-            } else if (scope === 'following') {
-              const eventTs = event.startTime?.toDate ? event.startTime.toDate() : new Date(event.startTime);
-              const seriesSnap = await firestore.collection('events')
-                .where('recurrenceId', '==', event.recurrenceId).get();
-              const b = firestore.batch();
-              let count = 0;
-              seriesSnap.forEach(doc => {
-                const docTs = doc.data().startTime?.toDate
-                  ? doc.data().startTime.toDate()
-                  : new Date(doc.data().startTime);
-                if (docTs >= eventTs) {
-                  b.update(doc.ref, {
-                    title, groupId: groupId||null, mode,
-                    location: location||firebase.firestore.FieldValue.delete(),
-                    description: desc||firebase.firestore.FieldValue.delete(),
-                    trainers, members: extraMembers,
-                    cancellationWindowMinutes: payload.cancellationWindowMinutes
-                  });
-                  count++;
-                }
-              });
-              await b.commit();
-              showToast(`${count} Termin${count!==1?'e':''} (dieser und folgende) aktualisiert.`, 'success');
-
-            } else {
+            if (scope === 'single') {
               await firestore.collection('events').doc(event.id).update(payload);
-              showToast('Termin aktualisiert.', 'success');
+            } else if (scope === 'following') {
+              const snap = await firestore.collection('events')
+                .where('recurrenceId', '==', event.recurrenceId)
+                .where('startTime', '>=', event.startTime)
+                .get();
+              const b = firestore.batch();
+              snap.forEach(doc => b.update(doc.ref, payload));
+              await b.commit();
+            } else if (scope === 'all') {
+              const snap = await firestore.collection('events')
+                .where('recurrenceId', '==', event.recurrenceId)
+                .get();
+              const b = firestore.batch();
+              snap.forEach(doc => b.update(doc.ref, payload));
+              await b.commit();
             }
           } else {
             await firestore.collection('events').doc(event.id).update(payload);
-            showToast('Termin aktualisiert.', 'success');
           }
+          showToast('Termin gespeichert.', 'success');
         }
         renderScheduleTab(parentEl);
       } catch(e) {
@@ -1182,97 +1167,18 @@ async function showEventForm(event, groups, parentEl) {
   wireCheckboxSearch('ef-extra-search',   'ef-extra-list',   allUsersWithRole, 'ef-extra-member');
 }
 
-function generateRecurringDates(startDate, endDate, recurrence, until) {
-  const results=[]; let current=new Date(startDate); let currentEnd=endDate?new Date(endDate):null;
-  const duration=currentEnd?currentEnd.getTime()-current.getTime():0;
-  while(current<=until&&results.length<200){
-    results.push({start:new Date(current),end:currentEnd?new Date(currentEnd):null});
-    if(recurrence==='monthly') current.setMonth(current.getMonth()+1);
-    else current.setDate(current.getDate()+(recurrence==='biweekly'?14:7));
-    if(currentEnd) currentEnd=new Date(current.getTime()+duration);
+/* ── Hilfsfunktion: Wiederholungsdaten generieren ────────────────────────────── */
+function generateRecurringDates(startTime, endTime, recur, until) {
+  const dates = [];
+  let cur = new Date(startTime);
+  const duration = endTime ? endTime - startTime : null;
+  while (cur <= until) {
+    const end = duration !== null ? new Date(cur.getTime() + duration) : null;
+    dates.push({ start: new Date(cur), end });
+    if (recur === 'weekly')    cur.setDate(cur.getDate() + 7);
+    else if (recur === 'biweekly') cur.setDate(cur.getDate() + 14);
+    else if (recur === 'monthly')  cur.setMonth(cur.getMonth() + 1);
+    else break;
   }
-  return results;
-}
-
-/* ===================== SETTINGS TAB (Koordinator) ===================== */
-async function renderCoordSettingsTab(el) {
-  el.innerHTML=`<div class="loading-center">Lade Einstellungen...</div>`;
-  try {
-    const doc=await firestore.collection('settings').doc('global').get();
-    const d=doc.exists?doc.data():{};
-    el.innerHTML=`
-      <div class="card">
-        <h3 style="margin-top:0;">Anmeldeeinstellungen</h3>
-
-        <label>Standard-Anmeldemodus</label>
-        <select id="cs-default-mode">
-          <option value="open"         ${(d.defaultMode||'open')==='open'?'selected':''}>Aktiv anmelden – Mitglieder melden sich selbst an</option>
-          <option value="closed"       ${d.defaultMode==='closed'?'selected':''}>Abmeldebasiert – automatisch angemeldet, Abmeldung möglich</option>
-          <option value="confirmation" ${d.defaultMode==='confirmation'?'selected':''}>Bestätigung erforderlich</option>
-        </select>
-
-        <label style="margin-top:10px;">Standard-Rückzugsfenster (Minuten)</label>
-        <p class="text-muted" style="margin:0 0 6px;font-size:0.83rem;">Positiver Wert = X Min. nach Beginn &nbsp;|&nbsp; Negativer Wert = X Min. vor Beginn</p>
-        <input type="number" id="cs-cancel-window" value="${d.cancellationWindowMinutes ?? 60}" style="max-width:120px;" />
-
-        <label style="margin-top:10px;">Maximale Teilnehmerzahl (0 = unbegrenzt)</label>
-        <input type="number" id="cs-max-p" value="${d.maxParticipants||0}" min="0" style="max-width:120px;" />
-
-        <button class="btn-primary" id="cs-save" style="display:inline-flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:18px;">save</span> Einstellungen speichern
-        </button>
-      </div>
-
-      <div class="card">
-        <h3 style="margin-top:0;">Rollenbeschriftungen</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">Passe die Bezeichnungen für Rollen in der gesamten App an.</p>
-        ${['admin','coordinator','teacher','member'].map(r => `
-          <label>${r}</label>
-          <input type="text" id="rl-${r}" value="${d.roleLabels?.[r] || getRoleLabel(r)}" />`).join('')}
-        <button class="btn-primary" id="rl-save" style="display:inline-flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:18px;">save</span> Beschriftungen speichern
-        </button>
-      </div>
-
-      <div class="card">
-        <h3 style="margin-top:0;">Auto-Absage bei Anfragen</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
-          Offene Anfragen werden nach X Minuten nach Terminbeginn automatisch als Abwesend markiert.
-          <strong>0 = deaktiviert.</strong>
-        </p>
-        <label>Frist (Minuten nach Terminbeginn, 0 = aus)</label>
-        <input type="number" id="cs-auto-cancel" value="${d.autoCancelRequestMinutes ?? 0}" min="0" style="max-width:120px;" />
-        <button class="btn-primary" id="cs-save-autocancel" style="display:inline-flex;align-items:center;gap:6px;">
-          <span class="material-icons" style="font-size:18px;">save</span> Speichern
-        </button>
-      </div>`;
-
-    el.querySelector('#cs-save').onclick = async () => {
-      await firestore.collection('settings').doc('global').set({
-        defaultMode: document.getElementById('cs-default-mode').value,
-        cancellationWindowMinutes: parseInt(document.getElementById('cs-cancel-window').value) || 60,
-        maxParticipants: parseInt(document.getElementById('cs-max-p').value) || 0
-      }, { merge: true });
-      showToast('Einstellungen gespeichert.', 'success');
-    };
-
-    el.querySelector('#rl-save').onclick = async () => {
-      const labels = {};
-      ['admin','coordinator','teacher','member'].forEach(r => {
-        labels[r] = document.getElementById(`rl-${r}`).value.trim() || r;
-      });
-      await firestore.collection('settings').doc('global').set({ roleLabels: labels }, { merge: true });
-      window.appSettings = { ...window.appSettings, roleLabels: labels };
-      showToast('Rollenbeschriftungen gespeichert. Seite neu laden für vollständige Wirkung.', 'success');
-    };
-
-    el.querySelector('#cs-save-autocancel').onclick = async () => {
-      const val = parseInt(document.getElementById('cs-auto-cancel').value) || 0;
-      await firestore.collection('settings').doc('global').set({ autoCancelRequestMinutes: val }, { merge: true });
-      window.appSettings = { ...window.appSettings, autoCancelRequestMinutes: val };
-      showToast(val > 0 ? `Auto-Absage nach ${val} Min. aktiviert.` : 'Auto-Absage deaktiviert.', 'success');
-    };
-  } catch(e) {
-    el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>';
-  }
+  return dates;
 }
