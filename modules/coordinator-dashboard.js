@@ -491,6 +491,7 @@ async function renderScheduleTab(el) {
     // Gruppen global verfügbar machen (für substitution.js)
     window._allGroups = groups;
 
+    // ── Kein-Betreuer-Alerts ────────────────────────────────────────────────
     const alertSnap = await firestore.collection('systemMessages')
       .where('active', '==', true)
       .where('_msgType', '==', 'no_trainer_alert')
@@ -499,6 +500,17 @@ async function renderScheduleTab(el) {
     alertSnap.forEach(doc => {
       const eid = doc.data()._eventId;
       if (eid) alertEventIds.add(eid);
+    });
+
+    // ── Vertretungsanfragen-Alerts ──────────────────────────────────────────
+    const subSnap = await firestore.collection('systemMessages')
+      .where('active', '==', true)
+      .where('_msgType', '==', 'substitution')
+      .get();
+    const substitutionEventIds = new Set();
+    subSnap.forEach(doc => {
+      const eid = doc.data()._eventId;
+      if (eid) substitutionEventIds.add(eid);
     });
 
     el.innerHTML = `
@@ -532,7 +544,7 @@ async function renderScheduleTab(el) {
     const delSelBtn    = el.querySelector('#sch-delete-selected');
 
     const renderView = () => scheduleViewMode === 'list'
-      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn, alertEventIds)
+      ? renderEventList(contentEl, events, groups, el, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn, alertEventIds, substitutionEventIds)
       : renderCalendarView(contentEl, events, groups, el);
 
     el.querySelector('#view-list').onclick = () => { scheduleViewMode='list'; el.querySelector('#view-list').classList.add('active'); el.querySelector('#view-calendar').classList.remove('active'); renderView(); };
@@ -664,7 +676,7 @@ async function confirmDeleteEvents(selectedIds, events, parentEl) {
 }
 
 /* ── Terminliste ──────────────────────────────────────────────────────────── */
-function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn, alertEventIds = new Set()) {
+function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn, alertEventIds = new Set(), substitutionEventIds = new Set()) {
   const selected = new Set();
 
   const updateBulk = () => {
@@ -778,19 +790,29 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
     }
 
     visible.forEach(ev => {
-      const startDate  = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
-      const isSkipped  = ev.status === 'skipped';
-      const hasAlert   = alertEventIds.has(ev.id);
+      const startDate   = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+      const isSkipped   = ev.status === 'skipped';
+      const hasAlert    = alertEventIds.has(ev.id);
+      const hasSub      = substitutionEventIds.has(ev.id);
       const row = document.createElement('tr');
 
       if (isSkipped) row.style.opacity = '0.6';
+
+      // Zeilenhintergrund: Kein-Betreuer hat Vorrang vor Vertretungsanfrage
       if (hasAlert && !isSkipped) {
         row.style.background = 'rgba(245,124,0,0.08)';
         row.style.borderLeft = '3px solid var(--color-warning,#f57c00)';
+      } else if (hasSub && !isSkipped) {
+        row.style.background = 'rgba(2,136,209,0.07)';
+        row.style.borderLeft = '3px solid var(--color-primary)';
       }
 
       const noTrainerBadge = hasAlert && !isSkipped
         ? `<span class="chip chip-warning" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;"><span class="material-icons" style="font-size:12px;">warning</span>Kein Betreuer</span>`
+        : '';
+
+      const subBadge = hasSub && !isSkipped
+        ? `<span class="chip" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;background:var(--color-primary-highlight);color:var(--color-primary);border:1px solid var(--color-primary);"><span class="material-icons" style="font-size:12px;">swap_horiz</span>Vertretung angefragt</span>`
         : '';
 
       row.innerHTML = `
@@ -801,6 +823,7 @@ function renderEventList(el, events, groups, parentEl, bulkBar, bulkCount, skipS
             <span style="${isSkipped?'text-decoration:line-through;':''}">${ev.title||'(kein Titel)'}</span>
             ${ev.recurrenceId ? '<span class="chip" style="font-size:0.72rem;padding:1px 5px;">Reihe</span>' : ''}
             ${noTrainerBadge}
+            ${subBadge}
           </div>
           ${isSkipped && ev.skipReason ? `<div style="font-size:0.78rem;color:var(--color-text-muted);margin-top:2px;">Grund: ${ev.skipReason}</div>` : ''}
         </td>
