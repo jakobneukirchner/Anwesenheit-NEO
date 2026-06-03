@@ -1,1 +1,235 @@
-// Platzhalterdatei wurde korrigiert. Die echte Trainer-Dashboard-Datei muss aus dem letzten funktionierenden Stand wiederhergestellt und anschließend gepatcht werden.
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Anwesenheit-NEO</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" />
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <script>
+    window.FIREBASE_API_KEY             = "{{FIREBASE_API_KEY}}";
+    window.FIREBASE_AUTH_DOMAIN         = "{{FIREBASE_AUTH_DOMAIN}}";
+    window.FIREBASE_PROJECT_ID          = "{{FIREBASE_PROJECT_ID}}";
+    window.FIREBASE_STORAGE_BUCKET      = "{{FIREBASE_STORAGE_BUCKET}}";
+    window.FIREBASE_MESSAGING_SENDER_ID = "{{FIREBASE_MESSAGING_SENDER_ID}}";
+    window.FIREBASE_APP_ID              = "{{FIREBASE_APP_ID}}";
+    window.FIREBASE_MEASUREMENT_ID      = "{{FIREBASE_MEASUREMENT_ID}}";
+  </script>
+
+  <style>
+    .hidden { display: none !important; }
+
+    /* ── Auth-Lade-Overlay (sichtbar bis Firebase antwortet) ── */
+    #auth-loading {
+      position: fixed;
+      inset: 0;
+      background: var(--color-bg, #f5f5f5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    #auth-loading .auth-spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--color-border, #e0e0e0);
+      border-top-color: var(--color-primary, #1565c0);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    /* ── Einfacher Login-Screen ── */
+    #login-screen {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--color-bg);
+      padding: 16px;
+    }
+    #login-box {
+      width: 100%;
+      max-width: 360px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-medium);
+      padding: 28px 24px;
+      box-shadow: var(--shadow-elevated);
+    }
+    #login-box h2 { margin: 0 0 20px; font-size: 1.2rem; font-weight: 600; }
+    #login-box label { display: block; font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 4px; margin-top: 12px; }
+    #login-box input {
+      width: 100%; padding: 8px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-small);
+      background: var(--color-bg-elevated);
+      color: var(--color-text);
+      font: inherit; font-size: 0.95rem; margin-bottom: 0;
+    }
+    #login-box input:focus { outline: 2px solid var(--color-primary); border-color: var(--color-primary); }
+    #login-submit-btn {
+      width: 100%; margin-top: 20px; padding: 10px;
+      font-size: 1rem; font-weight: 600;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    #login-error { margin-top: 12px; font-size: 0.875rem; color: var(--color-error); min-height: 20px; }
+    #forgot-pw-btn {
+      display: block; width: 100%; margin-top: 12px; padding: 6px;
+      background: none; border: none; cursor: pointer;
+      font-size: 0.85rem; color: var(--color-text-muted);
+      text-align: center; border-radius: var(--radius-small);
+    }
+    #forgot-pw-btn:hover { color: var(--color-primary); background: rgba(21,101,192,0.07); }
+    #login-spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <!-- Wird sofort angezeigt bis Firebase den Auth-State geprüft hat -->
+  <div id="auth-loading">
+    <div class="auth-spinner"></div>
+  </div>
+
+  <!-- Beide Screens starten versteckt – auth.js blendet den richtigen ein -->
+  <div id="login-screen" class="hidden">
+    <div id="login-box">
+      <h2>Anwesenheit-NEO</h2>
+      <form id="login-form" autocomplete="on" novalidate>
+        <label for="login-email">E-Mail</label>
+        <input id="login-email" type="email" name="email" autocomplete="email" placeholder="deine@email.de" />
+        <label for="login-password">Passwort</label>
+        <input id="login-password" type="password" name="password" autocomplete="current-password" placeholder="Passwort" />
+        <div id="login-error"></div>
+        <button type="submit" id="login-submit-btn" class="btn-primary">
+          <span id="login-btn-text">Anmelden</span>
+          <div id="login-spinner" class="hidden"></div>
+        </button>
+      </form>
+      <button type="button" id="forgot-pw-btn">Passwort vergessen?</button>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="app-root" class="hidden">
+    <div class="app-shell">
+      <header class="app-bar">
+        <div class="app-brand">
+          <div id="app-logo" class="app-logo"></div>
+          <span id="app-title">Anwesenheit-NEO</span>
+        </div>
+        <div class="app-actions desktop-only" id="app-actions-desktop">
+          <span id="app-user-name"
+            style="font-size:0.88rem;opacity:0.85;margin-right:2px;cursor:pointer;text-decoration:underline dotted;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;"
+            title="Mein Konto"></span>
+          <button id="profile-btn" class="btn-text btn-icon" title="Konto">
+            <span class="material-icons">manage_accounts</span>
+            <span class="btn-label">Konto</span>
+          </button>
+          <button id="notif-btn" class="btn-icon-only" title="Benachrichtigungen" aria-label="Benachrichtigungen" style="position:relative;">
+            <span class="material-icons">notifications</span>
+            <span id="notif-badge" hidden style="position:absolute;top:4px;right:4px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--color-notification,#a13544);color:#fff;font-size:0.65rem;font-weight:700;line-height:16px;text-align:center;pointer-events:none;"></span>
+          </button>
+          <button id="logout-btn" class="btn-text btn-icon" title="Abmelden">
+            <span class="material-icons">logout</span>
+            <span class="btn-label">Abmelden</span>
+          </button>
+        </div>
+        <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menü" aria-label="Menü">
+          <span class="material-icons">menu</span>
+        </button>
+      </header>
+
+      <div id="mobile-drawer-overlay" class="mobile-drawer-overlay" hidden></div>
+      <aside id="mobile-drawer" class="mobile-drawer" hidden>
+        <div class="mobile-drawer-header">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
+            <div style="min-width:0;">
+              <div id="mobile-user-name" style="font-weight:600;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+              <div style="font-size:0.8rem;color:var(--color-text-muted);">Angemeldet</div>
+            </div>
+          </div>
+          <button id="mobile-drawer-close" class="mobile-drawer-close" aria-label="Schließen" title="Schließen">
+            <span class="material-icons">close</span>
+          </button>
+        </div>
+        <div id="mobile-role-switcher" class="mobile-drawer-section"></div>
+        <div class="mobile-drawer-section">
+          <button id="mobile-notif-btn" class="mobile-drawer-btn" hidden style="position:relative;">
+            <span class="material-icons">notifications</span>
+            <span>Benachrichtigungen</span>
+            <span id="mobile-notif-badge" hidden style="margin-left:auto;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:var(--color-notification,#a13544);color:#fff;font-size:0.72rem;font-weight:700;line-height:20px;text-align:center;"></span>
+          </button>
+          <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
+            <span class="material-icons">manage_accounts</span>
+            <span>Konto</span>
+          </button>
+          <button id="mobile-logout-btn" class="mobile-drawer-btn" hidden>
+            <span class="material-icons">logout</span>
+            <span>Abmelden</span>
+          </button>
+        </div>
+      </aside>
+
+      <main id="app-content" class="app-content">
+        <div class="loading-center">Laden...</div>
+      </main>
+    </div>
+  </div>
+
+  <script src="/js/firebase-init.js"></script>
+  <script src="/js/utils.js"></script>
+  <script src="/js/rate-limit.js"></script>
+  <script src="/modules/settings.js"></script>
+  <script src="/modules/profile.js"></script>
+  <script src="/modules/member-dashboard.js"></script>
+  <script src="/modules/trainer-dashboard.js"></script>
+  <script src="/modules/substitution.js"></script>
+  <script src="/modules/coordinator-dashboard.js"></script>
+  <script src="/modules/admin-dashboard.js"></script>
+  <script src="/modules/statistics.js"></script>
+  <script src="/modules/system-messages.js"></script>
+  <script src="/modules/member-report.js"></script>
+  <script src="/modules/event-notifications.js"></script>
+  <script src="/modules/notifications.js"></script>
+  <script src="/js/auth.js"></script>
+
+  <script>
+    (function() {
+      const menuBtn  = document.getElementById('mobile-menu-btn');
+      const drawer   = document.getElementById('mobile-drawer');
+      const overlay  = document.getElementById('mobile-drawer-overlay');
+      const closeBtn = document.getElementById('mobile-drawer-close');
+      function isMobile() { return window.matchMedia('(max-width: 639px)').matches; }
+      function openDrawer() {
+        if (!isMobile()) return;
+        drawer.hidden = false; overlay.hidden = false;
+        document.body.style.overflow = 'hidden';
+      }
+      function closeDrawer() {
+        drawer.hidden = true; overlay.hidden = true;
+        document.body.style.overflow = '';
+      }
+      menuBtn?.addEventListener('click', openDrawer);
+      closeBtn?.addEventListener('click', closeDrawer);
+      overlay?.addEventListener('click', closeDrawer);
+      window.addEventListener('resize', () => { if (!isMobile()) closeDrawer(); });
+      window._mobileDrawerClose = closeDrawer;
+    })();
+  </script>
+</body>
+</html>
