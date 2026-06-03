@@ -1,1 +1,92 @@
-<!-- index content -->
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Anwesenheit</title>
+
+  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Icons" />
+</head>
+<body>
+  <div id="toast-container"></div>
+
+  <div id="auth-section" class="auth-view">
+    <div class="auth-card">
+      <h1 class="auth-title">Willkommen</h1>
+      <p class="auth-subtitle">Bitte melde dich an, um fortzufahren.</p>
+      <form id="login-form" class="auth-form">
+        <label for="email">E-Mail</label>
+        <input id="email" type="email" required autocomplete="email" />
+        <label for="password">Passwort</label>
+        <input id="password" type="password" required autocomplete="current-password" />
+        <button type="submit" class="btn-primary">Anmelden</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-shell" hidden>
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="sidebar-toggle" class="btn-icon-only" title="Navigation" aria-label="Navigation">
+          <span class="material-icons">menu</span>
+        </button>
+        <div class="brand">Anwesenheit NEO</div>
+      </div>
+      <div class="topbar-right">
+        <button id="profile-btn" class="btn-text btn-icon" title="Konto">
+          <span class="material-icons">manage_accounts</span>
+          <span class="btn-label">Konto</span>
+        </button>
+        <button id="logout-btn" class="btn-text btn-icon" title="Abmelden">
+          <span class="material-icons">logout</span>
+          <span class="btn-label">Abmelden</span>
+        </button>
+      </div>
+      <button id="mobile-menu-btn" class="btn-icon-only mobile-only" title="Menü" aria-label="Menü">
+        <span class="material-icons">menu</span>
+      </button>
+    </header>
+
+    <div id="mobile-drawer-overlay" class="mobile-drawer-overlay" hidden></div>
+    <aside id="mobile-drawer" class="mobile-drawer" hidden>
+      <div class="mobile-drawer-header">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+          <span class="material-icons" style="font-size:2rem;color:var(--color-primary);">account_circle</span>
+          <div style="min-width:0;">
+            <div id="mobile-user-name" style="font-weight:600;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+            <div style="font-size:0.8rem;color:var(--color-text-muted);">Angemeldet</div>
+          </div>
+        </div>
+        <button id="mobile-drawer-close" class="mobile-drawer-close" aria-label="Schließen" title="Schließen">
+          <span class="material-icons">close</span>
+        </button>
+      </div>
+      <div id="mobile-role-switcher" class="mobile-drawer-section"></div>
+      <div class="mobile-drawer-section">
+        <button id="mobile-profile-btn" class="mobile-drawer-btn" hidden>
+          <span class="material-icons">manage_accounts</span>
+          <span>Konto</span>
+        </button>
+        <button id="mobile-logout-btn" class="mobile-drawer-btn" hidden>
+          <span class="material-icons">logout</span>
+          <span>Abmelden</span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="app-layout">
+      <aside id="sidebar" class="sidebar"></aside>
+      <main id="main-content" class="main-content"></main>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script src="/firebase/firebase-config.js"></script>
+  <script src="/modules/event-notifications.js"></script>
+  <script src="/modules/notifications.js"></script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
