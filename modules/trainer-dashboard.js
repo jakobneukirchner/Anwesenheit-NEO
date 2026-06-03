@@ -42,8 +42,6 @@ async function loadTrainerDashboard() {
     }
 
     // Offene Vertretungsanfragen für diesen Trainer laden
-    // Nur nach requestedTo filtern (kein zusammengesetzter Index nötig),
-    // Status-Filter und Sortierung im JS erledigen.
     let pendingRequests = [];
     try {
       const reqSnap = await firestore.collection('substitution_requests')
@@ -53,7 +51,6 @@ async function loadTrainerDashboard() {
         const d = { id: doc.id, ...doc.data() };
         if (d.status === 'pending') pendingRequests.push(d);
       });
-      // Neueste zuerst
       pendingRequests.sort((a, b) => {
         const ta = a.createdAt?.toMillis?.() || 0;
         const tb = b.createdAt?.toMillis?.() || 0;
@@ -304,20 +301,21 @@ function renderSubstitutionRequestsTab(container, requests, myUid) {
 /**
  * Verarbeitet Annehmen oder Ablehnen einer Vertretungsanfrage:
  * 1. Status in substitution_requests updaten
- * 2. systemMessage an den Koordinator senden
- * 3. Bei Annehmen: Trainer zum Event hinzufügen
- * 4. Dashboard neu laden
+ * 2. systemMessage an den Koordinator senden (bisheriges System)
+ * 3. eventNotification an den Koordinator senden (neues System)
+ * 4. Bei Annehmen: Trainer zum Event hinzufügen
+ * 5. Dashboard neu laden
  */
 async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
-  const myName = window.currentUser?.profile?.displayName || 'Betreuer';
+  const myName     = window.currentUser?.profile?.displayName || 'Betreuer';
   const isAccepted = resolution === 'accepted';
 
   try {
     // 1. substitution_requests aktualisieren
     await firestore.collection('substitution_requests').doc(req.id).update({
-      status:      resolution,
-      resolution:  resolution,
-      resolvedAt:  firebase.firestore.FieldValue.serverTimestamp(),
+      status:       resolution,
+      resolution:   resolution,
+      resolvedAt:   firebase.firestore.FieldValue.serverTimestamp(),
       resolvedNote: note || ''
     });
 
@@ -325,7 +323,7 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
     if (isAccepted) {
       try {
         await firestore.collection('events').doc(req.eventId).update({
-          trainers: firebase.firestore.FieldValue.arrayUnion(myUid),
+          trainers:             firebase.firestore.FieldValue.arrayUnion(myUid),
           trainerCancellations: firebase.firestore.FieldValue.arrayRemove(myUid)
         });
       } catch (e) {
@@ -333,14 +331,15 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       }
     }
 
-    // 3. systemMessage an den anfragenden Koordinator senden
+    // 3. Datum/Uhrzeit für Nachrichtentext aufbereiten
     const eventDate = req.eventDate?.toDate ? req.eventDate.toDate() : null;
     const dateStr   = eventDate ? `${formatDate(eventDate)}, ${formatTime(eventDate)}` : '–';
 
     const msgText = isAccepted
-      ? `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) angenommen.${note ? ' Nachricht: ' + note : ''}`
-      : `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) abgelehnt.${note ? ' Begründung: ' + note : ''}`;
+      ? `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}“ (${dateStr}) angenommen.${note ? ' Nachricht: ' + note : ''}`
+      : `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}“ (${dateStr}) abgelehnt.${note ? ' Begründung: ' + note : ''}`;
 
+    // 4. systemMessage an den anfragenden Koordinator (bisheriges System)
     await firestore.collection('systemMessages').add({
       type:           isAccepted ? 'success' : 'warning',
       title:          isAccepted ? 'Vertretung angenommen' : 'Vertretung abgelehnt',
@@ -356,8 +355,28 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       _msgType:       'replacement_response'
     });
 
+    // 5. eventNotification an den anfragenden Koordinator (neues System)
+    if (req.requestedBy && typeof sendEventNotification === 'function') {
+      await sendEventNotification({
+        recipientUid: req.requestedBy,
+        eventId:      req.eventId,
+        eventTitle:   req.eventTitle || 'Termin',
+        type:         isAccepted ? 'substitution_accepted' : 'substitution_declined',
+        message:      msgText,
+        _meta: {
+          trainerName:     myName,
+          trainerUid:      myUid,
+          resolution,
+          note:            note || '',
+          requestedByName: req.requestedByName || '',
+        },
+      });
+    }
+
     showToast(
-      isAccepted ? 'Vertretung angenommen. Koordinator wurde informiert.' : 'Anfrage abgelehnt. Koordinator wurde informiert.',
+      isAccepted
+        ? 'Vertretung angenommen. Koordinator wurde informiert.'
+        : 'Anfrage abgelehnt. Koordinator wurde informiert.',
       isAccepted ? 'success' : 'info'
     );
 
@@ -584,7 +603,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}“ angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
@@ -1038,7 +1057,7 @@ async function _notifyCoordinatorNoTrainer(event) {
     }
 
     const coordUids = coordinators.map(c => c.id);
-    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
+    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}“ (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
 
     await firestore.collection('systemMessages').add({
       type:            'warning',
@@ -1120,7 +1139,7 @@ async function _openReplacementModal(event, requestingUid) {
 
       const targetUser = allTrainers.find(u => u.id === targetUid) || { displayName: targetUid };
       const messageText = customMsg
-        || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
+        || `${myName} kann beim Termin „${event.title || 'Termin'}“ (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
         // 1. Dokument in substitution_requests anlegen
@@ -1137,7 +1156,7 @@ async function _openReplacementModal(event, requestingUid) {
           createdAt:        firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // 2. systemMessage als Benachrichtigung senden
+        // 2. systemMessage als Benachrichtigung senden (bisheriges System)
         await firestore.collection('systemMessages').add({
           type:           'info',
           title:          'Vertretungsanfrage',
@@ -1152,6 +1171,22 @@ async function _openReplacementModal(event, requestingUid) {
           _fromUid:       requestingUid,
           _msgType:       'replacement_request'
         });
+
+        // 3. eventNotification an den angefragten Betreuer (neues System)
+        if (typeof sendEventNotification === 'function') {
+          await sendEventNotification({
+            recipientUid: targetUid,
+            eventId:      event.id,
+            eventTitle:   event.title || 'Termin',
+            type:         'substitution_request',
+            message:      messageText,
+            _meta: {
+              requestedByName: myName,
+              requestedByUid:  requestingUid,
+              trainerName:     targetUser.displayName || targetUser.email || targetUid,
+            },
+          });
+        }
 
         showToast(`Anfrage an ${targetUser.displayName || 'Betreuer'} gesendet.`, 'success');
       } catch (err) {
