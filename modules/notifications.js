@@ -1,5 +1,5 @@
 // modules/notifications.js
-// Benachrichtigungs-Glocke: liest system_messages für den aktuellen Nutzer
+// Benachrichtigungs-Glocke: liest system_messages + eventNotifications für den aktuellen Nutzer
 
 (function () {
 
@@ -96,11 +96,32 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 17px;
     }
-    .notif-item .ni-icon.type-substitution_request   { background: var(--color-warning-highlight); color: var(--color-warning); }
-    .notif-item .ni-icon.type-substitution_accepted  { background: var(--color-success-highlight); color: var(--color-success); }
-    .notif-item .ni-icon.type-substitution_auto_cancelled { background: var(--color-error-highlight); color: var(--color-error); }
-    .notif-item .ni-icon.type-event_cancelled        { background: var(--color-error-highlight); color: var(--color-error); }
-    .notif-item .ni-icon.type-default                { background: var(--color-surface-offset-2); color: var(--color-text-muted); }
+    .notif-item .ni-icon.type-substitution_request        { background: var(--color-warning-highlight);  color: var(--color-warning); }
+    .notif-item .ni-icon.type-substitution_accepted       { background: var(--color-success-highlight);  color: var(--color-success); }
+    .notif-item .ni-icon.type-substitution_declined       { background: var(--color-error-highlight);    color: var(--color-error); }
+    .notif-item .ni-icon.type-substitution_auto_cancelled { background: var(--color-error-highlight);    color: var(--color-error); }
+    .notif-item .ni-icon.type-event_cancelled             { background: var(--color-error-highlight);    color: var(--color-error); }
+    .notif-item .ni-icon.type-default                     { background: var(--color-surface-offset-2);   color: var(--color-text-muted); }
+
+    /* Quelle-Pill: zeigt ob system_message oder eventNotification */
+    .ni-source-pill {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      padding: 1px 6px;
+      border-radius: 999px;
+      margin-bottom: 3px;
+      text-transform: uppercase;
+    }
+    .ni-source-pill.source-event {
+      background: var(--color-primary-highlight);
+      color: var(--color-primary);
+    }
+    .ni-source-pill.source-system {
+      background: var(--color-surface-offset-2);
+      color: var(--color-text-muted);
+    }
 
     .notif-item .ni-body { flex: 1; min-width: 0; }
     .notif-item .ni-text {
@@ -108,6 +129,11 @@
       line-height: 1.45;
       color: var(--color-text);
       word-break: break-word;
+    }
+    .notif-item .ni-event-title {
+      font-size: 0.78rem;
+      color: var(--color-text-muted);
+      margin-top: 2px;
     }
     .notif-item .ni-time {
       font-size: 0.75rem;
@@ -138,8 +164,6 @@
     }
     .notif-item:hover .ni-read-btn { display: flex; }
     .notif-item .ni-read-btn:hover { color: var(--color-text); background: var(--color-surface-dynamic); }
-
-    /* ── Unread dot verschwindet wenn read-btn sichtbar ── */
     .notif-item:hover .ni-dot { display: none; }
 
     /* ── Empty ── */
@@ -188,35 +212,50 @@
 })();
 
 /* ─── State ─────────────────────────────────────────────────────────────────── */
-let _unsubscribe = null;
-let _isOpen = false;
-let _dropdownEl = null;
+let _unsubSystem    = null; // Listener für system_messages
+let _unsubEvent     = null; // Listener für eventNotifications
+let _isOpen         = false;
+let _dropdownEl     = null;
 let _outsideHandler = null;
-let _notifications = [];
+
+// Beide Collections werden in einem einzigen Array zusammengeführt
+let _systemNotifs = [];
+let _eventNotifs  = [];
 
 /* ─── Typ → Icon ─────────────────────────────────────────────────────────────── */
 const TYPE_ICON = {
   substitution_request:        'swap_horiz',
   substitution_accepted:       'check_circle',
+  substitution_declined:       'cancel',
   substitution_auto_cancelled: 'cancel',
   event_cancelled:             'event_busy',
 };
-function _iconFor(type) { return TYPE_ICON[type] || 'notifications'; }
+function _iconFor(type)  { return TYPE_ICON[type] || 'notifications'; }
 function _typeClass(type) { return TYPE_ICON[type] ? `type-${type}` : 'type-default'; }
+
+/* ─── Merge & Sort ───────────────────────────────────────────────────────────── */
+function _merged() {
+  return [..._systemNotifs, ..._eventNotifs].sort((a, b) => {
+    const ta = a.createdAt?.toDate?.() || new Date(a.createdAt || 0);
+    const tb = b.createdAt?.toDate?.() || new Date(b.createdAt || 0);
+    return tb - ta;
+  });
+}
 
 /* ─── Zeitformat ─────────────────────────────────────────────────────────────── */
 function _relTime(date) {
   if (!date) return '';
   const diff = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diff < 60)   return 'Gerade eben';
-  if (diff < 3600) return `vor ${Math.floor(diff / 60)} Min.`;
+  if (diff < 60)    return 'Gerade eben';
+  if (diff < 3600)  return `vor ${Math.floor(diff / 60)} Min.`;
   if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std.`;
   const d = date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
   return `am ${d}`;
 }
 
 /* ─── Badge aktualisieren ────────────────────────────────────────────────────── */
-function _updateBadge(count) {
+function _updateBadge() {
+  const count = _merged().filter(n => !n.read).length;
   ['notif-badge', 'mobile-notif-badge'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -231,32 +270,57 @@ function _updateBadge(count) {
 
 /* ─── Listener starten ───────────────────────────────────────────────────────── */
 function startNotificationsListener() {
-  if (_unsubscribe) { _unsubscribe(); _unsubscribe = null; }
+  if (_unsubSystem) { _unsubSystem(); _unsubSystem = null; }
+  if (_unsubEvent)  { _unsubEvent();  _unsubEvent  = null; }
+
   const uid = window.currentUser?.firebaseUser?.uid;
   if (!uid) return;
 
-  _unsubscribe = firestore
+  // ── 1. system_messages (bisheriges System) ──────────────────────────────────
+  _unsubSystem = firestore
     .collection('system_messages')
     .where('recipientId', '==', uid)
     .onSnapshot(snap => {
-      _notifications = [];
-      snap.forEach(doc => { _notifications.push({ id: doc.id, ...doc.data() }); });
-      // Neueste zuerst
-      _notifications.sort((a, b) => {
-        const ta = a.createdAt?.toDate?.() || new Date(a.createdAt || 0);
-        const tb = b.createdAt?.toDate?.() || new Date(b.createdAt || 0);
-        return tb - ta;
+      _systemNotifs = [];
+      snap.forEach(doc => {
+        _systemNotifs.push({ id: doc.id, _source: 'system', ...doc.data() });
       });
-      const unread = _notifications.filter(n => !n.read).length;
-      _updateBadge(unread);
+      _updateBadge();
       if (_isOpen && _dropdownEl) _renderList();
-    }, err => console.warn('notif listener error', err));
+    }, err => console.warn('notif/system_messages listener error', err));
+
+  // ── 2. eventNotifications (neues System) ────────────────────────────────────
+  _unsubEvent = firestore
+    .collection('eventNotifications')
+    .where('recipientUid', '==', uid)
+    .onSnapshot(snap => {
+      _eventNotifs = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        // Normalisierung: text-Feld ableiten falls fehlt
+        _eventNotifs.push({
+          id:          doc.id,
+          _source:     'event',
+          text:        d.message || d.text || '',
+          read:        d.read || false,
+          type:        d.type,
+          createdAt:   d.createdAt,
+          _eventId:    d.eventId,
+          _eventTitle: d.eventTitle,
+          _meta:       d._meta || {},
+        });
+      });
+      _updateBadge();
+      if (_isOpen && _dropdownEl) _renderList();
+    }, err => console.warn('notif/eventNotifications listener error', err));
 }
 
 function stopNotificationsListener() {
-  if (_unsubscribe) { _unsubscribe(); _unsubscribe = null; }
-  _notifications = [];
-  _updateBadge(0);
+  if (_unsubSystem) { _unsubSystem(); _unsubSystem = null; }
+  if (_unsubEvent)  { _unsubEvent();  _unsubEvent  = null; }
+  _systemNotifs = [];
+  _eventNotifs  = [];
+  _updateBadge();
   _closeDropdown();
 }
 
@@ -270,7 +334,7 @@ function _openDropdown() {
   _dropdownEl.setAttribute('role', 'dialog');
   _dropdownEl.setAttribute('aria-label', 'Benachrichtigungen');
 
-  const unread = _notifications.filter(n => !n.read).length;
+  const unread = _merged().filter(n => !n.read).length;
   _dropdownEl.innerHTML = `
     <div class="nd-header">
       <div class="nd-title">
@@ -288,7 +352,6 @@ function _openDropdown() {
 
   _dropdownEl.querySelector('#nd-mark-all-btn')?.addEventListener('click', _markAllRead);
 
-  // Outside-click
   _outsideHandler = (e) => {
     const btn  = document.getElementById('notif-btn');
     const mBtn = document.getElementById('mobile-notif-btn');
@@ -333,42 +396,56 @@ function _renderList() {
   const list = document.getElementById('notif-list');
   if (!list) return;
 
-  if (!_notifications.length) {
+  const all = _merged();
+
+  if (!all.length) {
     list.innerHTML = `
       <div class="nd-empty">
         <span class="material-icons">notifications_none</span>
         <p>Keine Benachrichtigungen</p>
       </div>`;
-    // Mark-all-Btn weg
     _dropdownEl?.querySelector('#nd-mark-all-btn')?.remove();
     return;
   }
 
-  list.innerHTML = _notifications.map(n => {
-    const date = n.createdAt?.toDate?.() || (n.createdAt ? new Date(n.createdAt) : null);
-    const esc  = typeof escapeHtml === 'function' ? escapeHtml : (s => s);
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : (s => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
+
+  list.innerHTML = all.map(n => {
+    const date     = n.createdAt?.toDate?.() || (n.createdAt ? new Date(n.createdAt) : null);
+    const isEvent  = n._source === 'event';
+    const pillHtml = isEvent
+      ? `<span class="ni-source-pill source-event">Vertretung</span>`
+      : `<span class="ni-source-pill source-system">System</span>`;
+    const eventTitleHtml = isEvent && n._eventTitle
+      ? `<div class="ni-event-title"><span class="material-icons" style="font-size:12px;vertical-align:-2px;margin-right:2px;">event</span>${esc(n._eventTitle)}</div>`
+      : '';
     return `
-      <div class="notif-item ${n.read ? '' : 'notif-unread'}" data-id="${n.id}">
+      <div class="notif-item ${n.read ? '' : 'notif-unread'}" data-id="${n.id}" data-source="${n._source}">
         <div class="ni-icon ${_typeClass(n.type)}">
           <span class="material-icons">${_iconFor(n.type)}</span>
         </div>
         <div class="ni-body">
-          <div class="ni-text">${esc(n.text || '')}</div>
+          ${pillHtml}
+          <div class="ni-text">${esc(n.text)}</div>
+          ${eventTitleHtml}
           ${date ? `<div class="ni-time">${_relTime(date)}</div>` : ''}
         </div>
         ${!n.read ? `<div class="ni-dot"></div>` : ''}
-        ${!n.read ? `<button class="ni-read-btn" data-id="${n.id}" title="Als gelesen markieren" aria-label="Als gelesen markieren"><span class="material-icons" style="font-size:16px;pointer-events:none;">done</span></button>` : ''}
+        ${!n.read ? `<button class="ni-read-btn" data-id="${n.id}" data-source="${n._source}" title="Als gelesen markieren" aria-label="Als gelesen markieren"><span class="material-icons" style="font-size:16px;pointer-events:none;">done</span></button>` : ''}
       </div>`;
   }).join('');
 
   list.querySelectorAll('.ni-read-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => { e.stopPropagation(); _markRead(btn.dataset.id); });
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _markRead(btn.dataset.id, btn.dataset.source);
+    });
   });
 
   // Mark-all-Btn aktualisieren
   const header = _dropdownEl?.querySelector('.nd-header');
   if (header) {
-    const unread   = _notifications.filter(n => !n.read).length;
+    const unread   = all.filter(n => !n.read).length;
     const existing = header.querySelector('#nd-mark-all-btn');
     if (unread > 0 && !existing) {
       const btn = document.createElement('button');
@@ -384,21 +461,56 @@ function _renderList() {
 }
 
 /* ─── Als gelesen markieren ─────────────────────────────────────────────────── */
-async function _markRead(id) {
+async function _markRead(id, source) {
   try {
-    await firestore.collection('system_messages').doc(id).update({ read: true });
+    const collection = source === 'event' ? 'eventNotifications' : 'system_messages';
+    await firestore.collection(collection).doc(id).update({ read: true });
   } catch (e) { console.warn('markRead error', e); }
 }
 
 async function _markAllRead() {
-  const unread = _notifications.filter(n => !n.read);
+  const unread = _merged().filter(n => !n.read);
   if (!unread.length) return;
   const batch = firestore.batch();
   unread.forEach(n => {
-    batch.update(firestore.collection('system_messages').doc(n.id), { read: true });
+    const col = n._source === 'event' ? 'eventNotifications' : 'system_messages';
+    batch.update(firestore.collection(col).doc(n.id), { read: true });
   });
   try { await batch.commit(); }
   catch (e) { console.warn('markAllRead error', e); }
+}
+
+/* ─── Öffentlicher Helper: eventNotification senden ─────────────────────────── */
+/**
+ * Erstellt ein Dokument in der eventNotifications-Collection.
+ *
+ * @param {object} opts
+ * @param {string} opts.recipientUid   - UID des Empfängers
+ * @param {string} opts.eventId        - Firestore-ID des Events
+ * @param {string} opts.eventTitle     - Anzeigename des Events
+ * @param {'substitution_request'|'substitution_accepted'|'substitution_declined'|'event_cancelled'} opts.type
+ * @param {string} opts.message        - Nachrichtentext
+ * @param {object} [opts._meta]        - Optionale Metadaten (requestedByName, trainerName, …)
+ */
+async function sendEventNotification({ recipientUid, eventId, eventTitle, type, message, _meta = {} }) {
+  if (!recipientUid || !eventId || !type || !message) {
+    console.warn('sendEventNotification: Pflichtfelder fehlen', { recipientUid, eventId, type, message });
+    return;
+  }
+  try {
+    await firestore.collection('eventNotifications').add({
+      recipientUid,
+      eventId,
+      eventTitle: eventTitle || '',
+      type,
+      message,
+      read: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      _meta,
+    });
+  } catch (e) {
+    console.warn('sendEventNotification error', e);
+  }
 }
 
 /* ─── Buttons verdrahten ─────────────────────────────────────────────────────── */
@@ -413,7 +525,6 @@ function initNotificationBell() {
     mBtn.hidden = false;
     mBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      // Mobile-Drawer zuerst schließen
       const drawer  = document.getElementById('mobile-drawer');
       const overlay = document.getElementById('mobile-drawer-overlay');
       if (drawer)  drawer.hidden  = true;
@@ -427,5 +538,6 @@ function initNotificationBell() {
 window.startNotificationsListener = startNotificationsListener;
 window.stopNotificationsListener  = stopNotificationsListener;
 window.initNotificationBell       = initNotificationBell;
+window.sendEventNotification      = sendEventNotification;  // für substitution.js & trainer-dashboard.js
 
 })();
