@@ -22,25 +22,6 @@ async function loadTrainerDashboard() {
     const futureEnd = new Date(now.getTime() + lookAheadDays * 24 * 60 * 60 * 1000);
     const pastStart = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000);
 
-    // systemMessages für diesen User laden
-    let systemMessages = [];
-    try {
-      const msgSnap = await firestore.collection('systemMessages')
-        .where('active', '==', true)
-        .orderBy('createdAt', 'desc')
-        .limit(20)
-        .get();
-      msgSnap.forEach(doc => {
-        const d = { id: doc.id, ...doc.data() };
-        const isGlobal = d.recipients === 'all' || !d.recipients;
-        const isForUser = d.recipients === 'users' && Array.isArray(d.recipientUsers) && d.recipientUsers.includes(uid);
-        // Vertretungsanfragen NICHT im Banner anzeigen – die haben eigenen Tab
-        if ((isGlobal || isForUser) && d._msgType !== 'replacement_request') systemMessages.push(d);
-      });
-    } catch (e) {
-      console.warn('systemMessages konnten nicht geladen werden:', e);
-    }
-
     // Offene Vertretungsanfragen für diesen Trainer laden
     let pendingRequests = [];
     try {
@@ -87,30 +68,6 @@ async function loadTrainerDashboard() {
     const untilText = formatDate(futureEnd);
     const activeTab = container.querySelector('.tab-btn.active')?.dataset?.tab || 'upcoming';
 
-    // systemMessages-Banner HTML
-    const bannerHtml = systemMessages.length ? `
-      <div id="trainer-system-messages" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
-        ${systemMessages.map(msg => {
-          const isWarning   = msg.type === 'warning'  || msg.type === 'error';
-          const isSuccess   = msg.type === 'success';
-          const bgColor     = isWarning ? 'rgba(161,44,123,0.08)' : isSuccess ? 'rgba(67,122,34,0.08)' : 'rgba(0,105,111,0.08)';
-          const borderColor = isWarning ? 'var(--color-error)' : isSuccess ? 'var(--color-success)' : 'var(--color-primary)';
-          const iconColor   = isWarning ? 'var(--color-error)' : isSuccess ? 'var(--color-success)' : 'var(--color-primary)';
-          const icon        = isWarning ? 'warning' : isSuccess ? 'check_circle' : 'info';
-          return `
-            <div style="background:${bgColor};border-left:4px solid ${borderColor};border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;" data-msg-id="${msg.id}">
-              <span class="material-icons" style="font-size:20px;color:${iconColor};flex-shrink:0;margin-top:1px;">${icon}</span>
-              <div style="flex:1;min-width:0;">
-                ${msg.title ? `<strong style="color:${iconColor};display:block;margin-bottom:2px;">${escapeHtml(msg.title)}</strong>` : ''}
-                <div style="font-size:0.88rem;color:var(--color-text);">${escapeHtml(msg.message || '')}</div>
-              </div>
-              <button class="btn-text trainer-msg-dismiss" data-msg-id="${msg.id}" style="flex-shrink:0;padding:2px 6px;font-size:0.8rem;color:var(--color-text-muted);" title="Ausblenden">
-                <span class="material-icons" style="font-size:16px;">close</span>
-              </button>
-            </div>`;
-        }).join('')}
-      </div>` : '';
-
     const requestsBadge = pendingRequests.length
       ? `<span class="chip chip-warning" style="margin-left:4px;">${pendingRequests.length}</span>`
       : '';
@@ -121,8 +78,6 @@ async function loadTrainerDashboard() {
           <h2 style="margin:0;">${getRoleLabel('teacher')}-Dashboard</h2>
           <p class="text-muted" style="margin:0;font-size:0.9rem;">Termine bis <strong>${untilText}</strong> (${lookAheadDays} Tage im Voraus)</p>
         </div>
-
-        ${bannerHtml}
 
         <div class="tabs" style="margin-bottom:16px;">
           <button class="tab-btn${activeTab === 'upcoming' ? ' active' : ''}" data-tab="upcoming">
@@ -150,22 +105,6 @@ async function loadTrainerDashboard() {
     const scrollY = container.scrollTop;
     container.innerHTML = newHtml;
     container.scrollTop = scrollY;
-
-    // Banner-Dismiss-Handler
-    container.querySelectorAll('.trainer-msg-dismiss').forEach(btn => {
-      btn.onclick = async () => {
-        const msgId = btn.dataset.msgId;
-        const bannerEl = container.querySelector(`[data-msg-id="${msgId}"]`);
-        if (bannerEl) bannerEl.remove();
-        const wrapper = document.getElementById('trainer-system-messages');
-        if (wrapper && !wrapper.querySelector('[data-msg-id]')) wrapper.remove();
-        try {
-          await firestore.collection('systemMessages').doc(msgId).update({ active: false });
-        } catch(e) {
-          console.warn('systemMessage konnte nicht deaktiviert werden:', e);
-        }
-      };
-    });
 
     container.querySelectorAll('.tab-btn').forEach(btn => {
       btn.onclick = () => {
@@ -336,8 +275,8 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
     const dateStr   = eventDate ? `${formatDate(eventDate)}, ${formatTime(eventDate)}` : '–';
 
     const msgText = isAccepted
-      ? `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}“ (${dateStr}) angenommen.${note ? ' Nachricht: ' + note : ''}`
-      : `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}“ (${dateStr}) abgelehnt.${note ? ' Begründung: ' + note : ''}`;
+      ? `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) angenommen.${note ? ' Nachricht: ' + note : ''}`
+      : `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) abgelehnt.${note ? ' Begründung: ' + note : ''}`;
 
     // 4. systemMessage an den anfragenden Koordinator (bisheriges System)
     await firestore.collection('systemMessages').add({
@@ -603,7 +542,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}“ angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
@@ -1057,7 +996,7 @@ async function _notifyCoordinatorNoTrainer(event) {
     }
 
     const coordUids = coordinators.map(c => c.id);
-    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}“ (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
+    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
 
     await firestore.collection('systemMessages').add({
       type:            'warning',
@@ -1139,7 +1078,7 @@ async function _openReplacementModal(event, requestingUid) {
 
       const targetUser = allTrainers.find(u => u.id === targetUid) || { displayName: targetUid };
       const messageText = customMsg
-        || `${myName} kann beim Termin „${event.title || 'Termin'}“ (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
+        || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
         // 1. Dokument in substitution_requests anlegen
