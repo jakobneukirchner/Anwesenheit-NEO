@@ -118,10 +118,27 @@ async function openSubstitutionRequestModal(ev) {
           createdAt:         firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // Systemnachricht für Koordinatoren-Dashboard erzeugen
+        // 1. Systemnachricht für Koordinatoren-Dashboard
         await _createSubstitutionSystemMessage(ev, trainer, requesterLabel);
 
-        showToast(`Anfrage an ${trainer.displayName || trainer.email} gesendet.`, 'success');
+        // 2. eventNotification an den angefragten Trainer
+        const trainerName = trainer.displayName || trainer.email || 'Trainer';
+        const eventDateLabel = dateStr || '';
+        await sendEventNotification({
+          recipientUid: trainerId,
+          eventId:      ev.id,
+          eventTitle:   ev.title || '(kein Titel)',
+          type:         'substitution_request',
+          message:      `Du wurdest als Vertretung für „${ev.title || 'einen Termin'}“ (${eventDateLabel}) angefragt.`,
+          _meta: {
+            requestedByName: requesterLabel,
+            requestedByUid:  coordinatorUid,
+            trainerName,
+            note: note || '',
+          },
+        });
+
+        showToast(`Anfrage an ${trainerName} gesendet.`, 'success');
       } catch (e) {
         console.error('Substitution speichern fehlgeschlagen:', e);
         showToast('Fehler beim Senden: ' + e.message, 'error');
@@ -129,4 +146,29 @@ async function openSubstitutionRequestModal(ev) {
       }
     }
   });
+}
+
+/* ─── Interne Hilfsfunktion: system_message erzeugen ─────────────────────────────── */
+async function _createSubstitutionSystemMessage(ev, trainer, requesterLabel) {
+  try {
+    const startDate  = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
+    const dateStr    = formatDateTime(startDate);
+    const trainerName = trainer.displayName || trainer.email || 'Trainer';
+
+    await firestore.collection('system_messages').add({
+      recipientId:  trainer.id,
+      type:         'substitution_request',
+      text:         `Vertretungsanfrage: „${ev.title || 'Termin'}“ am ${dateStr} – angefragt von ${requesterLabel}.`,
+      read:         false,
+      createdAt:    firebase.firestore.FieldValue.serverTimestamp(),
+      _meta: {
+        eventId:         ev.id,
+        eventTitle:      ev.title || '',
+        requestedByName: requesterLabel,
+        trainerName,
+      },
+    });
+  } catch (e) {
+    console.warn('_createSubstitutionSystemMessage error', e);
+  }
 }
