@@ -794,7 +794,6 @@ function renderEventList(
 
   /* ── Detail-Popup für akzeptierte Vertretung ──────────────────────────── */
   const showSubstitutionDetail = (info, anchorEl) => {
-    // Bestehenden Popup entfernen falls vorhanden
     document.getElementById('sub-detail-popup')?.remove();
 
     const popup = document.createElement('div');
@@ -828,7 +827,6 @@ function renderEventList(
 
     document.body.appendChild(popup);
 
-    // Position relativ zum Anchor-Button berechnen
     const rect = anchorEl.getBoundingClientRect();
     const popupW = 300;
     let left = rect.left;
@@ -839,14 +837,12 @@ function renderEventList(
     const close = () => popup.remove();
     popup.querySelector('#sub-popup-close').onclick = close;
 
-    // Klick außerhalb schließt Popup
     const outsideClick = (e) => {
       if (!popup.contains(e.target) && e.target !== anchorEl) {
         close();
         document.removeEventListener('click', outsideClick, true);
       }
     };
-    // Kleines Timeout damit der aktuelle Click-Event nicht sofort zählt
     setTimeout(() => document.addEventListener('click', outsideClick, true), 100);
   };
 
@@ -874,9 +870,8 @@ function renderEventList(
     visible.forEach(ev => {
       const startDate  = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
       const isSkipped  = ev.status === 'skipped';
-      const accepted   = substitutionAcceptedMap.get(ev.id);  // Info-Objekt oder undefined
+      const accepted   = substitutionAcceptedMap.get(ev.id);
       const hasAccepted = !!accepted && !isSkipped;
-      // Kein-Betreuer-Alert nur zeigen wenn KEINE akzeptierte Vertretung vorliegt
       const hasAlert   = alertEventIds.has(ev.id) && !hasAccepted;
       const hasSub     = substitutionEventIds.has(ev.id) && !hasAccepted;
 
@@ -884,10 +879,6 @@ function renderEventList(
 
       if (isSkipped) row.style.opacity = '0.6';
 
-      // Zeilenhintergrund:
-      // akzeptierte Vertretung → grün
-      // kein Betreuer (ohne Vertretung) → orange
-      // ausstehende Anfrage → blau
       if (hasAccepted) {
         row.style.background = 'rgba(46,125,50,0.06)';
         row.style.borderLeft = '3px solid var(--color-success,#2e7d32)';
@@ -899,17 +890,14 @@ function renderEventList(
         row.style.borderLeft = '3px solid var(--color-primary)';
       }
 
-      // Kein-Betreuer-Badge (nur wenn keine akzeptierte Vertretung)
       const noTrainerBadge = hasAlert
         ? `<span class="chip chip-warning" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;"><span class="material-icons" style="font-size:12px;">warning</span>Kein Betreuer</span>`
         : '';
 
-      // Vertretungsanfrage-Badge (ausstehend, nur wenn keine akzeptierte Vertretung)
       const subBadge = hasSub
         ? `<span class="chip" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;background:var(--color-primary-highlight);color:var(--color-primary);border:1px solid var(--color-primary);"><span class="material-icons" style="font-size:12px;">swap_horiz</span>Vertretung angefragt</span>`
         : '';
 
-      // (i)-Button für akzeptierte Vertretung
       const infoBtn = hasAccepted
         ? `<button class="sub-info-btn" title="Vertretungsdetails anzeigen" style="background:none;border:none;cursor:pointer;padding:0 2px;vertical-align:middle;margin-left:4px;color:var(--color-success,#2e7d32);line-height:1;">
              <span class="material-icons" style="font-size:16px;">info</span>
@@ -948,7 +936,6 @@ function renderEventList(
       if (!isSkipped) {
         row.querySelector('[data-action="sub"]').onclick = () => openSubstitutionRequestModal(ev);
       }
-      // (i)-Button Event
       if (hasAccepted) {
         const infoBtnEl = row.querySelector('.sub-info-btn');
         if (infoBtnEl) {
@@ -968,7 +955,6 @@ function renderEventList(
     updateBulk();
   };
 
-  // Sortier-Header klickbar machen
   el.querySelectorAll('.sortable-header').forEach(th => {
     th.addEventListener('click', () => {
       const col = th.dataset.sort;
@@ -995,7 +981,6 @@ function renderEventList(
     updateBulk();
   };
 
-  // Sortier-Indikatoren vor initialem Render setzen
   updateSortIndicators();
   renderRows();
 }
@@ -1073,4 +1058,255 @@ function renderCalendarView(el, events, groups, parentEl) {
   }
 
   render();
+}
+
+/* ── Hilfsfunktion: durchsuchbare Checkbox-Liste (für Termin-Formular) ────────── */
+function buildSearchableCheckboxList(containerId, searchId, items, name, selected, placeholder) {
+  return `
+    <div style="position:relative;margin-bottom:6px;">
+      <span class="material-icons" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--color-text-muted);pointer-events:none;">search</span>
+      <input type="text" id="${searchId}" placeholder="${placeholder||'Suchen…'}" style="width:100%;padding:5px 8px 5px 28px;border:1px solid var(--color-border);border-radius:5px;font-size:0.83rem;background:var(--color-surface);color:var(--color-text);" />
+    </div>
+    <div id="${containerId}" style="display:flex;flex-direction:column;gap:3px;max-height:140px;overflow-y:auto;padding:2px 0;">
+      ${items.map(u => `
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;padding:2px 0;">
+          <input type="checkbox" name="${name}" value="${u.id}" ${(selected||[]).includes(u.id)?'checked':''} />
+          ${u.displayName||u.email}
+          ${u._role ? `<span style="font-size:0.75rem;color:var(--color-text-muted);">(${u._role})</span>` : ''}
+        </label>`).join('')}
+    </div>`;
+}
+
+function wireCheckboxSearch(searchId, containerId, items, name) {
+  requestAnimationFrame(() => {
+    const input = document.getElementById(searchId);
+    const list  = document.getElementById(containerId);
+    if (!input || !list) return;
+    input.addEventListener('input', function() {
+      const q = this.value.toLowerCase();
+      const checked = new Set([...document.querySelectorAll(`input[name="${name}"]:checked`)].map(i=>i.value));
+      const filtered = items.filter(u => (u.displayName||u.email||'').toLowerCase().includes(q));
+      list.innerHTML = filtered.map(u => `
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.88rem;padding:2px 0;">
+          <input type="checkbox" name="${name}" value="${u.id}" ${checked.has(u.id)?'checked':''} />
+          ${u.displayName||u.email}
+          ${u._role ? `<span style="font-size:0.75rem;color:var(--color-text-muted);">(${u._role})</span>` : ''}
+        </label>`).join('');
+    });
+  });
+}
+
+/* ── Termin-Formular ──────────────────────────────────────────────────────────── */
+async function showEventForm(event, groups, parentEl) {
+  const isNew = !event;
+
+  const toLocal = (ts) => {
+    if (!ts) return '';
+    const d = ts.toDate ? ts.toDate() : new Date(ts);
+    const pad = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const allTrainers = window._allTrainers || [];
+
+  let allUsers = [];
+  try {
+    const uSnap = await firestore.collection('users').orderBy('displayName').get();
+    uSnap.forEach(doc => allUsers.push({ id: doc.id, ...doc.data() }));
+  } catch(e) { console.warn('Could not load users for form', e); }
+
+  const allUsersWithRole = allUsers.map(u => ({
+    ...u,
+    _role: (u.roles||[]).map(r=>getRoleLabel(r)).join(', ') || '–'
+  }));
+
+  const currentTrainers = event?.trainers || event?.trainer || [];
+  const currentMembers  = event?.members  || [];
+
+  const globalCancelWindow = window.appSettings?.cancellationWindowMinutes ?? 60;
+  const eventCancelWindow  = (typeof event?.cancellationWindowMinutes === 'number')
+    ? event.cancellationWindowMinutes : '';
+
+  showModal({
+    title: isNew ? 'Neuen Termin anlegen' : 'Termin bearbeiten',
+    body: `
+      <label>Titel</label>
+      <input type="text" id="ef-title" value="${event?.title||''}" />
+      <label>Gruppe</label>
+      <select id="ef-group">
+        <option value="">– keine Gruppe –</option>
+        ${groups.map(g=>`<option value="${g.id}" ${event?.groupId===g.id?'selected':''}>${g.name}</option>`).join('')}
+      </select>
+      <label>Anmeldemodus</label>
+      <select id="ef-mode">
+        <option value="open"         ${(event?.mode||'open')==='open'?'selected':''}>Aktiv anmelden</option>
+        <option value="closed"       ${event?.mode==='closed'?'selected':''}>Abmeldebasiert</option>
+        <option value="confirmation" ${event?.mode==='confirmation'?'selected':''}>Bestätigung</option>
+      </select>
+      <label>Start</label>
+      <input type="datetime-local" id="ef-start" value="${toLocal(event?.startTime)}" />
+      <label>Ende (optional)</label>
+      <input type="datetime-local" id="ef-end"   value="${toLocal(event?.endTime)}" />
+      <label>Ort (optional)</label>
+      <input type="text" id="ef-location" value="${event?.location||''}" />
+      <label>Beschreibung (optional)</label>
+      <textarea id="ef-desc" rows="2" style="width:100%;">${event?.description||''}</textarea>
+
+      <details style="margin-top:10px;" ${eventCancelWindow !== '' ? 'open' : ''}>
+        <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);display:flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:15px;">timer_off</span>
+          Rückzugsfenster (individuell)
+        </summary>
+        <div style="margin-top:8px;">
+          <p class="text-muted" style="margin:0 0 8px;font-size:0.83rem;">
+            Positiver Wert = X Min. nach Start &nbsp;|&nbsp; Negativer Wert = X Min. vor Start<br>
+            <em>Leer = globaler Standard (${globalCancelWindow} Min.)</em>
+          </p>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="number" id="ef-cancel-window" value="${eventCancelWindow}" placeholder="${globalCancelWindow} (global)" style="max-width:120px;" />
+            <span style="font-size:0.85rem;color:var(--color-text-muted);">Minuten</span>
+          </div>
+        </div>
+      </details>
+
+      <label style="margin-top:12px;">${getRoleLabel('teacher')} (${allTrainers.length})</label>
+      ${buildSearchableCheckboxList('ef-trainer-list','ef-trainer-search', allTrainers, 'ef-trainer', currentTrainers, 'Betreuer suchen…')}
+
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);">Zusätzliche Teilnehmer – außerhalb Gruppe (${allUsers.length})</summary>
+        <div style="margin-top:8px;">
+          ${buildSearchableCheckboxList('ef-extra-list','ef-extra-search', allUsersWithRole, 'ef-extra-member', currentMembers, 'Person suchen…')}
+        </div>
+      </details>
+
+      ${isNew ? `
+      <details style="margin-top:10px;" id="recur-details">
+        <summary style="cursor:pointer;font-size:0.88rem;color:var(--color-text-muted);">Wiederholung</summary>
+        <div style="margin-top:8px;">
+          <select id="ef-recur">
+            <option value="">Keine Wiederholung</option>
+            <option value="weekly">Wöchentlich</option>
+            <option value="biweekly">Zweiwöchentlich</option>
+            <option value="monthly">Monatlich</option>
+          </select>
+          <label style="margin-top:8px;">Wiederholen bis</label>
+          <input type="date" id="ef-until" />
+        </div>
+      </details>` : ''}
+    `,
+    confirmLabel: isNew ? 'Anlegen' : 'Speichern',
+    onConfirm: async () => {
+      const title    = document.getElementById('ef-title').value.trim();
+      const groupId  = document.getElementById('ef-group').value;
+      const mode     = document.getElementById('ef-mode').value;
+      const startStr = document.getElementById('ef-start').value;
+      const endStr   = document.getElementById('ef-end').value;
+      const location = document.getElementById('ef-location').value.trim();
+      const desc     = document.getElementById('ef-desc').value.trim();
+      const trainers = [...document.querySelectorAll('input[name="ef-trainer"]:checked')].map(i=>i.value);
+      const extraMembers = [...document.querySelectorAll('input[name="ef-extra-member"]:checked')].map(i=>i.value);
+
+      const cancelWindowRaw = document.getElementById('ef-cancel-window').value.trim();
+      const cancelWindowVal = cancelWindowRaw !== '' ? parseInt(cancelWindowRaw, 10) : null;
+
+      if (!title)    { showToast('Bitte Titel eingeben.',     'error'); return false; }
+      if (!startStr) { showToast('Bitte Startzeit eingeben.', 'error'); return false; }
+      if (!endStr)   { showToast('Kein Ende gesetzt – Termin wird ohne Endzeit gespeichert.', 'info'); }
+
+      const startTime = new Date(startStr);
+      const endTime   = endStr ? new Date(endStr) : null;
+
+      const payload = { title, groupId: groupId||null, mode, startTime, trainers, members: extraMembers };
+      if (endTime)   payload.endTime   = endTime;
+      if (location)  payload.location  = location;
+      if (desc)      payload.description = desc;
+      if (cancelWindowVal !== null && !isNaN(cancelWindowVal)) {
+        payload.cancellationWindowMinutes = cancelWindowVal;
+      } else {
+        payload.cancellationWindowMinutes = firebase.firestore.FieldValue.delete();
+      }
+
+      try {
+        if (isNew) {
+          const recurVal = document.getElementById('ef-recur')?.value;
+          const untilVal = document.getElementById('ef-until')?.value;
+
+          const payloadNew = { ...payload };
+          if (cancelWindowVal === null || isNaN(cancelWindowVal)) {
+            delete payloadNew.cancellationWindowMinutes;
+          }
+
+          if (recurVal && untilVal) {
+            const untilDate = new Date(untilVal);
+            untilDate.setHours(23,59,59,999);
+            const dates = generateRecurringDates(startTime, endTime, recurVal, untilDate);
+            const recurrenceId = Date.now().toString(36);
+            const batch = firestore.batch();
+            dates.forEach(({start, end}) => {
+              const ref = firestore.collection('events').doc();
+              const p = { ...payloadNew, startTime: start, recurrenceId };
+              if (end) p.endTime = end;
+              batch.set(ref, p);
+            });
+            await batch.commit();
+            showToast(`${dates.length} Termine angelegt.`, 'success');
+          } else {
+            await firestore.collection('events').add(payloadNew);
+            showToast('Termin angelegt.', 'success');
+          }
+        } else {
+          if (event.recurrenceId) {
+            const scope = await askRecurrenceScope(startTime);
+            if (!scope) return false;
+
+            if (scope === 'single') {
+              await firestore.collection('events').doc(event.id).update(payload);
+            } else if (scope === 'following') {
+              const snap = await firestore.collection('events')
+                .where('recurrenceId', '==', event.recurrenceId)
+                .where('startTime', '>=', event.startTime)
+                .get();
+              const b = firestore.batch();
+              snap.forEach(doc => b.update(doc.ref, payload));
+              await b.commit();
+            } else if (scope === 'all') {
+              const snap = await firestore.collection('events')
+                .where('recurrenceId', '==', event.recurrenceId)
+                .get();
+              const b = firestore.batch();
+              snap.forEach(doc => b.update(doc.ref, payload));
+              await b.commit();
+            }
+          } else {
+            await firestore.collection('events').doc(event.id).update(payload);
+          }
+          showToast('Termin gespeichert.', 'success');
+        }
+        renderScheduleTab(parentEl);
+      } catch(e) {
+        console.error(e);
+        showToast('Fehler: ' + e.message, 'error');
+        return false;
+      }
+    }
+  });
+
+  wireCheckboxSearch('ef-trainer-search', 'ef-trainer-list', allTrainers, 'ef-trainer');
+  wireCheckboxSearch('ef-extra-search',   'ef-extra-list',   allUsersWithRole, 'ef-extra-member');
+}
+
+/* ── Hilfsfunktion: Wiederholungsdaten generieren ────────────────────────────── */
+function generateRecurringDates(startTime, endTime, recur, until) {
+  const dates = [];
+  let cur = new Date(startTime);
+  const duration = endTime ? endTime - startTime : null;
+  while (cur <= until) {
+    const end = duration !== null ? new Date(cur.getTime() + duration) : null;
+    dates.push({ start: new Date(cur), end });
+    if (recur === 'weekly')         cur.setDate(cur.getDate() + 7);
+    else if (recur === 'biweekly') cur.setDate(cur.getDate() + 14);
+    else if (recur === 'monthly')  cur.setMonth(cur.getMonth() + 1);
+    else break;
+  }
+  return dates;
 }
