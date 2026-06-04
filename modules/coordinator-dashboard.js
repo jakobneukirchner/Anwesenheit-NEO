@@ -1342,7 +1342,7 @@ async function renderCoordSettingsTab(el) {
         <select id="cs-default-mode" style="max-width:280px;">
           <option value="opt-in"    ${(d.defaultMode||'open')==='opt-in'    ?'selected':''}>Anmeldebasiert</option>
           <option value="confirmation" ${(d.defaultMode||'')==='confirmation'     ?'selected':''}>Bestätigung</option>
-          <option value="opt-out"  ${(d.defaultMode||'')==='opt-out'      ?'selected':''}>Abmedlebasiert</option>
+          <option value="opt-out"  ${(d.defaultMode||'')==='opt-out'      ?'selected':''}>Abmeldebasiert</option>
         </select>
 
         <label style="margin-top:16px;">Teilnehmer-Sichtbarkeit für Mitglieder</label>
