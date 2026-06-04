@@ -126,7 +126,6 @@ async function loadTrainerDashboard() {
     for (const ev of upcoming) upEl.appendChild(await renderTrainerOverviewCard(ev, false));
     for (const ev of past)     paEl.appendChild(await renderTrainerOverviewCard(ev, true));
 
-    // Vertretungsanfragen rendern
     renderSubstitutionRequestsTab(reqEl, pendingRequests, uid);
 
   } catch (e) {
@@ -199,7 +198,6 @@ function renderSubstitutionRequestsTab(container, requests, myUid) {
       </div>
     `;
 
-    // Annehmen
     card.querySelector('.sub-req-accept').onclick = () => {
       showModal({
         title: 'Vertretung annehmen',
@@ -216,7 +214,6 @@ function renderSubstitutionRequestsTab(container, requests, myUid) {
       });
     };
 
-    // Ablehnen
     card.querySelector('.sub-req-decline').onclick = () => {
       showModal({
         title: 'Vertretung ablehnen',
@@ -238,19 +235,13 @@ function renderSubstitutionRequestsTab(container, requests, myUid) {
 }
 
 /**
- * Verarbeitet Annehmen oder Ablehnen einer Vertretungsanfrage:
- * 1. Status in substitution_requests updaten
- * 2. systemMessage an den Koordinator senden (bisheriges System)
- * 3. eventNotification an den Koordinator senden (neues System)
- * 4. Bei Annehmen: Trainer zum Event hinzufügen
- * 5. Dashboard neu laden
+ * Verarbeitet Annehmen oder Ablehnen einer Vertretungsanfrage.
  */
 async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
   const myName     = window.currentUser?.profile?.displayName || 'Betreuer';
   const isAccepted = resolution === 'accepted';
 
   try {
-    // 1. substitution_requests aktualisieren
     await firestore.collection('substitution_requests').doc(req.id).update({
       status:       resolution,
       resolution:   resolution,
@@ -258,7 +249,6 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       resolvedNote: note || ''
     });
 
-    // 2. Bei Annehmen: Trainer zum Event hinzufügen
     if (isAccepted) {
       try {
         await firestore.collection('events').doc(req.eventId).update({
@@ -270,7 +260,6 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       }
     }
 
-    // 3. Datum/Uhrzeit für Nachrichtentext aufbereiten
     const eventDate = req.eventDate?.toDate ? req.eventDate.toDate() : null;
     const dateStr   = eventDate ? `${formatDate(eventDate)}, ${formatTime(eventDate)}` : '–';
 
@@ -278,7 +267,6 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       ? `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) angenommen.${note ? ' Nachricht: ' + note : ''}`
       : `${myName} hat die Vertretungsanfrage für „${req.eventTitle || 'Termin'}" (${dateStr}) abgelehnt.${note ? ' Begründung: ' + note : ''}`;
 
-    // 4. systemMessage an den anfragenden Koordinator (bisheriges System)
     await firestore.collection('systemMessages').add({
       type:           isAccepted ? 'success' : 'warning',
       title:          isAccepted ? 'Vertretung angenommen' : 'Vertretung abgelehnt',
@@ -294,7 +282,6 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       _msgType:       'replacement_response'
     });
 
-    // 5. eventNotification an den anfragenden Koordinator (neues System)
     if (req.requestedBy && typeof sendEventNotification === 'function') {
       await sendEventNotification({
         recipientUid: req.requestedBy,
@@ -319,7 +306,6 @@ async function _resolveSubstitutionRequest(req, resolution, note, myUid) {
       isAccepted ? 'success' : 'info'
     );
 
-    // Dashboard neu laden
     await loadTrainerDashboard();
 
   } catch (err) {
@@ -361,7 +347,7 @@ async function renderTrainerOverviewCard(event, isPast) {
         <div class="text-muted" style="font-size:0.92rem;">${registered} / ${total} Teilnehmer angemeldet${isPast ? ` · ${present} anwesend` : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-        ${noTrainerBadge ? `<span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;" title="Kein aktiver Betreuer – alle haben sich abgemeldet"><span class="material-icons" style="font-size:14px;">person_off</span>Kein Betreuer</span>` : ''}
+        ${noTrainerBadge ? `<span class="chip chip-error" style="display:inline-flex;align-items:center;gap:4px;" title="Kein aktiver Betreuer"><span class="material-icons" style="font-size:14px;">person_off</span>Kein Betreuer</span>` : ''}
         ${needsBadge ? `<span class="chip chip-warning" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">warning</span>Noch ${missing} Person${missing === 1 ? '' : 'en'} benötigt</span>` : ''}
         <span class="chip ${activeClass}" style="display:inline-flex;align-items:center;gap:4px;"><span class="material-icons" style="font-size:14px;">${event.status === 'cancelled' ? 'cancel' : 'check_circle'}</span>${activeLabel}</span>
         <button class="btn-primary" data-open-detail="${event.id}" style="padding:7px 16px;display:inline-flex;align-items:center;gap:6px;">
@@ -496,7 +482,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <span class="material-icons" style="font-size:20px;color:var(--color-error);flex-shrink:0;">warning</span>
         <div style="flex:1;">
           <strong style="color:var(--color-error);">Kein aktiver Betreuer!</strong>
-          <div style="font-size:0.87rem;color:var(--color-text-muted);margin-top:2px;">Alle Betreuer haben sich abgemeldet. Bitte eine Vertretung organisieren oder den Koordinator informieren.</div>
+          <div style="font-size:0.87rem;color:var(--color-text-muted);margin-top:2px;">Alle Betreuer haben sich abgemeldet.</div>
         </div>
         <button class="btn-secondary" id="trainer-notify-coord-btn" style="padding:6px 14px;display:inline-flex;align-items:center;gap:6px;flex-shrink:0;">
           <span class="material-icons" style="font-size:15px;">send</span>Koordinator informieren
@@ -542,7 +528,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
           <span class="material-icons" style="font-size:18px;color:var(--color-primary);">campaign</span>
           Nachricht an alle Mitglieder
         </div>
-        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard als „Nachricht von ${escapeHtml(window.currentUser?.profile?.displayName || 'Betreuer')}" angezeigt.</p>
+        <p class="text-muted" style="margin:0 0 10px;font-size:0.85rem;">Wird auf jeder Teilnehmer-Termincard angezeigt.</p>
         <textarea id="trainer-broadcast-input" rows="3" style="width:100%;margin-bottom:10px;" placeholder="z.B. Bitte Sportschuhe mitbringen...">${escapeHtml(event.trainerBroadcast || '')}</textarea>
         <div><button class="btn-secondary" id="trainer-save-broadcast" style="padding:7px 14px;display:inline-flex;align-items:center;gap:6px;"><span class="material-icons" style="font-size:16px;">save</span>Nachricht speichern</button></div>
       </div>
@@ -568,15 +554,8 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
         <table style="width:100%;min-width:1150px;">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Schnell-Check</th>
-              <th>Detailstatus</th>
-              <th>Versp.-Grund</th>
-              <th>Interne Notiz</th>
-              <th>Notiz an Mitglied</th>
-              <th>Hinweis v. Mitglied</th>
-              <th></th>
+              <th>Name</th><th>Status</th><th>Schnell-Check</th><th>Detailstatus</th>
+              <th>Versp.-Grund</th><th>Interne Notiz</th><th>Notiz an Mitglied</th><th>Hinweis v. Mitglied</th><th></th>
             </tr>
           </thead>
           <tbody id="trainer-attendance-body"></tbody>
@@ -609,7 +588,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
             </button>
             <button class="btn-secondary" id="trainer-late-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">schedule</span>
-              ${myLateMinutes ? `Verspätung ändern` : 'Verspätung melden'}
+              ${myLateMinutes ? 'Verspätung ändern' : 'Verspätung melden'}
             </button>
             <button class="btn-secondary" id="trainer-find-replacement-btn" style="padding:8px 16px;display:inline-flex;align-items:center;gap:6px;">
               <span class="material-icons" style="font-size:16px;">people</span>
@@ -679,9 +658,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     };
 
     const notifyCoordBtn = document.getElementById('trainer-notify-coord-btn');
-    if (notifyCoordBtn) {
-      notifyCoordBtn.onclick = () => _notifyCoordinatorNoTrainer(event);
-    }
+    if (notifyCoordBtn) notifyCoordBtn.onclick = () => _notifyCoordinatorNoTrainer(event);
 
     if (iAmTrainer) {
       document.getElementById('trainer-cancel-self-btn').onclick = () => _toggleTrainerSelf(event, myUid, iAmCancelled, container, options);
@@ -693,7 +670,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       if (revokeBtn) revokeBtn.onclick = () => {
         showModal({
           title: 'Verspätung widerrufen',
-          body: `<p>Möchtest du deine gemeldete Verspätung wirklich widerrufen? Die Mitglieder sehen dann keine Verspätungsmeldung mehr von dir.</p>`,
+          body: `<p>Möchtest du deine gemeldete Verspätung wirklich widerrufen?</p>`,
           confirmLabel: 'Ja, widerrufen',
           onConfirm: async () => {
             try {
@@ -711,7 +688,6 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
       };
     }
 
-    // Tooltip
     let tooltipEl = document.getElementById('trainer-member-note-tooltip');
     if (!tooltipEl) {
       tooltipEl = document.createElement('div');
@@ -741,14 +717,10 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
     const memberAttendances = attendances.filter(a => !trainerUids.has(a.userId));
 
     const statusOptions = [
-      ['registered','Angemeldet'],
-      ['present','Anwesend'],
-      ['absent_excused','Entsch. gefehlt'],
-      ['absent_unexcused','Unentsch. gefehlt'],
-      ['late_excused','Verspätet (entsch.)'],
-      ['late_unexcused','Verspätet (unentsch.)'],
-      ['cancelled','Abgemeldet'],
-      ['confirmation_pending','Ausst. Bestätigung']
+      ['registered','Angemeldet'],['present','Anwesend'],
+      ['absent_excused','Entsch. gefehlt'],['absent_unexcused','Unentsch. gefehlt'],
+      ['late_excused','Verspätet (entsch.)'],['late_unexcused','Verspätet (unentsch.)'],
+      ['cancelled','Abgemeldet'],['confirmation_pending','Ausst. Bestätigung']
     ];
 
     const isLateStatus = s => s === 'late_excused' || s === 'late_unexcused';
@@ -771,10 +743,7 @@ async function renderTrainerDetailView(eventId, container, options = {}) {
 
       tr.innerHTML = `
         <td style="font-weight:500;">${u.displayName || u.email || att.userId}</td>
-        <td>
-          ${statusChip}
-          ${setterHint}
-        </td>
+        <td>${statusChip}${setterHint}</td>
         <td>
           <input type="checkbox" class="trainer-present-check" ${['present','late_excused','late_unexcused'].includes(att.status) ? 'checked' : ''}
             style="width:18px;height:18px;cursor:pointer;" />
@@ -862,7 +831,7 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
   showModal({
     title: iAmCancelled ? 'Wieder einplanen' : 'Als Betreuer abmelden',
     body: iAmCancelled
-      ? `<p>Möchtest du dich wieder als ${getRoleLabel('teacher')} für diesen Termin einplanen?</p>`
+      ? `<p>Möchtest du dich wieder als ${getRoleLabel('teacher')} einplanen?</p>`
       : `<p>Möchtest du dich als ${getRoleLabel('teacher')} von diesem Termin abmelden?</p>`,
     confirmLabel: iAmCancelled ? 'Wieder einplanen' : 'Abmelden',
     onConfirm: async () => {
@@ -888,27 +857,21 @@ function _toggleTrainerSelf(event, myUid, iAmCancelled, container, options) {
             setTimeout(() => {
               showModal({
                 title: 'Kein Betreuer mehr!',
-                body: `<p style="color:var(--color-error);font-weight:600;margin-bottom:8px;">⚠️ Es sind jetzt keine aktiven Betreuer für diesen Termin mehr eingetragen.</p>
-                       <p>Möchtest du den Koordinator darüber informieren oder direkt eine Vertretung suchen?</p>`,
+                body: `<p style="color:var(--color-error);font-weight:600;margin-bottom:8px;">⚠️ Es sind jetzt keine aktiven Betreuer mehr eingetragen.</p>
+                       <p>Möchtest du den Koordinator informieren oder direkt eine Vertretung suchen?</p>`,
                 confirmLabel: 'Koordinator informieren',
                 cancelLabel: 'Vertretung suchen',
-                onConfirm: async () => {
-                  await _notifyCoordinatorNoTrainer(freshEvent);
-                },
-                onCancel: () => {
-                  _openReplacementModal(freshEvent, myUid);
-                }
+                onConfirm: async () => { await _notifyCoordinatorNoTrainer(freshEvent); },
+                onCancel: () => { _openReplacementModal(freshEvent, myUid); }
               });
             }, 180);
           } else if ((event.trainers || []).length > 1) {
             setTimeout(() => {
               showModal({
                 title: 'Vertretung organisieren?',
-                body: `<p>Du hast dich abgemeldet. Möchtest du direkt einen anderen Betreuer als mögliche Vertretung vorschlagen/benachrichtigen?</p>`,
+                body: `<p>Du hast dich abgemeldet. Möchtest du direkt einen anderen Betreuer anfragen?</p>`,
                 confirmLabel: 'Vertretung auswählen',
-                onConfirm: async () => {
-                  _openReplacementModal(freshEvent, myUid);
-                }
+                onConfirm: async () => { _openReplacementModal(freshEvent, myUid); }
               });
             }, 180);
           }
@@ -953,7 +916,7 @@ function _reportTrainerLate(event, myUid, currentLateMinutes, currentLateNote, c
       <p>Wie viele Minuten wirst du voraussichtlich zu spät sein?</p>
       <label>Minuten</label>
       <input type="number" id="late-minutes-input" min="1" max="120" value="${currentLateMinutes || 15}" style="width:100px;" />
-      <label style="margin-top:10px;">Begründung (optional, für Mitglieder sichtbar)</label>
+      <label style="margin-top:10px;">Begründung (optional)</label>
       <input type="text" id="late-note-input" placeholder="z.B. Zug hat Verspätung" value="${escapeHtml(currentLateNote || '')}" />
     `,
     confirmLabel: 'Speichern',
@@ -990,13 +953,10 @@ async function _notifyCoordinatorNoTrainer(event) {
       }
     });
 
-    if (!coordinators.length) {
-      showToast('Keine Koordinatoren gefunden.', 'warning');
-      return;
-    }
+    if (!coordinators.length) { showToast('Keine Koordinatoren gefunden.', 'warning'); return; }
 
     const coordUids = coordinators.map(c => c.id);
-    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr. Bitte eine Vertretung organisieren.`;
+    const msgText = `${myName} meldet: Der Termin „${event.title || 'Termin'}" (${dateStr}) hat keinen aktiven Betreuer mehr.`;
 
     await firestore.collection('systemMessages').add({
       type:            'warning',
@@ -1023,7 +983,6 @@ async function _openReplacementModal(event, requestingUid) {
   const start = event.startTime?.toDate?.();
   const dateStr = start ? `${formatDate(start)}, ${formatTime(start)}` : 'unbekanntes Datum';
 
-  // Alle Trainer laden – sich selbst EINSCHLIESSEN (Selbst-Anfrage erlaubt)
   let allTrainers = [];
   try {
     const snap = await firestore.collection('users').orderBy('displayName').get();
@@ -1033,9 +992,7 @@ async function _openReplacementModal(event, requestingUid) {
         allTrainers.push({ id: doc.id, ...d });
       }
     });
-  } catch (e) {
-    console.warn('Konnte Trainer nicht laden:', e);
-  }
+  } catch (e) { console.warn('Konnte Trainer nicht laden:', e); }
 
   if (!allTrainers.length) {
     showModal({
@@ -1047,9 +1004,7 @@ async function _openReplacementModal(event, requestingUid) {
     return;
   }
 
-  const myProfile = window.currentUser?.profile;
-  const myName = myProfile?.displayName || 'Ein Betreuer';
-
+  const myName = window.currentUser?.profile?.displayName || 'Ein Betreuer';
   const eventTrainerUids = new Set((event.trainers || []));
   const ownTrainers   = allTrainers.filter(u => eventTrainerUids.has(u.id));
   const otherTrainers = allTrainers.filter(u => !eventTrainerUids.has(u.id));
@@ -1058,15 +1013,15 @@ async function _openReplacementModal(event, requestingUid) {
     ? `<optgroup label="${groupLabel}">${list.map(u => `<option value="${u.id}">${u.displayName || u.email || u.id}${u.id === requestingUid ? ' (du)' : ''}</option>`).join('')}</optgroup>`
     : '';
 
-  const optionsHtml = buildOptions(ownTrainers, 'Am Termin eingeplant')
-    + buildOptions(otherTrainers, 'Andere Betreuer');
-
   showModal({
     title: 'Vertretung anfragen',
     body: `
-      <p style="margin-bottom:12px;">Wen möchtest du als mögliche Vertretung für <strong>${escapeHtml(event.title || 'diesen Termin')}</strong> (${dateStr}) anfragen?</p>
+      <p style="margin-bottom:12px;">Wen möchtest du als Vertretung für <strong>${escapeHtml(event.title || 'diesen Termin')}</strong> (${dateStr}) anfragen?</p>
       <label style="display:block;margin-bottom:4px;font-weight:600;">Betreuer auswählen</label>
-      <select id="replacement-target-select" style="width:100%;margin-bottom:12px;">${optionsHtml}</select>
+      <select id="replacement-target-select" style="width:100%;margin-bottom:12px;">
+        ${buildOptions(ownTrainers, 'Am Termin eingeplant')}
+        ${buildOptions(otherTrainers, 'Andere Betreuer')}
+      </select>
       <label style="display:block;margin-bottom:4px;font-weight:600;">Nachricht (optional)</label>
       <textarea id="replacement-message-input" rows="3" placeholder="z.B. Ich kann leider nicht kommen. Kannst du einspringen?" style="width:100%;"></textarea>
     `,
@@ -1081,7 +1036,6 @@ async function _openReplacementModal(event, requestingUid) {
         || `${myName} kann beim Termin „${event.title || 'Termin'}" (${dateStr}) nicht dabei sein und fragt, ob du einspringen kannst.`;
 
       try {
-        // 1. Dokument in substitution_requests anlegen
         await firestore.collection('substitution_requests').add({
           eventId:          event.id,
           eventTitle:       event.title || '',
@@ -1095,7 +1049,6 @@ async function _openReplacementModal(event, requestingUid) {
           createdAt:        firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // 2. systemMessage als Benachrichtigung senden (bisheriges System)
         await firestore.collection('systemMessages').add({
           type:           'info',
           title:          'Vertretungsanfrage',
@@ -1111,7 +1064,6 @@ async function _openReplacementModal(event, requestingUid) {
           _msgType:       'replacement_request'
         });
 
-        // 3. eventNotification an den angefragten Betreuer (neues System)
         if (typeof sendEventNotification === 'function') {
           await sendEventNotification({
             recipientUid: targetUid,
