@@ -1049,21 +1049,6 @@ async function _openReplacementModal(event, requestingUid) {
           createdAt:        firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        await firestore.collection('systemMessages').add({
-          type:           'info',
-          title:          'Vertretungsanfrage',
-          message:        messageText,
-          recipients:     'users',
-          recipientUsers: [targetUid],
-          active:         true,
-          highlight:      true,
-          createdAt:      firebase.firestore.FieldValue.serverTimestamp(),
-          _eventId:       event.id,
-          _eventTitle:    event.title || '',
-          _fromUid:       requestingUid,
-          _msgType:       'replacement_request'
-        });
-
         if (typeof sendEventNotification === 'function') {
           await sendEventNotification({
             recipientUid: targetUid,
