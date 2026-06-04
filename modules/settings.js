@@ -61,8 +61,33 @@ function _applyBrandingData(data) {
       document.head.appendChild(link);
     }
     link.href = data.faviconUrl;
+
+    // PWA: Apple Touch Icon + Manifest-Icons dynamisch setzen
+    let appleIcon = document.querySelector("link[rel='apple-touch-icon']");
+    if (!appleIcon) {
+      appleIcon = document.createElement('link');
+      appleIcon.rel = 'apple-touch-icon';
+      document.head.appendChild(appleIcon);
+    }
+    appleIcon.href = data.faviconUrl;
+
+    _patchManifest({
+      icons: [
+        { src: data.faviconUrl, sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+        { src: data.faviconUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+      ]
+    });
+
+    // SW anweisen das Icon zu cachen
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'CACHE_ICON',
+        url: data.faviconUrl
+      });
+    }
   }
 }
+
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    BESTÄTIGUNGSFENSTER
