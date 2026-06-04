@@ -1340,9 +1340,9 @@ async function renderCoordSettingsTab(el) {
           Vorausgewählter Anmeldemodus beim Erstellen neuer Termine.
         </p>
         <select id="cs-default-mode" style="max-width:280px;">
-          <option value="open"    ${(d.defaultMode||'open')==='open'    ?'selected':''}>Offen (direkte Anmeldung)</option>
+          <option value="opt-in"    ${(d.defaultMode||'open')==='opt-in'    ?'selected':''}>Anmeldebasiert</option>
           <option value="confirmation" ${(d.defaultMode||'')==='confirmation'     ?'selected':''}>Bestätigung</option>
-          <option value="closed"  ${(d.defaultMode||'')==='closed'      ?'selected':''}>Geschlossen</option>
+          <option value="opt-out"  ${(d.defaultMode||'')==='opt-out'      ?'selected':''}>Abmedlebasiert</option>
         </select>
 
         <label style="margin-top:16px;">Teilnehmer-Sichtbarkeit für Mitglieder</label>
