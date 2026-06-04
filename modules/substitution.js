@@ -16,13 +16,11 @@ async function openSubstitutionRequestModal(ev) {
     return;
   }
 
-  // Rolle als lesbaren Label für requestedByName zusammenbauen
   const roleLabel = coordinatorRoles.length
     ? coordinatorRoles.map(r => getRoleLabel(r)).join(', ')
     : 'Koordinator';
   const requesterLabel = `${coordinatorName} (${roleLabel})`;
 
-  // Trainer-Liste aus window._allTrainers (wird in renderScheduleTab befüllt)
   const allTrainers = window._allTrainers || [];
   if (!allTrainers.length) {
     showToast('Keine Trainer gefunden.', 'error');
@@ -32,7 +30,6 @@ async function openSubstitutionRequestModal(ev) {
   const startDate = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
   const dateStr   = formatDateTime(startDate);
 
-  // Bereits ausstehende Anfragen für diesen Termin laden
   let existingPending = [];
   try {
     const snap = await firestore.collection('substitution_requests')
@@ -51,7 +48,6 @@ async function openSubstitutionRequestModal(ev) {
     </option>`;
   }).join('');
 
-  // Bereits eingetragene Betreuer für diesen Termin
   const assignedTrainers = ev.trainers || ev.trainer || [];
   const assignedNames = allTrainers
     .filter(t => assignedTrainers.includes(t.id))
@@ -96,7 +92,6 @@ async function openSubstitutionRequestModal(ev) {
         return false;
       }
 
-      // Doppel-Anfrage verhindern
       if (existingPending.includes(trainerId)) {
         showToast('An diesen Trainer läuft bereits eine Anfrage.', 'error');
         return false;
@@ -118,10 +113,8 @@ async function openSubstitutionRequestModal(ev) {
           createdAt:         firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // 1. Systemnachricht für Koordinatoren-Dashboard
         await _createSubstitutionSystemMessage(ev, trainer, requesterLabel);
 
-        // 2. eventNotification an den angefragten Trainer
         const trainerName = trainer.displayName || trainer.email || 'Trainer';
         const eventDateLabel = dateStr || '';
         await sendEventNotification({
@@ -129,7 +122,7 @@ async function openSubstitutionRequestModal(ev) {
           eventId:      ev.id,
           eventTitle:   ev.title || '(kein Titel)',
           type:         'substitution_request',
-          message:      `Du wurdest als Vertretung für „${ev.title || 'einen Termin'}“ (${eventDateLabel}) angefragt.`,
+          message:      `Du wurdest als Vertretung für „${ev.title || 'einen Termin'}" (${eventDateLabel}) angefragt.`,
           _meta: {
             requestedByName: requesterLabel,
             requestedByUid:  coordinatorUid,
@@ -148,6 +141,75 @@ async function openSubstitutionRequestModal(ev) {
   });
 }
 
+/**
+ * Zieht alle pending Vertretungsanfragen für einen Termin zurück.
+ * Setzt status → 'withdrawn' und benachrichtigt die betroffenen Trainer.
+ * @param {string} eventId
+ * @param {string} eventTitle
+ * @param {Function} onSuccess – Callback nach erfolgreichem Zurückziehen
+ */
+async function withdrawSubstitutionRequests(eventId, eventTitle, onSuccess) {
+  showModal({
+    title: 'Anfragen zurückziehen',
+    body: `
+      <p>Alle offenen Vertretungsanfragen für <strong>${escapeHtml(eventTitle || 'diesen Termin')}</strong> zurückziehen?</p>
+      <p class="text-muted" style="font-size:0.88rem;margin-top:8px;">Die angefragten Betreuer werden benachrichtigt, dass die Anfrage zurückgezogen wurde.</p>
+    `,
+    confirmLabel: 'Zurückziehen',
+    onConfirm: async () => {
+      try {
+        const snap = await firestore.collection('substitution_requests')
+          .where('eventId', '==', eventId)
+          .where('status', '==', 'pending')
+          .get();
+
+        if (snap.empty) {
+          showToast('Keine offenen Anfragen gefunden.', 'info');
+          return;
+        }
+
+        const batch = firestore.batch();
+        const affectedTrainers = [];
+
+        snap.forEach(doc => {
+          batch.update(doc.ref, {
+            status:      'withdrawn',
+            withdrawnAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          const data = doc.data();
+          if (data.requestedTo) {
+            affectedTrainers.push({ uid: data.requestedTo, name: data.requestedToName || '' });
+          }
+        });
+
+        await batch.commit();
+
+        // Benachrichtigung an alle betroffenen Trainer
+        const notifyPromises = affectedTrainers.map(({ uid, name }) => {
+          if (typeof sendEventNotification !== 'function') return Promise.resolve();
+          return sendEventNotification({
+            recipientUid: uid,
+            eventId:      eventId,
+            eventTitle:   eventTitle || 'Termin',
+            type:         'substitution_withdrawn',
+            message:      `Die Vertretungsanfrage für „${eventTitle || 'Termin'}" wurde zurückgezogen.`,
+            _meta: { trainerName: name },
+          }).catch(e => console.warn('Benachrichtigung fehlgeschlagen für', uid, e));
+        });
+
+        await Promise.all(notifyPromises);
+
+        showToast('Anfragen zurückgezogen.', 'success');
+        if (typeof onSuccess === 'function') onSuccess();
+      } catch (e) {
+        console.error('withdrawSubstitutionRequests fehlgeschlagen:', e);
+        showToast('Fehler: ' + e.message, 'error');
+        return false;
+      }
+    }
+  });
+}
+
 /* ─── Interne Hilfsfunktion: system_message erzeugen ─────────────────────────────── */
 async function _createSubstitutionSystemMessage(ev, trainer, requesterLabel) {
   try {
@@ -158,7 +220,7 @@ async function _createSubstitutionSystemMessage(ev, trainer, requesterLabel) {
     await firestore.collection('system_messages').add({
       recipientId:  trainer.id,
       type:         'substitution_request',
-      text:         `Vertretungsanfrage: „${ev.title || 'Termin'}“ am ${dateStr} – angefragt von ${requesterLabel}.`,
+      text:         `Vertretungsanfrage: „${ev.title || 'Termin'}" am ${dateStr} – angefragt von ${requesterLabel}.`,
       read:         false,
       createdAt:    firebase.firestore.FieldValue.serverTimestamp(),
       _meta: {
