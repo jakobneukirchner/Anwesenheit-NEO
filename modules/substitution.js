@@ -113,6 +113,7 @@ async function openSubstitutionRequestModal(ev) {
           createdAt:         firebase.firestore.FieldValue.serverTimestamp()
         });
 
+        // _createSubstitutionSystemMessage ist in system-messages.js definiert
         await _createSubstitutionSystemMessage(ev, trainer, requesterLabel);
 
         const trainerName = trainer.displayName || trainer.email || 'Trainer';
@@ -208,29 +209,4 @@ async function withdrawSubstitutionRequests(eventId, eventTitle, onSuccess) {
       }
     }
   });
-}
-
-/* ─── Interne Hilfsfunktion: system_message erzeugen ─────────────────────────────── */
-async function _createSubstitutionSystemMessage(ev, trainer, requesterLabel) {
-  try {
-    const startDate  = ev.startTime?.toDate ? ev.startTime.toDate() : new Date(ev.startTime);
-    const dateStr    = formatDateTime(startDate);
-    const trainerName = trainer.displayName || trainer.email || 'Trainer';
-
-    await firestore.collection('system_messages').add({
-      recipientId:  trainer.id,
-      type:         'substitution_request',
-      text:         `Vertretungsanfrage: „${ev.title || 'Termin'}" am ${dateStr} – angefragt von ${requesterLabel}.`,
-      read:         false,
-      createdAt:    firebase.firestore.FieldValue.serverTimestamp(),
-      _meta: {
-        eventId:         ev.id,
-        eventTitle:      ev.title || '',
-        requestedByName: requesterLabel,
-        trainerName,
-      },
-    });
-  } catch (e) {
-    console.warn('_createSubstitutionSystemMessage error', e);
-  }
 }

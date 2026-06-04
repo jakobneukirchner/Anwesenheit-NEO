@@ -92,10 +92,11 @@ firebaseAuth.onAuthStateChanged(async (fbUser) => {
     mobileLogout.onclick = () => firebaseAuth.signOut();
   }
 
+  // Fix: displayName statt name (Feldname im Firestore-Dokument)
   const nameEl = document.getElementById('app-user-name');
-  if (nameEl) nameEl.textContent = userData.name || fbUser.email || '';
+  if (nameEl) nameEl.textContent = userData.displayName || fbUser.email || '';
   const mobileNameEl = document.getElementById('mobile-user-name');
-  if (mobileNameEl) mobileNameEl.textContent = userData.name || fbUser.email || '';
+  if (mobileNameEl) mobileNameEl.textContent = userData.displayName || fbUser.email || '';
 
   try { await applyBranding(); } catch(e) { console.warn('applyBranding Fehler:', e); }
 
