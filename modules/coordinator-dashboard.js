@@ -435,7 +435,6 @@ function confirmDeleteGroup(group, parentEl) {
 
 /* ===================== SCHEDULE TAB ===================== */
 
-/* ── Auto-Absage: offene Anfragen nach Frist als abwesend markieren ─────────── */
 async function _checkAutoCancelRequests() {
   try {
     const fristMin = window.appSettings?.autoCancelRequestMinutes ?? 0;
@@ -488,10 +487,8 @@ async function renderScheduleTab(el) {
       if ((d.roles||[]).includes('teacher')) allTrainers.push({ id: doc.id, ...d });
     });
     window._allTrainers = allTrainers;
-    // Gruppen global verfügbar machen (für substitution.js)
     window._allGroups = groups;
 
-    // ── Kein-Betreuer-Alerts ────────────────────────────────────────────────
     const alertSnap = await firestore.collection('systemMessages')
       .where('active', '==', true)
       .where('_msgType', '==', 'no_trainer_alert')
@@ -502,7 +499,6 @@ async function renderScheduleTab(el) {
       if (eid) alertEventIds.add(eid);
     });
 
-    // ── Vertretungsanfragen-Alerts (pending) ────────────────────────────────
     const subSnap = await firestore.collection('systemMessages')
       .where('active', '==', true)
       .where('_msgType', '==', 'substitution')
@@ -513,8 +509,15 @@ async function renderScheduleTab(el) {
       if (eid) substitutionEventIds.add(eid);
     });
 
-    // ── Akzeptierte Vertretungen ─────────────────────────────────────────────
-    // Map: eventId → { trainerName, trainerUid, note }
+    // Zusätzlich: pending substitution_requests direkt prüfen
+    const pendingSubSnap = await firestore.collection('substitution_requests')
+      .where('status', '==', 'pending')
+      .get();
+    pendingSubSnap.forEach(doc => {
+      const eid = doc.data().eventId;
+      if (eid) substitutionEventIds.add(eid);
+    });
+
     const acceptedSnap = await firestore.collection('substitution_requests')
       .where('status', '==', 'accepted')
       .get();
@@ -572,7 +575,6 @@ async function renderScheduleTab(el) {
   } catch (e) { console.error(e); el.innerHTML = '<p class="text-error">Fehler beim Laden.</p>'; }
 }
 
-/* ── Wiederholungs-Scope-Dialog ─────────────────────────────────────────────── */
 function askRecurrenceScope(eventDate) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -609,7 +611,6 @@ function askRecurrenceScope(eventDate) {
   });
 }
 
-/* ── Ausfallen-lassen-Dialog ────────────────────────────────────────────────── */
 async function confirmSkipEvents(selectedIds, events, parentEl) {
   const toSkip = events.filter(e => selectedIds.has(e.id) && e.status !== 'skipped');
   const already = selectedIds.size - toSkip.length;
@@ -641,7 +642,6 @@ async function confirmSkipEvents(selectedIds, events, parentEl) {
   });
 }
 
-/* ── Ausfall-aufheben-Dialog ────────────────────────────────────────────────── */
 async function confirmUnskipEvents(selectedIds, events, parentEl) {
   const toUnskip = events.filter(e => selectedIds.has(e.id) && e.status === 'skipped');
   if (!toUnskip.length) { showToast('Keine ausgefallenen Termine in der Auswahl.', 'info'); return; }
@@ -669,7 +669,6 @@ async function confirmUnskipEvents(selectedIds, events, parentEl) {
   });
 }
 
-/* ── Löschen-Dialog ─────────────────────────────────────────────────────────── */
 async function confirmDeleteEvents(selectedIds, events, parentEl) {
   const toDelete = events.filter(e => selectedIds.has(e.id));
   if (!toDelete.length) return;
@@ -693,7 +692,6 @@ async function confirmDeleteEvents(selectedIds, events, parentEl) {
   });
 }
 
-/* ── Terminliste ──────────────────────────────────────────────────────────── */
 function renderEventList(
   el, events, groups, parentEl,
   bulkBar, bulkCount, skipSelBtn, unskipSelBtn, delSelBtn,
@@ -721,9 +719,8 @@ function renderEventList(
   const groupMap = {};
   groups.forEach(g => groupMap[g.id] = g.name);
 
-  // Sortierzustand
-  let sortCol = 'date';   // 'date' | 'title' | 'group'
-  let sortDir = 'desc';   // 'asc' | 'desc'
+  let sortCol = 'date';
+  let sortDir = 'desc';
 
   const getSortedEvents = (list) => [...list].sort((a, b) => {
     let valA, valB;
@@ -792,7 +789,6 @@ function renderEventList(
     });
   };
 
-  /* ── Detail-Popup für akzeptierte Vertretung ──────────────────────────── */
   const showSubstitutionDetail = (info, anchorEl) => {
     document.getElementById('sub-detail-popup')?.remove();
 
@@ -894,8 +890,16 @@ function renderEventList(
         ? `<span class="chip chip-warning" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;"><span class="material-icons" style="font-size:12px;">warning</span>Kein Betreuer</span>`
         : '';
 
+      // ── NEU: × Button im subBadge ──────────────────────────────────────
       const subBadge = hasSub
-        ? `<span class="chip" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;background:var(--color-primary-highlight);color:var(--color-primary);border:1px solid var(--color-primary);"><span class="material-icons" style="font-size:12px;">swap_horiz</span>Vertretung angefragt</span>`
+        ? `<span class="chip" style="font-size:0.72rem;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-left:4px;background:var(--color-primary-highlight);color:var(--color-primary);border:1px solid var(--color-primary);">
+             <span class="material-icons" style="font-size:12px;">swap_horiz</span>Vertretung angefragt
+             <button class="sub-withdraw-btn" data-ev-id="${ev.id}" data-ev-title="${escapeHtml(ev.title||'')}"
+               title="Anfragen zurückziehen"
+               style="background:none;border:none;cursor:pointer;padding:0 0 0 3px;line-height:1;color:var(--color-primary);display:inline-flex;align-items:center;">
+               <span class="material-icons" style="font-size:13px;">close</span>
+             </button>
+           </span>`
         : '';
 
       const infoBtn = hasAccepted
@@ -952,6 +956,14 @@ function renderEventList(
       tbody.appendChild(row);
     });
 
+    // ── NEU: × Button Event-Listener für Anfragen zurückziehen ─────────
+    tbody.querySelectorAll('.sub-withdraw-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        withdrawSubstitutionRequests(btn.dataset.evId, btn.dataset.evTitle, () => renderScheduleTab(parentEl));
+      });
+    });
+
     updateBulk();
   };
 
@@ -989,7 +1001,6 @@ function translateMode(mode) {
   return { open:'Aktiv anmelden', closed:'Abmeldebasiert', confirmation:'Bestätigung' }[mode] || mode;
 }
 
-/* ── Kalenderansicht ──────────────────────────────────────────────────────────── */
 function renderCalendarView(el, events, groups, parentEl) {
   const groupMap = {};
   groups.forEach(g => groupMap[g.id] = g.name);
@@ -1060,7 +1071,6 @@ function renderCalendarView(el, events, groups, parentEl) {
   render();
 }
 
-/* ── Hilfsfunktion: durchsuchbare Checkbox-Liste (für Termin-Formular) ────────── */
 function buildSearchableCheckboxList(containerId, searchId, items, name, selected, placeholder) {
   return `
     <div style="position:relative;margin-bottom:6px;">
@@ -1096,7 +1106,6 @@ function wireCheckboxSearch(searchId, containerId, items, name) {
   });
 }
 
-/* ── Termin-Formular ──────────────────────────────────────────────────────────── */
 async function showEventForm(event, groups, parentEl) {
   const isNew = !event;
 
@@ -1189,124 +1198,4 @@ async function showEventForm(event, groups, parentEl) {
             <option value="biweekly">Zweiwöchentlich</option>
             <option value="monthly">Monatlich</option>
           </select>
-          <label style="margin-top:8px;">Wiederholen bis</label>
-          <input type="date" id="ef-until" />
-        </div>
-      </details>` : ''}
-    `,
-    confirmLabel: isNew ? 'Anlegen' : 'Speichern',
-    onConfirm: async () => {
-      const title    = document.getElementById('ef-title').value.trim();
-      const groupId  = document.getElementById('ef-group').value;
-      const mode     = document.getElementById('ef-mode').value;
-      const startStr = document.getElementById('ef-start').value;
-      const endStr   = document.getElementById('ef-end').value;
-      const location = document.getElementById('ef-location').value.trim();
-      const desc     = document.getElementById('ef-desc').value.trim();
-      const trainers = [...document.querySelectorAll('input[name="ef-trainer"]:checked')].map(i=>i.value);
-      const extraMembers = [...document.querySelectorAll('input[name="ef-extra-member"]:checked')].map(i=>i.value);
-
-      const cancelWindowRaw = document.getElementById('ef-cancel-window').value.trim();
-      const cancelWindowVal = cancelWindowRaw !== '' ? parseInt(cancelWindowRaw, 10) : null;
-
-      if (!title)    { showToast('Bitte Titel eingeben.',     'error'); return false; }
-      if (!startStr) { showToast('Bitte Startzeit eingeben.', 'error'); return false; }
-      if (!endStr)   { showToast('Kein Ende gesetzt – Termin wird ohne Endzeit gespeichert.', 'info'); }
-
-      const startTime = new Date(startStr);
-      const endTime   = endStr ? new Date(endStr) : null;
-
-      const payload = { title, groupId: groupId||null, mode, startTime, trainers, members: extraMembers };
-      if (endTime)   payload.endTime   = endTime;
-      if (location)  payload.location  = location;
-      if (desc)      payload.description = desc;
-      if (cancelWindowVal !== null && !isNaN(cancelWindowVal)) {
-        payload.cancellationWindowMinutes = cancelWindowVal;
-      } else {
-        payload.cancellationWindowMinutes = firebase.firestore.FieldValue.delete();
-      }
-
-      try {
-        if (isNew) {
-          const recurVal = document.getElementById('ef-recur')?.value;
-          const untilVal = document.getElementById('ef-until')?.value;
-
-          const payloadNew = { ...payload };
-          if (cancelWindowVal === null || isNaN(cancelWindowVal)) {
-            delete payloadNew.cancellationWindowMinutes;
-          }
-
-          if (recurVal && untilVal) {
-            const untilDate = new Date(untilVal);
-            untilDate.setHours(23,59,59,999);
-            const dates = generateRecurringDates(startTime, endTime, recurVal, untilDate);
-            const recurrenceId = Date.now().toString(36);
-            const batch = firestore.batch();
-            dates.forEach(({start, end}) => {
-              const ref = firestore.collection('events').doc();
-              const p = { ...payloadNew, startTime: start, recurrenceId };
-              if (end) p.endTime = end;
-              batch.set(ref, p);
-            });
-            await batch.commit();
-            showToast(`${dates.length} Termine angelegt.`, 'success');
-          } else {
-            await firestore.collection('events').add(payloadNew);
-            showToast('Termin angelegt.', 'success');
-          }
-        } else {
-          if (event.recurrenceId) {
-            const scope = await askRecurrenceScope(startTime);
-            if (!scope) return false;
-
-            if (scope === 'single') {
-              await firestore.collection('events').doc(event.id).update(payload);
-            } else if (scope === 'following') {
-              const snap = await firestore.collection('events')
-                .where('recurrenceId', '==', event.recurrenceId)
-                .where('startTime', '>=', event.startTime)
-                .get();
-              const b = firestore.batch();
-              snap.forEach(doc => b.update(doc.ref, payload));
-              await b.commit();
-            } else if (scope === 'all') {
-              const snap = await firestore.collection('events')
-                .where('recurrenceId', '==', event.recurrenceId)
-                .get();
-              const b = firestore.batch();
-              snap.forEach(doc => b.update(doc.ref, payload));
-              await b.commit();
-            }
-          } else {
-            await firestore.collection('events').doc(event.id).update(payload);
-          }
-          showToast('Termin gespeichert.', 'success');
-        }
-        renderScheduleTab(parentEl);
-      } catch(e) {
-        console.error(e);
-        showToast('Fehler: ' + e.message, 'error');
-        return false;
-      }
-    }
-  });
-
-  wireCheckboxSearch('ef-trainer-search', 'ef-trainer-list', allTrainers, 'ef-trainer');
-  wireCheckboxSearch('ef-extra-search',   'ef-extra-list',   allUsersWithRole, 'ef-extra-member');
-}
-
-/* ── Hilfsfunktion: Wiederholungsdaten generieren ────────────────────────────── */
-function generateRecurringDates(startTime, endTime, recur, until) {
-  const dates = [];
-  let cur = new Date(startTime);
-  const duration = endTime ? endTime - startTime : null;
-  while (cur <= until) {
-    const end = duration !== null ? new Date(cur.getTime() + duration) : null;
-    dates.push({ start: new Date(cur), end });
-    if (recur === 'weekly')         cur.setDate(cur.getDate() + 7);
-    else if (recur === 'biweekly') cur.setDate(cur.getDate() + 14);
-    else if (recur === 'monthly')  cur.setMonth(cur.getMonth() + 1);
-    else break;
-  }
-  return dates;
-}
+          <label style="margin-top:8px;">Wiederholen 
