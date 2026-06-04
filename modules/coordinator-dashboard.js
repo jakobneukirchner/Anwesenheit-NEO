@@ -1312,14 +1312,14 @@ function generateRecurringDates(startTime, endTime, recur, until) {
 async function renderCoordSettingsTab(el) {
   el.innerHTML = `<div class="loading-center">Lade Einstellungen...</div>`;
   try {
-    const doc  = await firestore.collection('settings').doc('global').get();
-    const d    = doc.exists ? doc.data() : {};
+    const doc = await firestore.collection('settings').doc('global').get();
+    const d   = doc.exists ? doc.data() : {};
 
     el.innerHTML = `
       <div class="card">
         <h3 style="margin-top:0;">Teilnehmer &amp; Termine</h3>
 
-        <label>Standard-Mindest&shy;teilnehmerzahl</label>
+        <label>Standard-Mindestteilnehmerzahl</label>
         <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
           Wie viele Anmeldungen ein Termin mindestens braucht, damit er stattfindet.
         </p>
@@ -1340,19 +1340,19 @@ async function renderCoordSettingsTab(el) {
           Vorausgewählter Anmeldemodus beim Erstellen neuer Termine.
         </p>
         <select id="cs-default-mode" style="max-width:280px;">
-          <option value="open"        ${(d.defaultMode||'open')==='open'        ?'selected':''}>Offen (direkte Anmeldung)</option>
-          <option value="request"     ${(d.defaultMode||'')==='request'         ?'selected':''}>Anfrage (muss bestätigt werden)</option>
-          <option value="closed"      ${(d.defaultMode||'')==='closed'          ?'selected':''}>Geschlossen</option>
+          <option value="open"    ${(d.defaultMode||'open')==='open'    ?'selected':''}>Offen (direkte Anmeldung)</option>
+          <option value="request" ${(d.defaultMode||'')==='request'     ?'selected':''}>Anfrage (muss bestätigt werden)</option>
+          <option value="closed"  ${(d.defaultMode||'')==='closed'      ?'selected':''}>Geschlossen</option>
         </select>
 
-        <label style="margin-top:16px;">Sichtbarkeits-Modus</label>
+        <label style="margin-top:16px;">Teilnehmer-Sichtbarkeit für Mitglieder</label>
         <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
-          Wer darf Termine grundsätzlich sehen.
+          Was dürfen Mitglieder über andere Anmeldungen sehen?
         </p>
-        <select id="cs-visibility-mode" style="max-width:280px;">
-          <option value="all"         ${(d.visibilityMode||'all')==='all'       ?'selected':''}>Alle angemeldeten Benutzer</option>
-          <option value="group"       ${(d.visibilityMode||'')==='group'        ?'selected':''}>Nur Gruppenmitglieder</option>
-          <option value="coordinator" ${(d.visibilityMode||'')==='coordinator'  ?'selected':''}>Nur Koordinatoren &amp; Admins</option>
+        <select id="cs-visibility-mode" style="max-width:320px;">
+          <option value="none"  ${(d.visibilityMode||'count')==='none'  ?'selected':''}>Nichts (weder Namen noch Anzahl)</option>
+          <option value="count" ${(d.visibilityMode||'count')==='count' ?'selected':''}>Nur Anzahl der Angemeldeten</option>
+          <option value="names" ${(d.visibilityMode||'')==='names'      ?'selected':''}>Namen der Angemeldeten</option>
         </select>
       </div>
 
@@ -1409,14 +1409,14 @@ async function renderCoordSettingsTab(el) {
       statusEl.textContent = '';
 
       const values = {
-        defaultMinParticipants:      parseInt(document.getElementById('cs-min-participants').value)  || 0,
-        defaultEventLookAhead:       parseInt(document.getElementById('cs-lookahead').value)          || 30,
-        defaultMode:                 document.getElementById('cs-default-mode').value,
-        visibilityMode:              document.getElementById('cs-visibility-mode').value,
-        defaultSignupDeadlineMinutes:parseInt(document.getElementById('cs-signup-deadline').value)    || 0,
-        withdrawWindowMinutes:       parseInt(document.getElementById('cs-withdraw-window').value)    || 0,
-        cancellationWindowMinutes:   parseInt(document.getElementById('cs-cancel-window').value)      || 0,
-        confirmationWindowMinutes:   parseInt(document.getElementById('cs-confirm-window').value)     || 60,
+        defaultMinParticipants:       parseInt(document.getElementById('cs-min-participants').value) || 0,
+        defaultEventLookAhead:        parseInt(document.getElementById('cs-lookahead').value)         || 30,
+        defaultMode:                  document.getElementById('cs-default-mode').value,
+        visibilityMode:               document.getElementById('cs-visibility-mode').value,
+        defaultSignupDeadlineMinutes: parseInt(document.getElementById('cs-signup-deadline').value)   || 0,
+        withdrawWindowMinutes:        parseInt(document.getElementById('cs-withdraw-window').value)   || 0,
+        cancellationWindowMinutes:    parseInt(document.getElementById('cs-cancel-window').value)     || 0,
+        confirmationWindowMinutes:    parseInt(document.getElementById('cs-confirm-window').value)    || 60,
       };
 
       try {
