@@ -1341,7 +1341,7 @@ async function renderCoordSettingsTab(el) {
         </p>
         <select id="cs-default-mode" style="max-width:280px;">
           <option value="open"    ${(d.defaultMode||'open')==='open'    ?'selected':''}>Offen (direkte Anmeldung)</option>
-          <option value="request" ${(d.defaultMode||'')==='request'     ?'selected':''}>Anfrage (muss bestätigt werden)</option>
+          <option value="confirmation" ${(d.defaultMode||'')==='confirmation'     ?'selected':''}>Bestätigung</option>
           <option value="closed"  ${(d.defaultMode||'')==='closed'      ?'selected':''}>Geschlossen</option>
         </select>
 
