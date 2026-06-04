@@ -1308,3 +1308,134 @@ function generateRecurringDates(startTime, endTime, recur, until) {
   }
   return dates;
 }
+/* ===================== SETTINGS TAB ===================== */
+async function renderCoordSettingsTab(el) {
+  el.innerHTML = `<div class="loading-center">Lade Einstellungen...</div>`;
+  try {
+    const doc  = await firestore.collection('settings').doc('global').get();
+    const d    = doc.exists ? doc.data() : {};
+
+    el.innerHTML = `
+      <div class="card">
+        <h3 style="margin-top:0;">Teilnehmer &amp; Termine</h3>
+
+        <label>Standard-Mindest&shy;teilnehmerzahl</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Wie viele Anmeldungen ein Termin mindestens braucht, damit er stattfindet.
+        </p>
+        <input type="number" id="cs-min-participants"
+               value="${d.defaultMinParticipants ?? 1}" min="0" step="1"
+               style="max-width:160px;" />
+
+        <label style="margin-top:16px;">Standard-Vorschau (Tage)</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Wie viele Tage im Voraus Termine für Mitglieder sichtbar sind.
+        </p>
+        <input type="number" id="cs-lookahead"
+               value="${d.defaultEventLookAhead ?? 30}" min="1" step="1"
+               style="max-width:160px;" />
+
+        <label style="margin-top:16px;">Standard-Modus</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Vorausgewählter Anmeldemodus beim Erstellen neuer Termine.
+        </p>
+        <select id="cs-default-mode" style="max-width:280px;">
+          <option value="open"        ${(d.defaultMode||'open')==='open'        ?'selected':''}>Offen (direkte Anmeldung)</option>
+          <option value="request"     ${(d.defaultMode||'')==='request'         ?'selected':''}>Anfrage (muss bestätigt werden)</option>
+          <option value="closed"      ${(d.defaultMode||'')==='closed'          ?'selected':''}>Geschlossen</option>
+        </select>
+
+        <label style="margin-top:16px;">Sichtbarkeits-Modus</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Wer darf Termine grundsätzlich sehen.
+        </p>
+        <select id="cs-visibility-mode" style="max-width:280px;">
+          <option value="all"         ${(d.visibilityMode||'all')==='all'       ?'selected':''}>Alle angemeldeten Benutzer</option>
+          <option value="group"       ${(d.visibilityMode||'')==='group'        ?'selected':''}>Nur Gruppenmitglieder</option>
+          <option value="coordinator" ${(d.visibilityMode||'')==='coordinator'  ?'selected':''}>Nur Koordinatoren &amp; Admins</option>
+        </select>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">Fristen &amp; Zeitfenster</h3>
+
+        <label>Anmeldefrist (Minuten vor Termin)</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Bis wie viele Minuten vor Beginn können sich Mitglieder noch anmelden. 0 = keine Frist.
+        </p>
+        <input type="number" id="cs-signup-deadline"
+               value="${d.defaultSignupDeadlineMinutes ?? 0}" min="0" step="5"
+               style="max-width:160px;" />
+
+        <label style="margin-top:16px;">Abmeldefrist (Minuten vor Termin)</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Bis wie viele Minuten vor Beginn können Mitglieder ihre Anmeldung zurückziehen. 0 = keine Frist.
+        </p>
+        <input type="number" id="cs-withdraw-window"
+               value="${d.withdrawWindowMinutes ?? 0}" min="0" step="5"
+               style="max-width:160px;" />
+
+        <label style="margin-top:16px;">Absagefenster (Minuten vor Termin)</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Wie lange vor Beginn ein Termin noch abgesagt werden kann. 0 = keine Beschränkung.
+        </p>
+        <input type="number" id="cs-cancel-window"
+               value="${d.cancellationWindowMinutes ?? 0}" min="0" step="5"
+               style="max-width:160px;" />
+
+        <label style="margin-top:16px;">Bestätigungsfenster (Minuten)</label>
+        <p class="text-muted" style="margin-top:0;font-size:0.85rem;">
+          Wie lange ein Mitglied Zeit hat, eine Anfrage-Anmeldung zu bestätigen.
+        </p>
+        <input type="number" id="cs-confirm-window"
+               value="${d.confirmationWindowMinutes ?? 60}" min="1" step="5"
+               style="max-width:160px;" />
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+        <button class="btn-primary" id="cs-save"
+                style="display:inline-flex;align-items:center;gap:6px;">
+          <span class="material-icons" style="font-size:18px;">save</span>
+          Einstellungen speichern
+        </button>
+        <span id="cs-save-status" style="font-size:0.85rem;color:var(--color-text-muted);"></span>
+      </div>
+    `;
+
+    el.querySelector('#cs-save').onclick = async () => {
+      const btn      = el.querySelector('#cs-save');
+      const statusEl = el.querySelector('#cs-save-status');
+      btn.disabled   = true;
+      statusEl.textContent = '';
+
+      const values = {
+        defaultMinParticipants:      parseInt(document.getElementById('cs-min-participants').value)  || 0,
+        defaultEventLookAhead:       parseInt(document.getElementById('cs-lookahead').value)          || 30,
+        defaultMode:                 document.getElementById('cs-default-mode').value,
+        visibilityMode:              document.getElementById('cs-visibility-mode').value,
+        defaultSignupDeadlineMinutes:parseInt(document.getElementById('cs-signup-deadline').value)    || 0,
+        withdrawWindowMinutes:       parseInt(document.getElementById('cs-withdraw-window').value)    || 0,
+        cancellationWindowMinutes:   parseInt(document.getElementById('cs-cancel-window').value)      || 0,
+        confirmationWindowMinutes:   parseInt(document.getElementById('cs-confirm-window').value)     || 60,
+      };
+
+      try {
+        await firestore.collection('settings').doc('global').set(values, { merge: true });
+        if (window.appSettings) Object.assign(window.appSettings, values);
+        showToast('Einstellungen gespeichert.', 'success');
+        statusEl.textContent = '✓ Gespeichert.';
+        setTimeout(() => { statusEl.textContent = ''; }, 3000);
+      } catch (e) {
+        console.error('Einstellungen speichern fehlgeschlagen:', e);
+        showToast('Fehler beim Speichern: ' + e.message, 'error');
+        statusEl.textContent = '✗ Fehler.';
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+  } catch (e) {
+    console.error('renderCoordSettingsTab Fehler:', e);
+    el.innerHTML = `<p class="text-error">Fehler beim Laden: ${e.message}</p>`;
+  }
+}
